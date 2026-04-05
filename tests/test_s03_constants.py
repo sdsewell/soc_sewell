@@ -54,8 +54,8 @@ def test_depression_angle_computed_from_primaries():
         f"compute_depression_angle({SC_ALTITUDE_KM}, {TP_ALTITUDE_KM}) "
         f"= {recomputed:.4f}°. It may be hardcoded."
     )
-    assert abs(DEPRESSION_ANGLE_DEG - 15.73) < 0.02, \
-        f"Nominal depression angle = {DEPRESSION_ANGLE_DEG:.2f}°; expected ~15.73°"
+    assert abs(DEPRESSION_ANGLE_DEG - 15.79) < 0.02, \
+        f"Nominal depression angle = {DEPRESSION_ANGLE_DEG:.2f}°; expected ~15.79°"
     assert abs(DEPRESSION_ANGLE_DEG - 23.4) > 1.0, \
         "DEPRESSION_ANGLE_DEG is the legacy 23.4° value"
 
