@@ -160,3 +160,26 @@ NE_SEPARATION_FSR  = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M    # ≈ 187.9 FSR
 
 # CCD plate scale (= ALPHA_RAD_PX; provided here under the plate-scale name as well)
 PLATE_SCALE_RAD_PX = CCD_PIXEL_2X2_UM * 1e-6 / FOCAL_LENGTH_M   # = ALPHA_RAD_PX
+
+# =============================================================================
+# S04 — Quality Flags (bitmask convention)
+# Spec: S04_uncertainty_standards_2026-04-05.md
+#
+# Global flags occupy bits 0–3 (values 0x01–0x08).
+# Module-specific flags use bits 4–15; see S12–S15 for each module's flags.
+# Bits 11–15 are reserved.
+#
+# Usage:
+#   flags  = PipelineFlags.GOOD
+#   flags |= PipelineFlags.CHI2_HIGH      # set a flag
+#   if flags & PipelineFlags.FIT_FAILED:  # test a flag
+#       ...
+# =============================================================================
+
+class PipelineFlags:
+    """Global quality flags — defined in S04, used by all pipeline modules."""
+    GOOD           = 0x00  # No issues; all quality tests passed
+    FIT_FAILED     = 0x01  # Optimizer did not converge or Hessian is singular
+    CHI2_HIGH      = 0x02  # chi2_reduced > 3.0
+    CHI2_VERY_HIGH = 0x04  # chi2_reduced > 10.0 (implies CHI2_HIGH)
+    CHI2_LOW       = 0x08  # chi2_reduced < 0.5
