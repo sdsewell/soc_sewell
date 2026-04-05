@@ -1,0 +1,1 @@
+To run the tolansky.py routine, cd into the ingest folder and then type python tolansky.py radial_profile_peaks.npy

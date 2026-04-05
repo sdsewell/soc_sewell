@@ -1,0 +1,67 @@
+fit_cal_image.py  —  2026-04-03T15:36:44
+Source : C:/Users/sewell/Documents/GitHub/WindCube_Sewell/windcube-pipeline/ingest/cal_image_L0.bin
+============================================================
+
+============================================================
+STEP 1 — Load image: cal_image_L0.bin
+============================================================
+  Shape      : 259 × 276  ADU
+  UTC        : 2026-03-20T17:03:12.445000+00:00
+  Image type : cal
+  ROI shape  : 216 × 216 px  [user-determined centre: row 142, col 145]
+  ROI half   : 108 px  [user-determined]
+  ROI centre : cx = 107.5,  cy = 107.5  px  [derived from ROI shape]
+  L1.1 saved : cal_image_L1.1.npy
+  Metadata CSV : cal_image_L0_metadata.csv
+  PNG saved : cal_image_L0_step1_image.png
+  PNG saved : cal_image_L0_step1_metadata.png
+
+============================================================
+STEP 2 — Centre finding
+============================================================
+  Pass 1 — coarse grid search:
+    cx = 108.500 px,  cy = 110.500 px  (cost = 1.172e+08)
+  Pass 2 — Nelder-Mead refinement (authoritative):
+    cx = 107.744 ± 0.020 px
+    cy = 109.706 ± 0.020 px
+    cost = 8.117e+07  (improvement: 3.606e+07)
+  Centre saved : cal_image_centre.npz
+  PNG saved : cal_image_step2_centre.png
+
+============================================================
+STEP 3 — Annular reduction
+============================================================
+  Bins : 150 total,  150 good,  0 masked
+  L1.2 saved : cal_image_L1.2.npz
+  Profile range : 6421.5 – 8937.2  ADU
+  PNG saved : cal_image_step3_profile.png
+
+============================================================
+STEP 4 — Calibration inversion
+============================================================
+  Parameter                  Value               ±1σ               ±2σ
+  ------------------------------------------------------------------
+  t_m                 20.116900 mm          0.003 µm        0.007 µm
+  R                       0.495526          0.073127          0.146254
+  alpha                 0.00016092         2.405e-07         4.809e-07
+  I0                      3979.219           528.574          1057.149
+  I1                        -0.500             0.285             0.570
+  I2                         0.221             0.259             0.518
+  B                       5249.740           438.983           877.967
+  sigma0                  1.199002          0.536419          1.072839
+  sigma1                 -0.097553          0.471275          0.942550
+  sigma2                  0.599364          0.354844          0.709688
+  ------------------------------------------------------------------
+  chi²_red = 189.6810  (141 bins,  10 free params)
+  ε_cal    = 0.2078   ε_sci = 0.1431
+  m0_cal   = 62843.2078         m0_sci = 63863.1431
+  converged: True
+  quality flags : 0x50  (flagged)
+  Cal result saved : cal_image_cal_result.npz
+  PNG saved : cal_image_step4_calinversion.png
+
+============================================================
+Pipeline complete.
+  Output folder : C:\Users\sewell\Documents\GitHub\WindCube_Sewell\windcube-pipeline\ingest
+  Log saved     : C:\Users\sewell\Documents\GitHub\WindCube_Sewell\windcube-pipeline\ingest\fit_cal_image_results.txt
+============================================================
