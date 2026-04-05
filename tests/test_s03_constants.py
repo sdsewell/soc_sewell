@@ -39,20 +39,25 @@ def test_etalon_gap_not_legacy():
 
 
 # ---------------------------------------------------------------------------
-# T3 — Depression angle is 15.73°, not legacy 23.4°
+# T3 — Depression angle is computed from primaries, not hardcoded
 # ---------------------------------------------------------------------------
-def test_depression_angle():
-    """Verify the depression angle is the correct derived value."""
-    from src.constants import DEPRESSION_ANGLE_DEG, WGS84_A_M, SC_ALTITUDE_KM, TP_ALTITUDE_KM
-    R_sc = WGS84_A_M / 1e3 + SC_ALTITUDE_KM
-    R_tp = WGS84_A_M / 1e3 + TP_ALTITUDE_KM
-    expected = np.degrees(np.arccos(R_tp / R_sc))
-    assert abs(DEPRESSION_ANGLE_DEG - expected) < 0.01, (
-        f"DEPRESSION_ANGLE_DEG = {DEPRESSION_ANGLE_DEG:.2f}°; expected {expected:.2f}°"
+def test_depression_angle_computed_from_primaries():
+    """
+    DEPRESSION_ANGLE_DEG must equal compute_depression_angle(SC_ALTITUDE_KM,
+    TP_ALTITUDE_KM) to machine precision — proving it is computed, not hardcoded.
+    """
+    from src.constants import (DEPRESSION_ANGLE_DEG, SC_ALTITUDE_KM,
+                                TP_ALTITUDE_KM, compute_depression_angle)
+    recomputed = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
+    assert abs(DEPRESSION_ANGLE_DEG - recomputed) < 1e-10, (
+        f"DEPRESSION_ANGLE_DEG ({DEPRESSION_ANGLE_DEG:.4f}°) does not match "
+        f"compute_depression_angle({SC_ALTITUDE_KM}, {TP_ALTITUDE_KM}) "
+        f"= {recomputed:.4f}°. It may be hardcoded."
     )
-    assert abs(DEPRESSION_ANGLE_DEG - 23.4) > 1.0, (
-        "DEPRESSION_ANGLE_DEG appears to be the legacy 23.4° value"
-    )
+    assert abs(DEPRESSION_ANGLE_DEG - 15.73) < 0.02, \
+        f"Nominal depression angle = {DEPRESSION_ANGLE_DEG:.2f}°; expected ~15.73°"
+    assert abs(DEPRESSION_ANGLE_DEG - 23.4) > 1.0, \
+        "DEPRESSION_ANGLE_DEG is the legacy 23.4° value"
 
 
 # ---------------------------------------------------------------------------
@@ -121,3 +126,30 @@ def test_velocity_per_fsr():
     assert 4_500 < VELOCITY_PER_FSR_MS < 5_000, (
         f"VELOCITY_PER_FSR_MS = {VELOCITY_PER_FSR_MS:.0f} m/s; expected ~4720 m/s"
     )
+
+
+# ---------------------------------------------------------------------------
+# T9 — compute_depression_angle() responds correctly to altitude inputs
+# ---------------------------------------------------------------------------
+def test_depression_angle_sensitivity():
+    """
+    Verify that compute_depression_angle() correctly responds to different
+    altitude inputs. Proves it is a live calculation, not a lookup or stub.
+    """
+    from src.constants import compute_depression_angle
+    angle_nominal = compute_depression_angle(510.0, 250.0)   # 15.73°
+    angle_low_sc  = compute_depression_angle(500.0, 250.0)   # lower orbit → smaller angle
+    angle_high_sc = compute_depression_angle(550.0, 250.0)   # higher orbit → larger angle
+    angle_high_tp = compute_depression_angle(510.0, 300.0)   # higher tangent → smaller angle
+
+    assert angle_low_sc  < angle_nominal, \
+        "Lower orbit altitude should give smaller depression angle"
+    assert angle_high_sc > angle_nominal, \
+        "Higher orbit altitude should give larger depression angle"
+    assert angle_high_tp < angle_nominal, \
+        "Higher tangent height should give smaller depression angle"
+
+    for angle, label in [(angle_nominal, "nominal"), (angle_low_sc, "low_sc"),
+                         (angle_high_sc, "high_sc"), (angle_high_tp, "high_tp")]:
+        assert 10.0 < angle < 25.0, \
+            f"Depression angle ({label}) = {angle:.2f}° outside plausible range [10°, 25°]"

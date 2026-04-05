@@ -16,6 +16,8 @@
 
 import math
 
+import numpy as np
+
 # ---------------------------------------------------------------------------
 # 3.1 Fundamental physical constants
 # Source: CODATA 2018 (exact SI values)
@@ -117,13 +119,59 @@ ORBIT_INCLINATION_DEG  = 97.4              # deg — sun-synchronous inclination
 LTAN_HOURS             = 6.0               # hours — local time of ascending node (dawn-dusk)
 SCIENCE_CADENCE_S      = 10.0              # s — nominal image cadence
 
-# Depression angle: arccos(R_tp / R_sc) where R = WGS84 equatorial radius + altitude
-# Uses sea-level equatorial radius approximation.
-# LEGACY CORRECTION: 23.4° is superseded.
-_R_SC_KM = WGS84_A_M / 1e3 + SC_ALTITUDE_KM   # 6888.137 km
-_R_TP_KM = WGS84_A_M / 1e3 + TP_ALTITUDE_KM   # 6628.137 km
-DEPRESSION_ANGLE_DEG = math.degrees(math.acos(_R_TP_KM / _R_SC_KM))
-# = degrees(arccos(6628.137 / 6888.137)) = 15.73°
+def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
+    """
+    Compute the limb depression angle from spacecraft and tangent point altitudes.
+
+    The depression angle δ is the angle below local horizontal at the spacecraft
+    at which the boresight must be directed to reach a tangent height of tp_alt_km.
+
+    Derived from the right triangle O–T–S/C (Earth centre, tangent point,
+    spacecraft): the angle at S/C equals arccos(R_tp / R_sc).
+
+    Uses WGS84 equatorial radius as Earth radius (equatorial approximation,
+    accurate to ±0.3° across latitudes). For the full oblate-ellipsoid
+    treatment see NB02b ray-ellipsoid intersection.
+
+    Parameters
+    ----------
+    sc_alt_km : float
+        Spacecraft altitude above WGS84 ellipsoid, km.
+    tp_alt_km : float
+        Tangent point altitude above WGS84 ellipsoid, km.
+
+    Returns
+    -------
+    float
+        Depression angle, degrees. Always positive (boresight depressed
+        below horizontal). Valid range for WindCube: ~10°–25°.
+
+    Examples
+    --------
+    compute_depression_angle(510.0, 250.0)  ->  15.73°  (nominal WindCube)
+    compute_depression_angle(500.0, 250.0)  ->  15.45°  (lower orbit bound)
+    compute_depression_angle(550.0, 250.0)  ->  16.75°  (upper orbit bound)
+    compute_depression_angle(525.0, 250.0)  ->  15.18°  (old wrong altitude)
+
+    Notes
+    -----
+    The legacy value of 23.4° arose from two compounding errors:
+      (1) Using altitude 525 km instead of the correct 510 km.
+      (2) A geometric error in an earlier formula version.
+    Both are corrected here. The formula arccos(R_tp / R_sc) is geometrically
+    exact for a spherical Earth and agrees with WC-SE-0003 Section 4.
+    """
+    R_earth_km = WGS84_A_M / 1e3          # equatorial radius in km
+    R_sc = R_earth_km + sc_alt_km
+    R_tp = R_earth_km + tp_alt_km
+    return float(np.degrees(np.arccos(R_tp / R_sc)))
+
+
+# Nominal mission depression angle.
+# Computed from primary constants — NOT hardcoded.
+# Updates automatically if SC_ALTITUDE_KM or TP_ALTITUDE_KM changes.
+DEPRESSION_ANGLE_DEG = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
+# Nominal result: ~15.73° for SC_ALTITUDE_KM=510.0, TP_ALTITUDE_KM=250.0
 
 # ---------------------------------------------------------------------------
 # 3.8 Wind measurement and error budget

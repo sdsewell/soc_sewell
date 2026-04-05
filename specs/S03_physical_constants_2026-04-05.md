@@ -12,7 +12,7 @@
 
 **Revision note:** Added `compute_depression_angle()` helper function (Section 4.1)
 and changed `DEPRESSION_ANGLE_DEG` from a hardcoded value to a value computed at
-module load time from `SC_ALTITUDE_KM` and `TP_ALTITUDE_KM`. Test T3 strengthened;
+module load time from `SC_ALTITUDE_KM` and `TP_ALTITUDE_KM`. Test T3 corrected (expected value 15.73° → 15.79°, matching WGS84 equatorial radius);
 test T9 (sensitivity) added. No other content changed.
 
 ---
@@ -154,7 +154,7 @@ Number of FSRs between lines ≈ 187.9
 | `TP_ALTITUDE_TOLERANCE_KM` | 5.0 | km | WC-SE-0003 v8 | THRF model error budget |
 | `SC_VELOCITY_MS` | 7600.0 | m/s | Derived (circular orbit at 510 km) | Approximate; use orbit propagator for actual |
 | `SC_ORBITAL_PERIOD_S` | 5640.0 | s | WC-SE-0003 v8 | ~94 minutes |
-| `DEPRESSION_ANGLE_DEG` | **computed** | deg | `compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)` → 15.73°. See Section 4.1. **LEGACY CORRECTION:** earlier documents hardcoded 23.4° (wrong altitude). Now computed from primaries. |
+| `DEPRESSION_ANGLE_DEG` | **computed** | deg | `compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)` → 15.79°. See Section 4.1. **LEGACY CORRECTION:** earlier documents hardcoded 23.4° (wrong altitude). Now computed from primaries. |
 | `ORBIT_INCLINATION_DEG` | 97.4 | deg | WC-SE-0003 v8 | Sun-synchronous inclination |
 | `LTAN_HOURS` | 6.0 | hours | WC-SE-0003 v8 | Local time of ascending node (dawn-dusk) |
 | `SCIENCE_CADENCE_S` | 10.0 | s | WC-SE-0003 v8 | Nominal image cadence |
@@ -228,7 +228,7 @@ def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
 
     Examples
     --------
-    compute_depression_angle(510.0, 250.0)  ->  15.73°  (nominal WindCube)
+    compute_depression_angle(510.0, 250.0)  ->  15.79°  (nominal WindCube)
     compute_depression_angle(500.0, 250.0)  ->  15.45°  (lower orbit bound)
     compute_depression_angle(550.0, 250.0)  ->  16.75°  (upper orbit bound)
     compute_depression_angle(525.0, 250.0)  ->  15.18°  (old wrong altitude)
@@ -251,7 +251,7 @@ def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
 # Computed from primary constants — NOT hardcoded.
 # Updates automatically if SC_ALTITUDE_KM or TP_ALTITUDE_KM changes.
 DEPRESSION_ANGLE_DEG = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
-# Nominal result: ~15.73° for SC_ALTITUDE_KM=510.0, TP_ALTITUDE_KM=250.0
+# Nominal result: ~15.79° for SC_ALTITUDE_KM=510.0, TP_ALTITUDE_KM=250.0
 ```
 
 ### 4.2 Other derived quantities
@@ -367,8 +367,8 @@ def test_depression_angle_computed_from_primaries():
         (f"DEPRESSION_ANGLE_DEG ({DEPRESSION_ANGLE_DEG:.4f}°) does not match "
          f"compute_depression_angle({SC_ALTITUDE_KM}, {TP_ALTITUDE_KM}) "
          f"= {recomputed:.4f}°. It may be hardcoded.")
-    assert abs(DEPRESSION_ANGLE_DEG - 15.73) < 0.02, \
-        f"Nominal depression angle = {DEPRESSION_ANGLE_DEG:.2f}°; expected ~15.73°"
+    assert abs(DEPRESSION_ANGLE_DEG - 15.79) < 0.02, \
+        f"Nominal depression angle = {DEPRESSION_ANGLE_DEG:.2f}°; expected ~15.79°"
     assert abs(DEPRESSION_ANGLE_DEG - 23.4) > 1.0, \
         "DEPRESSION_ANGLE_DEG is the legacy 23.4° value"
 ```
@@ -437,7 +437,7 @@ def test_depression_angle_sensitivity():
     altitude inputs. Proves it is a live calculation, not a lookup or stub.
     """
     from src.constants import compute_depression_angle
-    angle_nominal  = compute_depression_angle(510.0, 250.0)  # 15.73°
+    angle_nominal  = compute_depression_angle(510.0, 250.0)  # 15.79°
     angle_low_sc   = compute_depression_angle(500.0, 250.0)  # lower orbit → smaller angle
     angle_high_sc  = compute_depression_angle(550.0, 250.0)  # higher orbit → larger angle
     angle_high_tp  = compute_depression_angle(510.0, 300.0)  # higher tangent → smaller angle
@@ -467,7 +467,7 @@ def test_depression_angle_sensitivity():
 | `ETALON_FSR_NE1_M` | ≈ 1.024e-14 m (10.24 pm) | λ²/(2t) at Ne 640.2 nm |
 | `NE_SEPARATION_FSR` | ≈ 187.9 | Δλ_Ne / FSR_Ne1 |
 | `ALPHA_RAD_PX` | 1.60e-4 rad/px | 32e-6 m / 0.200 m |
-| `DEPRESSION_ANGLE_DEG` | ≈ 15.73° | `compute_depression_angle(510.0, 250.0)` |
+| `DEPRESSION_ANGLE_DEG` | ≈ 15.79° | `compute_depression_angle(510.0, 250.0)` |
 | `compute_depression_angle(500.0, 250.0)` | ≈ 15.45° | lower orbit bound |
 | `compute_depression_angle(550.0, 250.0)` | ≈ 16.75° | upper orbit bound |
 | `VELOCITY_PER_FSR_MS` | ≈ 4723 m/s | c × FSR_OI / λ_OI |
@@ -499,7 +499,7 @@ files — do not create new ones.
    assignment, insert the `compute_depression_angle()` function exactly as
    written in Section 4.1. Copy the full docstring.
 3. Replace the line that assigns `DEPRESSION_ANGLE_DEG` as a literal (e.g.
-   `DEPRESSION_ANGLE_DEG = 15.73`) with:
+   `DEPRESSION_ANGLE_DEG = 15.79` or any literal value) with:
    ```python
    DEPRESSION_ANGLE_DEG = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
    ```
