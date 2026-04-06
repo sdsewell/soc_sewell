@@ -1,7 +1,7 @@
 """
 NB01 — Orbit propagator: ECI state vectors and geodetic coordinates.
 
-Spec:        S06_nb01_orbit_propagator_2026-04-05.md
+Spec:        S06_nb01_orbit_propagator_2026-04-06.md
 Spec date:   2026-04-05
 Generated:   2026-04-05
 Tool:        Copilot

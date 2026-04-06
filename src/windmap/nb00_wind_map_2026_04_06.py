@@ -1,7 +1,7 @@
 """
 NB00 — Truth wind map module.
 
-Spec:        S05_nb00_wind_map_2026-04-05.md
+Spec:        S05_nb00_wind_map_2026-04-06.md
 Spec date:   2026-04-05
 Generated:   2026-04-05
 Tool:        Claude Code
