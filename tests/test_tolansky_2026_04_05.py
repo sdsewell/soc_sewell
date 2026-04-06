@@ -14,7 +14,7 @@ from src.fpi.tolansky_2026_04_05 import (
     TolanskyPipeline,
     TwoLineAnalyser,
 )
-from src.fpi.m03_annular_reduction_2026_04_05 import FringeProfile, PeakFit, QualityFlags
+from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, PeakFit, QualityFlags
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +290,8 @@ def _make_fringe_profile_with_peaks():
         sigma_clip=3.0,
         image_shape=(256, 256),
         peak_fits=peak_fits,
+        dark_subtracted=False,
+        dark_n_frames=0,
     )
     return fp
 

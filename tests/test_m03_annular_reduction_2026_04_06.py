@@ -1,9 +1,9 @@
 """
 Tests for M03 Annular Reduction and Peak Finding.
 
-Spec:        specs/S12_m03_annular_reduction_2026-04-05.md
-Spec tests:  T1–T8
-Run with:    pytest tests/test_m03_annular_reduction_2026_04_05.py -v
+Spec:        specs/S12_m03_annular_reduction_2026-04-06.md
+Spec tests:  T1–T10
+Run with:    pytest tests/test_m03_annular_reduction_2026_04_06.py -v
 """
 
 import numpy as np
@@ -12,12 +12,13 @@ import pytest
 from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
 from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-from src.fpi.m03_annular_reduction_2026_04_05 import (
+from src.fpi.m03_annular_reduction_2026_04_06 import (
     FringeProfile,
     PeakFit,
     QualityFlags,
     annular_reduce,
     find_centre,
+    make_master_dark,
     reduce_calibration_frame,
     reduce_science_frame,
 )
@@ -290,3 +291,54 @@ def test_masked_bins_inf_sigma():
         "sigma_profile not inf for all masked bins"
     assert np.all(np.isinf(fp.two_sigma_profile[fp.masked])), \
         "two_sigma_profile not inf for all masked bins"
+
+# ---------------------------------------------------------------------------
+# T9 — Dark subtraction removes known dark signal from profile
+# ---------------------------------------------------------------------------
+
+def test_dark_subtraction_removes_signal():
+    """
+    Construct a synthetic calibration image. Inject a uniform dark frame
+    with a known constant value. Verify that the post-subtraction profile
+    mean is reduced by approximately that constant.
+    """
+    params = InstrumentParams()
+    result = synthesise_calibration_image(params, add_noise=False)
+    img = result["image_2d"].astype(np.float64)
+    dark_level = 200.0
+    dark_frame = np.full_like(img, dark_level)
+    master_dark = make_master_dark([dark_frame])
+
+    fp_no_dark = reduce_calibration_frame(img, cx_human=127.5, cy_human=127.5,
+                                           r_max_px=params.r_max,
+                                           master_dark=None)
+    fp_dark    = reduce_calibration_frame(img, cx_human=127.5, cy_human=127.5,
+                                           r_max_px=params.r_max,
+                                           master_dark=master_dark)
+
+    mask = ~fp_no_dark.masked & ~fp_dark.masked
+    mean_diff = np.mean(fp_no_dark.profile[mask] - fp_dark.profile[mask])
+    assert abs(mean_diff - dark_level) < 1.0, \
+        f"Dark subtraction removed {mean_diff:.1f} ADU; expected {dark_level:.1f}"
+    assert fp_dark.dark_subtracted is True
+    assert fp_dark.dark_n_frames == 1
+    assert fp_no_dark.dark_subtracted is False
+    assert fp_no_dark.dark_n_frames == 0
+
+
+# ---------------------------------------------------------------------------
+# T10 — Master dark: median of multiple frames is robust to a cosmic ray
+# ---------------------------------------------------------------------------
+
+def test_master_dark_median_cosmic_ray():
+    """
+    A single cosmic-ray hit in one of 3 dark frames must not contaminate
+    the master dark at that pixel location.
+    """
+    base = np.full((256, 256), 150.0)
+    frames = [base.copy() for _ in range(3)]
+    frames[1][100, 100] = 60000.0   # cosmic ray in frame 2 only
+    master = make_master_dark(frames)
+    assert abs(master[100, 100] - 150.0) < 1.0, \
+        f"Cosmic ray leaked into master dark: {master[100, 100]:.1f}"
+    assert abs(np.mean(master) - 150.0) < 0.1

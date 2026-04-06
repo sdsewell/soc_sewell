@@ -1,9 +1,9 @@
 """
-Module:      m03_annular_reduction_2026_04_05.py
-Spec:        specs/S12_m03_annular_reduction_2026-04-05.md
+Module:      m03_annular_reduction_2026_04_06.py
+Spec:        specs/S12_m03_annular_reduction_2026-04-06.md
 Author:      Claude Code
 Generated:   2026-04-06
-Last tested: 2026-04-06  (8/8 tests pass)
+Last tested: 2026-04-06  (10/10 tests pass)
 Project:     WindCube FPI Pipeline — NCAR/HAO
 Repo:        soc_sewell
 """
@@ -14,6 +14,95 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import minimize, curve_fit
 from scipy.signal import find_peaks
+
+
+# ---------------------------------------------------------------------------
+# Dark frame construction and subtraction (Section 3)
+# ---------------------------------------------------------------------------
+
+def make_master_dark(dark_frames: list) -> np.ndarray:
+    """
+    Construct a master dark frame by median-combining a list of dark images.
+
+    Parameters
+    ----------
+    dark_frames : list of np.ndarray
+        Each array is a single dark exposure, same shape and dtype as the
+        science/calibration image. Minimum 1 frame; median of 1 is itself.
+        dtype is typically uint16 (raw CCD counts, Level 0).
+
+    Returns
+    -------
+    np.ndarray, float64
+        Master dark frame, same spatial shape as input frames.
+        Returned as float64 to allow unbiased subtraction from float64 images.
+
+    Notes
+    -----
+    Median combination is preferred over mean because it is robust against
+    cosmic ray hits in individual dark frames. With 1–5 frames the gain
+    in cosmic-ray rejection is modest, but median is correct by construction
+    and costs nothing.
+
+    If dark_frames contains exactly 1 frame, the median is that frame
+    converted to float64 (no change in values).
+
+    The master dark is NOT normalised by exposure time here. The dark
+    frames must already be taken at the same exposure time as the
+    science/calibration frame they will be subtracted from. This is
+    guaranteed by the on-orbit operations sequence (WC-SE-0003 §5, steps
+    3 and 8 acquire darks at the same cadence as science exposures).
+    """
+    if len(dark_frames) == 0:
+        raise ValueError("dark_frames must contain at least one frame")
+    stack = np.stack([f.astype(np.float64) for f in dark_frames], axis=0)
+    return np.median(stack, axis=0)
+
+
+def subtract_dark(
+    image: np.ndarray,
+    master_dark: np.ndarray,
+    clip_negative: bool = True,
+) -> np.ndarray:
+    """
+    Subtract master dark from a raw image and return a float64 result.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Raw CCD image (uint16 or float). Same spatial shape as master_dark.
+    master_dark : np.ndarray, float64
+        Master dark from make_master_dark(). Must match image shape exactly.
+    clip_negative : bool
+        If True (default), clip negative values to 0.0 after subtraction.
+        Negative values can arise from readout noise in dark pixels; they
+        are unphysical as photon counts and would bias the annular reduction
+        mean toward negative values in low-signal bins. Default True.
+
+    Returns
+    -------
+    np.ndarray, float64
+        Dark-subtracted image. Shape identical to input.
+
+    Raises
+    ------
+    ValueError
+        If image.shape != master_dark.shape.
+
+    Notes
+    -----
+    Conversion to float64 occurs before subtraction. The raw uint16 image
+    is never modified in place.
+    """
+    if image.shape != master_dark.shape:
+        raise ValueError(
+            f"Image shape {image.shape} does not match "
+            f"master dark shape {master_dark.shape}"
+        )
+    result = image.astype(np.float64) - master_dark
+    if clip_negative:
+        result = np.clip(result, 0.0, None)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +187,10 @@ class FringeProfile:
 
     # Peak fits — populated for calibration frames, empty for science frames
     peak_fits: list   # list[PeakFit], sorted by r_raw_px
+
+    # Dark subtraction provenance (Section 3.6)
+    dark_subtracted: bool   # True if master_dark was provided and applied
+    dark_n_frames:   int    # number of dark frames combined into master (0 if none)
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +858,8 @@ def annular_reduce(
         sigma_clip        = sigma_clip_threshold,
         image_shape       = image.shape,
         peak_fits         = peak_fits,
+        dark_subtracted   = False,
+        dark_n_frames     = 0,
     )
 
 
@@ -774,6 +869,7 @@ def annular_reduce(
 
 def reduce_calibration_frame(
     image: np.ndarray,
+    master_dark: np.ndarray     = None,
     cx_human: float             = None,
     cy_human: float             = None,
     cx_history: float           = None,
@@ -796,7 +892,18 @@ def reduce_calibration_frame(
 ) -> FringeProfile:
     """
     Find centre AND reduce AND find peaks. Full calibration pipeline step.
+    Dark subtraction is the first operation when master_dark is provided.
     """
+    # Dark subtraction — first operation, before any other processing
+    if master_dark is not None:
+        image = subtract_dark(image, master_dark, clip_negative=True)
+        dark_subtracted = True
+        dark_n_frames   = 1   # caller sets n_frames; single master passed here
+    else:
+        image = image.astype(np.float64)
+        dark_subtracted = False
+        dark_n_frames   = 0
+
     rows, cols = image.shape
 
     # Stage 1: coarse CoM
@@ -855,11 +962,13 @@ def reduce_calibration_frame(
     )
 
     # Fill provenance fields
-    fp.seed_source   = seed_source
-    fp.stage1_cx     = stage1_cx
-    fp.stage1_cy     = stage1_cy
-    fp.cost_at_min   = centre.cost_at_min
-    fp.quality_flags = quality_flags
+    fp.seed_source      = seed_source
+    fp.stage1_cx        = stage1_cx
+    fp.stage1_cy        = stage1_cy
+    fp.cost_at_min      = centre.cost_at_min
+    fp.quality_flags    = quality_flags
+    fp.dark_subtracted  = dark_subtracted
+    fp.dark_n_frames    = dark_n_frames
     if fp.sparse_bins:
         fp.quality_flags |= QualityFlags.SPARSE_BINS
 
@@ -868,8 +977,9 @@ def reduce_calibration_frame(
 
 def reduce_science_frame(
     image: np.ndarray,
-    cx: float,
-    cy: float,
+    master_dark: np.ndarray     = None,
+    cx: float                   = None,
+    cy: float                   = None,
     sigma_cx: float             = 0.1,
     sigma_cy: float             = 0.1,
     r_min_px: float             = 0.0,
@@ -883,7 +993,18 @@ def reduce_science_frame(
     """
     Uses provided centre, reduces only. No peak finding. peak_fits = [].
     seed_source is set to 'provided'.
+    Dark subtraction is the first operation when master_dark is provided.
     """
+    # Dark subtraction — first operation, before any other processing
+    if master_dark is not None:
+        image = subtract_dark(image, master_dark, clip_negative=True)
+        dark_subtracted = True
+        dark_n_frames   = 1
+    else:
+        image = image.astype(np.float64)
+        dark_subtracted = False
+        dark_n_frames   = 0
+
     fp = annular_reduce(
         image,
         cx                   = cx,
@@ -904,7 +1025,9 @@ def reduce_science_frame(
     )
 
     # Science frame: no peaks, seed_source = 'provided'
-    fp.seed_source = "provided"
-    fp.peak_fits   = []
+    fp.seed_source     = "provided"
+    fp.peak_fits       = []
+    fp.dark_subtracted = dark_subtracted
+    fp.dark_n_frames   = dark_n_frames
 
     return fp
