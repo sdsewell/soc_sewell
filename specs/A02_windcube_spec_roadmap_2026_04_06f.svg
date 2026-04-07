@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1260" height="820" viewBox="0 0 1260 820" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>WindCube FPI Pipeline — Spec Inventory and Implementation Roadmap</title>
+<desc>20 specs S01–S20. Tiers 0–6 complete (16 of 20). Tiers 7–8 pending.</desc>
+
+<style>
+  text { font-family: Arial, Helvetica, sans-serif; }
+  .tt   { font-size:13px; font-weight:500; fill:#1a1a1a; }
+  .ts2  { font-size:10px; font-weight:400; fill:#666; }
+  .tlabel { font-size:10.5px; font-weight:500; }
+  .sname  { font-size:12px; font-weight:500; }
+  .ssub   { font-size:9.5px; font-weight:400; }
+  .chk    { font-size:11px; font-weight:500; }
+  .legt   { font-size:10px; font-weight:400; fill:#666; }
+  .impl   { font-size:10px; font-weight:400; fill:#888; letter-spacing:1px; }
+  /* done: teal */
+  .done-rect  { fill:#E1F5EE; stroke:#1D9E75; stroke-width:0.5; }
+  .done-name  { fill:#085041; }
+  .done-sub   { fill:#0F6E56; }
+  .done-chk   { fill:#1D9E75; }
+  /* pending: gray */
+  .pend-rect  { fill:#F1EFE8; stroke:#B4B2A9; stroke-width:0.5; }
+  .pend-name  { fill:#444441; }
+  .pend-sub   { fill:#888780; }
+  /* tier bands */
+  .b0 { fill:#E1F5EE; stroke:#9FE1CB; stroke-width:0.5; }
+  .b1 { fill:#E6F1FB; stroke:#B5D4F4; stroke-width:0.5; }
+  .b2 { fill:#EAF3DE; stroke:#C0DD97; stroke-width:0.5; }
+  .b3 { fill:#EAF3DE; stroke:#C0DD97; stroke-width:0.5; }
+  .b4 { fill:#FAEEDA; stroke:#FAC775; stroke-width:0.5; }
+  .b5 { fill:#FAECE7; stroke:#F5C4B3; stroke-width:0.5; }
+  .b6 { fill:#EAF3DE; stroke:#C0DD97; stroke-width:0.5; }
+  .b7 { fill:#FBEAF0; stroke:#F4C0D1; stroke-width:0.5; }
+  .b8 { fill:#F1EFE8; stroke:#D3D1C7; stroke-width:0.5; }
+</style>
+
+<!-- white background for export -->
+<rect width="1260" height="820" fill="white"/>
+
+<!-- TITLE -->
+<text class="tt" x="648" y="22" text-anchor="middle">WindCube FPI Pipeline — Spec Inventory &amp; Implementation Roadmap</text>
+<text class="ts2" x="648" y="38" text-anchor="middle">20 specs total (S01–S20) · Tiers 0–6 complete (16/20) · Tiers 7–8 pending · repo: soc_sewell</text>
+
+<!-- IMPL ORDER arrow -->
+<defs>
+  <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#aaa" stroke-width="1.5" stroke-linecap="round"/>
+  </marker>
+</defs>
+<line x1="14" y1="680" x2="14" y2="90" stroke="#aaa" stroke-width="0.8" marker-end="url(#arr2)"/>
+<text class="impl" x="14" y="400" text-anchor="middle" transform="rotate(-90,14,400)">IMPLEMENTATION ORDER</text>
+
+<!-- ══ TIER 0 ══ -->
+<rect class="b0" x="28" y="45" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="58" fill="#085041">Tier 0 — Foundational</text>
+<!-- S01 -->
+<rect class="done-rect" x="36" y="62" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="174" y="82" text-anchor="middle">S01 — Repo conventions</text>
+<text class="chk done-chk" x="308" y="82">✓</text>
+<text class="ssub done-sub" x="174" y="97" text-anchor="middle">naming · versioning · AI vs Code workflow</text>
+<!-- S02 -->
+<rect class="done-rect" x="332" y="62" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="475" y="82" text-anchor="middle">S02 — Pipeline overview</text>
+<text class="chk done-chk" x="604" y="82">✓</text>
+<text class="ssub done-sub" x="475" y="97" text-anchor="middle">architecture · data flow · STM links</text>
+<!-- S03 -->
+<rect class="done-rect" x="628" y="62" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="771" y="82" text-anchor="middle">S03 — Physical constants</text>
+<text class="chk done-chk" x="900" y="82">✓</text>
+<text class="ssub done-sub" x="771" y="97" text-anchor="middle">OI · Ne · CCD · WGS84 · all constants</text>
+<!-- S04 -->
+<rect class="done-rect" x="924" y="62" width="316" height="48" rx="5"/>
+<text class="sname done-name" x="1082" y="82" text-anchor="middle">S04 — Uncertainty standards</text>
+<text class="chk done-chk" x="1228" y="82">✓</text>
+<text class="ssub done-sub" x="1082" y="97" text-anchor="middle">σ · 2σ · FringeProfile rules</text>
+
+<!-- ══ TIER 1 ══ -->
+<rect class="b1" x="28" y="125" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="138" fill="#0C447C">Tier 1 — Geometry pipeline  (S01–S04)</text>
+<!-- S05 -->
+<rect class="done-rect" x="36" y="142" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="174" y="162" text-anchor="middle">S05 — NB00</text>
+<text class="chk done-chk" x="238" y="162">✓</text>
+<text class="ssub done-sub" x="174" y="177" text-anchor="middle">truth wind map  T1–T4</text>
+<!-- S06 -->
+<rect class="done-rect" x="332" y="142" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="475" y="162" text-anchor="middle">S06 — NB01</text>
+<text class="chk done-chk" x="539" y="162">✓</text>
+<text class="ssub done-sub" x="475" y="177" text-anchor="middle">orbit propagator · SGP4</text>
+<!-- S07 -->
+<rect class="done-rect" x="628" y="142" width="286" height="48" rx="5"/>
+<text class="sname done-name" x="771" y="162" text-anchor="middle">S07 — NB02</text>
+<text class="chk done-chk" x="835" y="162">✓</text>
+<text class="ssub done-sub" x="771" y="177" text-anchor="middle">boresight · tangent · LOS · L1c</text>
+<!-- S08 -->
+<rect class="done-rect" x="924" y="142" width="316" height="48" rx="5"/>
+<text class="sname done-name" x="1082" y="162" text-anchor="middle">S08 — INT01</text>
+<text class="chk done-chk" x="1146" y="162">✓</text>
+<text class="ssub done-sub" x="1082" y="177" text-anchor="middle">geometry integration notebook</text>
+
+<!-- ══ TIER 2 ══ -->
+<rect class="b2" x="28" y="205" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="218" fill="#3B6D11">Tier 2 — FPI forward model  (S01–S08)</text>
+<!-- S09 -->
+<rect class="done-rect" x="36" y="222" width="374" height="48" rx="5"/>
+<text class="sname done-name" x="223" y="242" text-anchor="middle">S09 — M01</text>
+<text class="chk done-chk" x="287" y="242">✓</text>
+<text class="ssub done-sub" x="223" y="257" text-anchor="middle">Airy forward model</text>
+<!-- S10 -->
+<rect class="done-rect" x="422" y="222" width="374" height="48" rx="5"/>
+<text class="sname done-name" x="609" y="242" text-anchor="middle">S10 — M02</text>
+<text class="chk done-chk" x="673" y="242">✓</text>
+<text class="ssub done-sub" x="609" y="257" text-anchor="middle">calibration fringe synthesis</text>
+<!-- S11 -->
+<rect class="done-rect" x="808" y="222" width="432" height="48" rx="5"/>
+<text class="sname done-name" x="1024" y="242" text-anchor="middle">S11 — M04</text>
+<text class="chk done-chk" x="1088" y="242">✓</text>
+<text class="ssub done-sub" x="1024" y="257" text-anchor="middle">airglow synthesis · delta-function model</text>
+
+<!-- ══ TIER 3 ══ -->
+<rect class="b3" x="28" y="285" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="298" fill="#3B6D11">Tier 3 — Reduction  (S09–S11)</text>
+<!-- S12 -->
+<rect class="done-rect" x="36" y="302" width="588" height="48" rx="5"/>
+<text class="sname done-name" x="330" y="322" text-anchor="middle">S12 — M03</text>
+<text class="chk done-chk" x="394" y="322">✓</text>
+<text class="ssub done-sub" x="330" y="337" text-anchor="middle">centre finding · r² reduction · peak fits · dark subtraction</text>
+<!-- S13 -->
+<rect class="done-rect" x="636" y="302" width="604" height="48" rx="5"/>
+<text class="sname done-name" x="938" y="322" text-anchor="middle">S13 — Tolansky</text>
+<text class="chk done-chk" x="1002" y="322">✓</text>
+<text class="ssub done-sub" x="938" y="337" text-anchor="middle">2-line etalon characterisation · d · f · α · ε</text>
+
+<!-- ══ TIER 4 ══ -->
+<rect class="b4" x="28" y="365" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="378" fill="#854F0B">Tier 4 — Calibration inversion  (S09–S13)</text>
+<!-- S14 -->
+<rect class="done-rect" x="240" y="382" width="780" height="48" rx="5"/>
+<text class="sname done-name" x="630" y="402" text-anchor="middle">S14 — M05</text>
+<text class="chk done-chk" x="694" y="402">✓</text>
+<text class="ssub done-sub" x="630" y="417" text-anchor="middle">staged calibration inversion · ε_cal</text>
+
+<!-- ══ TIER 5 ══ -->
+<rect class="b5" x="28" y="445" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="458" fill="#993C1D">Tier 5 — Airglow inversion  (S09–S14)</text>
+<!-- S15 -->
+<rect class="done-rect" x="240" y="462" width="780" height="48" rx="5"/>
+<text class="sname done-name" x="630" y="481" text-anchor="middle">S15 — M06</text>
+<text class="chk done-chk" x="694" y="481">✓</text>
+<text class="ssub done-sub" x="630" y="497" text-anchor="middle">airglow fringe inversion · λ_c recovery · recovers relative LOS velocity vector</text>
+
+<!-- ══ TIER 6 ══ -->
+<rect class="b6" x="28" y="525" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="538" fill="#3B6D11">Tier 6 — Wind retrieval  (S07, S15)</text>
+<!-- S16 -->
+<rect class="done-rect" x="240" y="542" width="780" height="48" rx="5"/>
+<text class="sname done-name" x="630" y="562" text-anchor="middle">S16 — M07</text>
+<text class="chk done-chk" x="694" y="562">✓</text>
+<text class="ssub done-sub" x="630" y="577" text-anchor="middle">L2 vector wind retrieval · 2×2 decomposition · WLS</text>
+
+<!-- ══ TIER 7 ══ -->
+<rect class="b7" x="28" y="605" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="618" fill="#993556">Tier 7 — Integration notebooks</text>
+<!-- S17 -->
+<rect class="pend-rect" x="36" y="622" width="596" height="48" rx="5"/>
+<text class="sname pend-name" x="334" y="642" text-anchor="middle">S17 — INT02</text>
+<text class="ssub pend-sub" x="334" y="657" text-anchor="middle">FPI instrument chain notebook</text>
+<!-- S18 -->
+<rect class="pend-rect" x="648" y="622" width="592" height="48" rx="5"/>
+<text class="sname pend-name" x="944" y="642" text-anchor="middle">S18 — INT03</text>
+<text class="ssub pend-sub" x="944" y="657" text-anchor="middle">full end-to-end pipeline notebook</text>
+
+<!-- ══ TIER 8 ══ -->
+<rect class="b8" x="28" y="685" width="1220" height="72" rx="5"/>
+<text class="tlabel" x="36" y="698" fill="#5F5E5A">Tier 8 — Data products  (after Tier 1)</text>
+<!-- S19 -->
+<rect class="pend-rect" x="36" y="702" width="596" height="48" rx="5"/>
+<text class="sname pend-name" x="334" y="722" text-anchor="middle">S19 — P01</text>
+<text class="ssub pend-sub" x="334" y="737" text-anchor="middle">image metadata · sidecar JSON schema</text>
+<!-- S20 -->
+<rect class="pend-rect" x="648" y="702" width="592" height="48" rx="5"/>
+<text class="sname pend-name" x="944" y="722" text-anchor="middle">S20 — L2 data product</text>
+<text class="ssub pend-sub" x="944" y="737" text-anchor="middle">netCDF schema · wind vector format</text>
+
+<!-- LEGEND -->
+<rect x="36" y="768" width="12" height="12" rx="2" fill="#E1F5EE" stroke="#1D9E75" stroke-width="0.5"/>
+<text class="legt" x="53" y="778">✓ written · ready for Claude Code implementation</text>
+<rect x="360" y="768" width="12" height="12" rx="2" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+<text class="legt" x="377" y="778">new — write from scratch</text>
+
+</svg>
