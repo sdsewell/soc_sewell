@@ -242,7 +242,7 @@ def test_synthetic_metadata_from_nb02():
     assert meta.is_synthetic is True
     assert abs(meta.truth_v_los - 148.0) < 1e-10
     assert abs(meta.tangent_lat - 30.0) < 1e-10
-    assert abs(meta.etalon_gap_mm - params.t * 1000) < 1e-6
+    assert abs(meta.etalon_gap_mm - params.t_m * 1000) < 1e-6  # t_m is an alias for t
     assert meta.adcs_quality_flag == AdcsQualityFlags.GOOD
     assert meta.orbit_parity == "along_track"   # orbit_number=1 is odd
 

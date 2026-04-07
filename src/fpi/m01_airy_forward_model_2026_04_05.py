@@ -84,6 +84,11 @@ class InstrumentParams:
         """Instrument finesse = π√R / (1-R)"""
         return np.pi * np.sqrt(self.R_refl) / (1.0 - self.R_refl)
 
+    @property
+    def t_m(self) -> float:
+        """Alias for t (etalon gap, metres). Matches CalibrationResult.t_m naming."""
+        return self.t
+
     def free_spectral_range(self, wavelength: float) -> float:
         """FSR = λ² / (2nt),  metres"""
         return wavelength ** 2 / (2.0 * self.n * self.t)
