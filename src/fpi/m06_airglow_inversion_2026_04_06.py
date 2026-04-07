@@ -292,16 +292,80 @@ def _run_airglow_lm(
 # Covariance and uncertainties
 # ---------------------------------------------------------------------------
 
+def _compute_jacobian_analytical(
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+) -> np.ndarray:
+    """
+    Compute analytical Jacobian of weighted residuals w.r.t. [lambda_c, Y_line, B_sci].
+
+    Uses a physically motivated step for lambda_c (FSR/1000 ≈ 1e-14 m ≈ 4.7 m/s)
+    to avoid the near-zero numerical derivative that arises when scipy's LM uses
+    a relative step h ≈ sqrt(eps) × lambda_c ≈ 1 FSR.
+
+    Columns:
+        0 — d(residuals)/d(lambda_c)   via finite difference (step = FSR/1000)
+        1 — d(residuals)/d(Y_line)     = -airy(r)/sigma  (analytic)
+        2 — d(residuals)/d(B_sci)      = -1/sigma         (analytic)
+
+    Sign convention: residuals = (data - model) / sigma, so
+        J_ij = -∂model_i / ∂p_j / sigma_i
+    """
+    step_lc = ETALON_FSR_OI_M / 1000.0   # ≈ 9.9e-18 m → ≈ 4.7 m/s
+
+    # Finite-difference column for lambda_c
+    model_hi = _bin_average(
+        _airglow_model_fine(r_fine, lambda_c_m + step_lc, Y_line, B_sci, cal),
+        r_fine, r_good,
+    )
+    model_lo = _bin_average(
+        _airglow_model_fine(r_fine, lambda_c_m - step_lc, Y_line, B_sci, cal),
+        r_fine, r_good,
+    )
+    d_dlambda = (model_hi - model_lo) / (2.0 * step_lc)   # ∂model/∂lambda_c
+
+    # Analytic columns for Y_line and B_sci
+    airy_fine = airy_modified(
+        r_fine, lambda_c_m,
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+        r_max=float(r_fine[-1]),
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+    )
+    airy_bins = np.interp(r_good, r_fine, airy_fine)   # ∂model/∂Y_line
+
+    # J_ij = -∂model_i/∂p_j / sigma_i   (sign: residual = (data-model)/sigma)
+    J = np.column_stack([
+        -d_dlambda / sigma_good,   # d(residual)/d(lambda_c)
+        -airy_bins / sigma_good,   # d(residual)/d(Y_line)
+        -np.ones(len(r_good)) / sigma_good,  # d(residual)/d(B_sci)
+    ])
+    return J
+
+
 def _compute_uncertainties(
     lm_result,
     n_good: int,
     chi2_red: float,
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Compute covariance and 1σ stderrs from LM Jacobian.
+    Compute covariance and 1σ stderrs using an analytically recomputed Jacobian.
 
-    Removes penalty rows from Jacobian before computing JTJ.
-    Uses pseudoinverse if JTJ is near-singular.
+    The LM Jacobian for lambda_c is unreliable because scipy's default relative
+    step h ≈ sqrt(eps) × lambda_c ≈ 1 FSR averages out the fringe sensitivity.
+    We replace it with a finite-difference Jacobian using step = FSR/1000 ≈ 4.7 m/s.
 
     Returns
     -------
@@ -310,12 +374,15 @@ def _compute_uncertainties(
     flags   : int                 — AirglowFitFlags.STDERR_NONE if singular
     """
     flags = AirglowFitFlags.GOOD
-    J_full = lm_result.jac       # shape (n_good + 3, 3)
-    J = J_full[:n_good, :]       # data rows only
+
+    # Recompute Jacobian with physically appropriate step sizes
+    J = _compute_jacobian_analytical(
+        r_good, sigma_good, r_fine,
+        lambda_c_m, Y_line, B_sci, cal,
+    )
 
     n_params = 3
-    dof = max(n_good - n_params, 1)
-    s2 = chi2_red  # chi2_red = sum(r²)/dof, so s2 = chi2_red (already normalised)
+    s2 = chi2_red
 
     JTJ = J.T @ J
     try:
@@ -451,7 +518,11 @@ def fit_airglow_fringe(
     chi2_red         = chi2_sum / dof
 
     # ---- Step 3: Covariance and stderrs ----
-    sigmas, cov, unc_flags = _compute_uncertainties(lm_result, n_good, chi2_red)
+    sigmas, cov, unc_flags = _compute_uncertainties(
+        lm_result, n_good, chi2_red,
+        r_good, sigma_good, r_fine,
+        lambda_c_m, Y_line, B_sci, cal,
+    )
     result_flags |= unc_flags
 
     if not np.all(np.isfinite(sigmas)):

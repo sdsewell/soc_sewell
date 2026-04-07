@@ -56,7 +56,10 @@ def test_zero_wind_recovery(synthetic_cal_result):
     from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
     params = InstrumentParams()
-    result_m04 = synthesise_airglow_image(v_rel_ms=0.0, params=params, add_noise=False)
+    result_m04 = synthesise_airglow_image(
+        v_rel_ms=0.0, params=params, add_noise=False,
+        cx=params.r_max, cy=params.r_max,
+    )
     fp = reduce_science_frame(
         result_m04["image_2d"],
         cx=params.r_max, cy=params.r_max,
@@ -85,7 +88,10 @@ def test_known_wind_round_trip(synthetic_cal_result):
 
     v_truth = 200.0
     params  = InstrumentParams()
-    result_m04 = synthesise_airglow_image(v_rel_ms=v_truth, params=params, add_noise=False)
+    result_m04 = synthesise_airglow_image(
+        v_rel_ms=v_truth, params=params, add_noise=False,
+        cx=params.r_max, cy=params.r_max,
+    )
     fp = reduce_science_frame(
         result_m04["image_2d"],
         cx=params.r_max, cy=params.r_max,
@@ -116,7 +122,9 @@ def test_noisy_round_trip_uncertainty_calibrated(synthetic_cal_result):
     params  = InstrumentParams()
     rng     = np.random.default_rng(42)
     result_m04 = synthesise_airglow_image(
-        v_rel_ms=v_truth, params=params, snr=5.0, add_noise=True, rng=rng)
+        v_rel_ms=v_truth, params=params, snr=5.0, add_noise=True, rng=rng,
+        cx=params.r_max, cy=params.r_max,
+    )
     fp = reduce_science_frame(
         result_m04["image_2d"],
         cx=params.r_max, cy=params.r_max,
@@ -146,7 +154,10 @@ def test_scan_prevents_fsr_confusion(synthetic_cal_result):
 
     v_truth = -300.0
     params  = InstrumentParams()
-    result_m04 = synthesise_airglow_image(v_rel_ms=v_truth, params=params, add_noise=False)
+    result_m04 = synthesise_airglow_image(
+        v_rel_ms=v_truth, params=params, add_noise=False,
+        cx=params.r_max, cy=params.r_max,
+    )
     fp = reduce_science_frame(
         result_m04["image_2d"],
         cx=params.r_max, cy=params.r_max,
@@ -192,7 +203,9 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
     params = InstrumentParams()
     rng    = np.random.default_rng(7)
     result_m04 = synthesise_airglow_image(
-        v_rel_ms=100.0, params=params, snr=5.0, add_noise=True, rng=rng)
+        v_rel_ms=100.0, params=params, snr=5.0, add_noise=True, rng=rng,
+        cx=params.r_max, cy=params.r_max,
+    )
     fp = reduce_science_frame(
         result_m04["image_2d"],
         cx=params.r_max, cy=params.r_max,
