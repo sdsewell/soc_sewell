@@ -69,8 +69,7 @@ def get_center_and_roi(img, default_size=216):
     center = plt.ginput(1)[0]  # (x, y)
     plt.close()
     print(f"Selected center: {center}")
-    roi_size = input(f"Enter ROI size (default {default_size}): ").strip()
-    roi_size = int(roi_size) if roi_size else default_size
+    roi_size = 216  # Hard-coded default
     cx_seed, cy_seed = int(center[0]), int(center[1])
     return (cx_seed, cy_seed), roi_size
 
