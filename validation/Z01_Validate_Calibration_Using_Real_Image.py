@@ -432,13 +432,37 @@ ax.text(0, 0, textstr, transform=ax.transAxes, fontsize=11,
 plt.tight_layout()
 plt.show()
 
+
+
+
 # 2-line analysis (unchanged)
 tol2line = tolansky.TwoLineAnalyser(tol1, tol2, lam1_nm=640.2248, lam2_nm=638.2991, d_prior=0)
-# No plot method for tol2line
+tol2line.run()
 
 # Print 1-line epsilons and uncertainties
 print(f"1-line epsilon (640.2248nm): {tol1.result.epsilon:.5f} ± {tol1.result.sigma_epsilon:.5f}, (638.2991nm): {tol2.result.epsilon:.5f} ± {tol2.result.sigma_epsilon:.5f}")
-print(f"2-line focal length: {tol2line.focal_length}, etalon gap: {tol2line.etalon_gap}")
-print(f"Uncertainties: {tol2line.uncertainties}")
+
+if hasattr(tol2line, 'result') and tol2line.result is not None:
+    res = tol2line.result
+    print(f"2-line recovered d: {res.d:.6g} ± {res.sigma_d:.4g} [{res.r_unit}]")
+    print(f"2-line recovered f: {res.f:.6g} ± {res.sigma_f:.4g} [{res.r_unit}]")
+    print(f"2-line eps1: {res.eps1:.7f} ± {res.sigma_eps1:.7f}, eps2: {res.eps2:.7f} ± {res.sigma_eps2:.7f}")
+    print(f"2-line delta_eps: {res.delta_eps:+.7f} ± {res.sigma_delta_eps:.7f}")
+
+    # Diagnostics: print before/after, print result fields, catch exceptions
+    print("Calling tol2line.plot_joint()...")
+    import pprint
+    pprint.pprint({
+        'd': res.d, 'sigma_d': res.sigma_d, 'f': res.f, 'sigma_f': res.sigma_f,
+        'p1': res.p1, 'r1_sq': res.r1_sq, 'sr1_sq': res.sr1_sq, 'pred1': res.pred1,
+        'p2': res.p2, 'r2_sq': res.r2_sq, 'sr2_sq': res.sr2_sq, 'pred2': res.pred2
+    })
+    try:
+        fig_joint = tol2line.plot_joint()
+        print("plot_joint() completed.")
+        import matplotlib.pyplot as plt
+        plt.show()
+    except Exception as e:
+        print(f"Exception in plot_joint: {e}")
 
 # --- End of script ---
