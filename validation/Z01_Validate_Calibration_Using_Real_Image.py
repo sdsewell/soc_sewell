@@ -1,3 +1,71 @@
+# --- (h) Center finding (Nelder-Mead path diagnostic) ---
+from scipy.optimize import minimize
+nm_path = []
+def nm_callback(xk):
+    nm_path.append((xk[0], xk[1], variance_cost(xk)))
+
+best_idx = np.argmin(coarse_points[:,2])
+best_cx = coarse_points[best_idx,0]
+best_cy = coarse_points[best_idx,1]
+x0 = np.array([best_cx, best_cy])
+simplex_r = grid_step + 0.5
+initial_simplex = np.array([
+    x0,
+    x0 + [simplex_r, 0.0],
+    x0 + [0.0, simplex_r],
+])
+result = minimize(
+    variance_cost, x0,
+    method="Nelder-Mead",
+    options={
+        "initial_simplex": initial_simplex,
+        "xatol": 0.02,
+        "fatol": 1.0,
+        "maxiter": 500,
+    },
+    callback=nm_callback
+)
+cx_fine, cy_fine = result.x
+cost_min = result.fun
+
+# --- (h) Plot coarse grid and Nelder-Mead path ---
+import matplotlib.cm as cm
+fig, ax = plt.subplots(figsize=(8, 6))
+sc = ax.scatter(coarse_points[:,0], coarse_points[:,1], c=coarse_points[:,2], cmap=cm.viridis, label='Coarse grid')
+cb = plt.colorbar(sc, ax=ax, label='Chi-square (cost)')
+nm_arr = np.array(nm_path)
+if len(nm_arr) > 0:
+    ax.plot(nm_arr[:,0], nm_arr[:,1], 'r.-', label='Nelder-Mead path')
+ax.scatter([cx_fine], [cy_fine], color='red', label='Final center', s=80)
+ax.set_xlabel('cx (pixels)')
+ax.set_ylabel('cy (pixels)')
+ax.set_title('Coarse Grid and Nelder-Mead Center Finding')
+ax.legend()
+plt.show()
+
+# --- (h) Plot cost vs. center (1D slices through best_cy and best_cx) ---
+cx_slice = np.unique(coarse_points[:,0])
+cy_slice = np.unique(coarse_points[:,1])
+cost_cx = [variance_cost([cx, best_cy]) for cx in cx_slice]
+cost_cy = [variance_cost([best_cx, cy]) for cy in cy_slice]
+fig, axs = plt.subplots(1,2,figsize=(12,5))
+axs[0].plot(cx_slice, cost_cx, 'b.-')
+axs[0].set_title('Chi-square vs. cx (cy fixed)')
+axs[0].set_xlabel('cx (pixels)')
+axs[0].set_ylabel('Chi-square (cost)')
+axs[1].plot(cy_slice, cost_cy, 'g.-')
+axs[1].set_title('Chi-square vs. cy (cx fixed)')
+axs[1].set_xlabel('cy (pixels)')
+axs[1].set_ylabel('Chi-square (cost)')
+plt.tight_layout()
+plt.show()
+
+# --- (h) Fine result object for downstream ---
+class FineResult:
+    def __init__(self, cx, cy):
+        self.cx = cx
+        self.cy = cy
+fine_result = FineResult(cx_fine, cy_fine)
 """
 Z01_Validate_Calibration_Using_Real_Image.py
 
@@ -6,6 +74,7 @@ Follows the workflow in specs/Z01_Validate_Calibration_Using_Real_Image.md.
 
 Assumes all required modules are available in src/ and that the script is run from the repo root.
 """
+
 
 import sys
 from pathlib import Path
@@ -129,9 +198,104 @@ ax.set_title(f'Seed Center for Coarse Grid: (cx_seed={roi_cx_seed}, cy_seed={roi
 ax.legend()
 plt.show()
 
-# --- (h) Center finding (coarse and fine) ---
-cx_fine, cy_fine, cost_min, best_cx, best_cy, best_cost = center_finder.azimuthal_variance_centre(dark_subtracted, roi_cx_seed, roi_cy_seed)
-fine_result = center_finder.find_centre(dark_subtracted, cx_fine, cy_fine)
+
+# --- (h) Center finding (coarse grid diagnostic) ---
+def variance_cost(xy):
+    r_min_sq = 5.0 ** 2
+    r_max_sq = (dark_subtracted.shape[0] // 2 - 10) ** 2
+    return center_finder._variance_cost(xy[0], xy[1], dark_subtracted, r_min_sq, r_max_sq, 250)
+
+var_search_px = 15.0
+grid_step = max(2.0, var_search_px / 8.0)
+offsets = np.arange(-var_search_px, var_search_px + grid_step * 0.5, grid_step)
+coarse_points = []
+for dy in offsets:
+    for dx in offsets:
+        cx = roi_cx_seed + dx
+        cy = roi_cy_seed + dy
+        cost = variance_cost([cx, cy])
+        coarse_points.append((cx, cy, cost))
+coarse_points = np.array(coarse_points)
+
+
+# --- (h) Plot coarse grid search results ---
+import matplotlib.cm as cm
+fig, ax = plt.subplots(figsize=(8, 6))
+sc = ax.scatter(coarse_points[:,0], coarse_points[:,1], c=coarse_points[:,2], cmap=cm.viridis, label='Coarse grid')
+cb = plt.colorbar(sc, ax=ax, label='Chi-square (cost)')
+ax.set_xlabel('cx (pixels)')
+ax.set_ylabel('cy (pixels)')
+ax.set_title('Coarse Grid Center Finding')
+ax.legend()
+plt.show()
+
+# --- (h) Center finding (Nelder-Mead path diagnostic) ---
+from scipy.optimize import minimize
+nm_path = []
+def nm_callback(xk):
+    nm_path.append((xk[0], xk[1], variance_cost(xk)))
+
+best_idx = np.argmin(coarse_points[:,2])
+best_cx = coarse_points[best_idx,0]
+best_cy = coarse_points[best_idx,1]
+x0 = np.array([best_cx, best_cy])
+simplex_r = grid_step + 0.5
+initial_simplex = np.array([
+    x0,
+    x0 + [simplex_r, 0.0],
+    x0 + [0.0, simplex_r],
+])
+result = minimize(
+    variance_cost, x0,
+    method="Nelder-Mead",
+    options={
+        "initial_simplex": initial_simplex,
+        "xatol": 0.02,
+        "fatol": 1.0,
+        "maxiter": 500,
+    },
+    callback=nm_callback
+)
+cx_fine, cy_fine = result.x
+cost_min = result.fun
+
+# --- (h) Plot coarse grid and Nelder-Mead path ---
+fig, ax = plt.subplots(figsize=(8, 6))
+sc = ax.scatter(coarse_points[:,0], coarse_points[:,1], c=coarse_points[:,2], cmap=cm.viridis, label='Coarse grid')
+cb = plt.colorbar(sc, ax=ax, label='Chi-square (cost)')
+nm_arr = np.array(nm_path)
+if len(nm_arr) > 0:
+    ax.plot(nm_arr[:,0], nm_arr[:,1], 'r.-', label='Nelder-Mead path')
+ax.scatter([cx_fine], [cy_fine], color='red', label='Final center', s=80)
+ax.set_xlabel('cx (pixels)')
+ax.set_ylabel('cy (pixels)')
+ax.set_title('Coarse Grid and Nelder-Mead Center Finding')
+ax.legend()
+plt.show()
+
+# --- (h) Plot cost vs. center (1D slices through best_cy and best_cx) ---
+cx_slice = np.unique(coarse_points[:,0])
+cy_slice = np.unique(coarse_points[:,1])
+cost_cx = [variance_cost([cx, best_cy]) for cx in cx_slice]
+cost_cy = [variance_cost([best_cx, cy]) for cy in cy_slice]
+fig, axs = plt.subplots(1,2,figsize=(12,5))
+axs[0].plot(cx_slice, cost_cx, 'b.-')
+axs[0].set_title('Chi-square vs. cx (cy fixed)')
+axs[0].set_xlabel('cx (pixels)')
+axs[0].set_ylabel('Chi-square (cost)')
+axs[1].plot(cy_slice, cost_cy, 'g.-')
+axs[1].set_title('Chi-square vs. cy (cx fixed)')
+axs[1].set_xlabel('cy (pixels)')
+axs[1].set_ylabel('Chi-square (cost)')
+plt.tight_layout()
+plt.show()
+
+# --- (h) Fine result object for downstream ---
+class FineResult:
+    def __init__(self, cx, cy):
+        self.cx = cx
+        self.cy = cy
+fine_result = FineResult(cx_fine, cy_fine)
 
 
 # --- (i) Plot center finding results (final center only) ---
