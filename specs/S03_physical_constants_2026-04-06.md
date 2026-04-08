@@ -120,7 +120,7 @@ Number of FSRs between lines ≈ 187.9
 
 | Python symbol | Value | Units | Source | Notes |
 |---------------|-------|-------|--------|-------|
-| `ETALON_GAP_M` | 20.008e-3 | m | ICOS build report GNL-4096-R iss1, §7.4 | **LEGACY CORRECTION:** FlatSat code used 20.670e-3 m — FSR-period ambiguity error |
+| `ETALON_GAP_M` | 20.008e-3 | m | ICOS build report GNL-4096-R iss1, §7.4 |
 | `ETALON_GAP_TOLERANCE_M` | 0.010e-3 | m | ICOS build report, §7.4 | Manufacturing tolerance ±0.010 mm |
 | `ETALON_R_COATING` | 0.80 | — | ICOS build report, §5.3.1 | As-deposited coating reflectivity at 630 nm; upper bound on effective R |
 | `ETALON_R_INSTRUMENT` | 0.53 | — | FlatSat calibration measurement | Effective instrument reflectivity from fringe contrast |
