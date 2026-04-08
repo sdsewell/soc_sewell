@@ -927,20 +927,19 @@ class TwoLineAnalyser:
         res = self.result
         u, u2 = self.r_unit, f"{self.r_unit}²"
 
-        DARK   = '#0d1117'
-        PANEL  = '#161b22'
-        BORDER = '#30363d'
-        BLUE   = '#58a6ff'   # line 1 (640 nm)
-        ORANGE = '#f0883e'   # line 2 (638 nm)
-        GREEN  = '#3fb950'
-        RED    = '#f85149'
-        YELLOW = '#d29922'
-        GRAY   = '#8b949e'
-        WHITE  = '#e6edf3'
-        PURPLE = '#bc8cff'
 
-        fig = plt.figure(figsize=(14, 10), facecolor=DARK)
-        fig.patch.set_facecolor(DARK)
+        # Use standard matplotlib colors and white background
+        BLUE   = 'tab:blue'   # line 1 (640 nm)
+        ORANGE = 'tab:orange' # line 2 (638 nm)
+        GREEN  = 'tab:green'
+        RED    = 'tab:red'
+        YELLOW = 'goldenrod'
+        GRAY   = 'gray'
+        WHITE  = 'black'  # for text
+        PURPLE = 'purple'
+
+        fig = plt.figure(figsize=(14, 10), facecolor='white')
+        fig.patch.set_facecolor('white')
         gs  = gridspec.GridSpec(2, 2, figure=fig,
                                 hspace=0.44, wspace=0.37,
                                 left=0.09, right=0.97,
@@ -951,13 +950,13 @@ class TwoLineAnalyser:
         ax_txt = fig.add_subplot(gs[1, 1])   # D
 
         for ax in [ax_tol, ax_res, ax_rat, ax_txt]:
-            ax.set_facecolor(PANEL)
-            ax.tick_params(colors=WHITE, which='both', direction='in')
+            ax.set_facecolor('white')
+            ax.tick_params(colors='black', which='both', direction='in')
             for sp in ax.spines.values():
-                sp.set_edgecolor(BORDER)
-            ax.xaxis.label.set_color(WHITE)
-            ax.yaxis.label.set_color(WHITE)
-            ax.title.set_color(WHITE)
+                sp.set_edgecolor('black')
+            ax.xaxis.label.set_color('black')
+            ax.yaxis.label.set_color('black')
+            ax.title.set_color('black')
 
         # ── Shared p range for the fit lines ─────────────────────────────────
         p_all  = np.concatenate([res.p1, res.p2])
@@ -984,8 +983,8 @@ class TwoLineAnalyser:
         ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
         ax_tol.set_title("A — Joint Tolansky Plot  (both lines)",
                           fontsize=11, fontweight='bold', pad=7)
-        ax_tol.legend(fontsize=8, facecolor=PANEL, labelcolor=WHITE,
-                      edgecolor=BORDER, framealpha=0.9, ncol=2)
+        ax_tol.legend(fontsize=8, facecolor='white', labelcolor='black',
+                  edgecolor='black', framealpha=0.9, ncol=2)
         ax_tol.text(0.97, 0.05,
                     f"$\\chi^2/\\nu = {res.chi2_dof:.3f}$",
                     transform=ax_tol.transAxes,
@@ -1008,8 +1007,8 @@ class TwoLineAnalyser:
         ax_res.set_ylabel(f"Residual  [{u2}]", fontsize=11)
         ax_res.set_title("B — Joint Fit Residuals",
                           fontsize=11, fontweight='bold', pad=7)
-        ax_res.legend(fontsize=9, facecolor=PANEL, labelcolor=WHITE,
-                      edgecolor=BORDER, framealpha=0.9)
+        ax_res.legend(fontsize=9, facecolor='white', labelcolor='black',
+                  edgecolor='black', framealpha=0.9)
 
         # ── C: slope-ratio verification ───────────────────────────────────────
         # Gather: individual slopes from each single-line fit,
@@ -1048,8 +1047,8 @@ class TwoLineAnalyser:
         ax_rat.set_ylabel("Slope ratio  $S_2 / S_1$", fontsize=11)
         ax_rat.set_title("C — Slope Ratio Consistency Check",
                           fontsize=11, fontweight='bold', pad=7)
-        ax_rat.legend(fontsize=8.5, facecolor=PANEL, labelcolor=WHITE,
-                      edgecolor=BORDER, framealpha=0.9)
+        ax_rat.legend(fontsize=8.5, facecolor='white', labelcolor='black',
+                  edgecolor='black', framealpha=0.9)
         ax_rat.tick_params(axis='x', labelsize=8.5)
         for label in ax_rat.get_xticklabels():
             label.set_color(WHITE)
@@ -1067,6 +1066,19 @@ class TwoLineAnalyser:
         # ── D: summary text ───────────────────────────────────────────────────
         ax_txt.axis('off')
 
+
+        # Convert d, f to mm, alpha to rad/px, and compute two_sigma values
+        PIXEL_M = 32e-6
+        d_mm = res.d * PIXEL_M * 1e3
+        sigma_d_mm = res.sigma_d * PIXEL_M * 1e3
+        two_sigma_d_mm = 2 * sigma_d_mm
+        f_mm = res.f * PIXEL_M * 1e3
+        sigma_f_mm = res.sigma_f * PIXEL_M * 1e3
+        two_sigma_f_mm = 2 * sigma_f_mm
+        alpha = PIXEL_M / (f_mm * 1e-3) if f_mm != 0 else float('nan')
+        sigma_alpha = abs(alpha * sigma_f_mm / f_mm) if f_mm != 0 else float('nan')
+        two_sigma_alpha = 2 * sigma_alpha
+
         lines_txt = [
             ("JOINT TWO-LINE SUMMARY",         WHITE,  11,   'bold'),
             ("",                               WHITE,   3,   'normal'),
@@ -1074,28 +1086,21 @@ class TwoLineAnalyser:
              f"  ({len(res.p1)} + {len(res.p2)})", GRAY, 9.5, 'normal'),
             (f"n (gap) : {self.n:.3f}",        GRAY,   9.5, 'normal'),
             ("",                               WHITE,   3,   'normal'),
-            ("── Joint fit ─────────────────", BORDER, 8.5, 'normal'),
-            (f"S₁ = {res.S1:.5g} ± {res.sigma_S1:.3g}  {u2}/fr",
-             BLUE,   9.5, 'normal'),
-            (f"S₂ = {res.S2:.5g}  (enforced)",
-             ORANGE, 9.5, 'normal'),
-            (f"ε₁ = {res.eps1:.6f} ± {res.sigma_eps1:.6f}",
-             BLUE,   9.5, 'normal'),
-            (f"ε₂ = {res.eps2:.6f} ± {res.sigma_eps2:.6f}",
-             ORANGE, 9.5, 'normal'),
-            (f"χ²/ν = {res.chi2_dof:.4f}",
-             GREEN if res.chi2_dof < 2 else YELLOW, 9.5, 'normal'),
+            ("── Instrument parameters ────────", BORDER, 8.5, 'normal'),
+            (f"d = {d_mm:.5f} ± {sigma_d_mm:.3g} mm (2σ: ±{two_sigma_d_mm:.3g})", GREEN, 9.5, 'bold'),
+            (f"f = {f_mm:.2f} ± {sigma_f_mm:.2g} mm (2σ: ±{two_sigma_f_mm:.2g})", GREEN, 9.5, 'bold'),
+            (f"α = {alpha:.3e} ± {sigma_alpha:.1e} rad/px (2σ: ±{two_sigma_alpha:.1e})", PURPLE, 9.5, 'bold'),
             ("",                               WHITE,   3,   'normal'),
-            ("── Excess fractions ──────────", BORDER, 8.5, 'normal'),
-            (f"N_int   = {res.N_int}",         GRAY,   9.5, 'normal'),
-            (f"ε₁−ε₂  = {res.delta_eps:+.6f}"
-             f" ± {res.sigma_delta_eps:.6f}", PURPLE, 9.5, 'normal'),
-            (f"d  = {res.d:.6g} ± {res.sigma_d:.3g}  {u}",
-             GREEN,  10,   'bold'),
+            ("── Fractional orders ────────────", BORDER, 8.5, 'normal'),
+            (f"ε₁ = {res.eps1:.6f} ± {res.sigma_eps1:.2g}", BLUE, 9.5, 'normal'),
+            (f"ε₂ = {res.eps2:.6f} ± {res.sigma_eps2:.2g}", ORANGE, 9.5, 'normal'),
+            (f"ε₁−ε₂ = {res.delta_eps:+.6f} ± {res.sigma_delta_eps:.2g}", PURPLE, 9.5, 'normal'),
             ("",                               WHITE,   3,   'normal'),
-            ("── Recovered f ───────────────", BORDER, 8.5, 'normal'),
-            (f"f  = {res.f:.6g} ± {res.sigma_f:.3g}  {u}",
-             GREEN,  10,   'bold'),
+            ("── Fit diagnostics ──────────────", BORDER, 8.5, 'normal'),
+            (f"S₁ = {res.S1:.5g} ± {res.sigma_S1:.3g}  {u2}/fr", BLUE, 9.5, 'normal'),
+            (f"S₂ = {res.S2:.5g}  (enforced)", ORANGE, 9.5, 'normal'),
+            (f"χ²/ν = {res.chi2_dof:.4f}", GREEN if res.chi2_dof < 2 else YELLOW, 9.5, 'normal'),
+            (f"N_int = {res.N_int}", GRAY, 9.5, 'normal'),
         ]
         y = 0.97
         for text, color, size, weight in lines_txt:
@@ -1109,7 +1114,7 @@ class TwoLineAnalyser:
             "Tolansky Method  —  Joint Two-Line Analysis"
             f"  ($\\lambda_1$ = {res.lam1_nm:.2f} nm,"
             f"  $\\lambda_2$ = {res.lam2_nm:.2f} nm)",
-            color=WHITE, fontsize=13, fontweight='bold', y=0.97)
+            color='black', fontsize=13, fontweight='bold', y=0.97)
 
         if save_path:
             fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=DARK)
