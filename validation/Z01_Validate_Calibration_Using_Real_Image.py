@@ -384,37 +384,47 @@ tol2 = tolansky.TolanskyAnalyser(p_638, r_638, sigma_r_638, r_unit="px", lam_nm=
 tol1.run()
 tol2.run()
 
-# Plot: peak index (y) vs r^2 (x) for each 1-line analysis
-
+import matplotlib.ticker as mticker
+# Plot: r^2 (mm^2) on x-axis, peak index (p) on y-axis for each 1-line analysis
+PIXEL_M = 32e-6
+def px2_to_mm2(r_px2):
+    return r_px2 * (PIXEL_M**2) * 1e6  # px^2 to mm^2
 
 fig, ax = plt.subplots(figsize=(8, 5))
-ax.errorbar(tol1.p, tol1.r**2, yerr=2*tol1.r*tol1.sigma_r, fmt='o', label='640.2248nm', color='blue')
-ax.errorbar(tol2.p, tol2.r**2, yerr=2*tol2.r*tol2.sigma_r, fmt='o', label='638.2991nm', color='orange')
 
-pfit_638 = np.linspace(min(tol2.p)-0.5, max(tol2.p)+0.5, 100)
-# Draw best fit lines (dashed, showing intercept, extended to x-axis)
+# Convert r^2 to mm^2 for both lines
+r2_640_mm2 = px2_to_mm2(tol1.r**2)
+r2_638_mm2 = px2_to_mm2(tol2.r**2)
+yerr_640 = px2_to_mm2(2*tol1.r*tol1.sigma_r)
+yerr_638 = px2_to_mm2(2*tol2.r*tol2.sigma_r)
 
-# Extend fit lines to ensure x-intercept is visible in [0,1] axes
-def fit_line_xrange(slope, intercept, p_min, p_max):
-    x0 = -intercept / slope if slope != 0 else p_min
-    # Always include x0 and [p_min-1, p_max+1]
-    x_vals = np.array([x0, p_min-1, p_max+1])
-    x_start = np.min(x_vals) - 1
-    x_end = np.max(x_vals) + 1
-    return np.linspace(x_start, x_end, 300)
+ax.errorbar(r2_640_mm2, tol1.p, xerr=yerr_640, fmt='o', label='640.2248nm', color='blue')
+ax.errorbar(r2_638_mm2, tol2.p, xerr=yerr_638, fmt='o', label='638.2991nm', color='orange')
 
-pfit_640 = fit_line_xrange(tol1.result.slope, tol1.result.intercept, min(tol1.p), max(tol1.p))
-fit_640 = tol1.result.slope * pfit_640 + tol1.result.intercept
-ax.plot(pfit_640, fit_640, '--', color='blue', linewidth=1, alpha=0.8, label='Fit 640.2248nm')
+def fit_line_xrange_r2(slope, intercept, p_min, p_max):
+    # For y = Sx + b, x = (y - b)/S
+    x_min = (p_min - intercept) / slope
+    x_max = (p_max - intercept) / slope
+    return np.linspace(x_min, x_max, 300)
 
-pfit_638 = fit_line_xrange(tol2.result.slope, tol2.result.intercept, min(tol2.p), max(tol2.p))
-fit_638 = tol2.result.slope * pfit_638 + tol2.result.intercept
-ax.plot(pfit_638, fit_638, '--', color='orange', linewidth=1, alpha=0.8, label='Fit 638.2991nm')
+p_min_640, p_max_640 = min(tol1.p), max(tol1.p)
+p_min_638, p_max_638 = min(tol2.p), max(tol2.p)
 
-ax.set_xlabel('Peak Index (p)')
-ax.set_ylabel(r'$r^2$ [px$^2$]')
-ax.set_title('Tolansky 1-line Analysis: $r^2$ vs Peak Index')
+r2fit_640 = fit_line_xrange_r2(tol1.result.slope, tol1.result.intercept, p_min_640, p_max_640)
+r2fit_638 = fit_line_xrange_r2(tol2.result.slope, tol2.result.intercept, p_min_638, p_max_638)
+
+# Convert fit lines to mm^2
+r2fit_640_mm2 = px2_to_mm2(r2fit_640)
+r2fit_638_mm2 = px2_to_mm2(r2fit_638)
+
+ax.plot(r2fit_640_mm2, tol1.result.slope * r2fit_640 + tol1.result.intercept, '--', color='blue', linewidth=1, alpha=0.8, label='Fit 640.2248nm')
+ax.plot(r2fit_638_mm2, tol2.result.slope * r2fit_638 + tol2.result.intercept, '--', color='orange', linewidth=1, alpha=0.8, label='Fit 638.2991nm')
+
+ax.set_xlabel(r'$r^2$ [mm$^2$]')
+ax.set_ylabel('Peak Index (p)')
+ax.set_title('Tolansky 1-line Analysis: Peak Index vs $r^2$')
 ax.legend()
+ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
 
 # Annotate epsilon values and uncertainties
 eps_640 = tol1.result.epsilon
@@ -422,9 +432,8 @@ eps_640_unc = tol1.result.sigma_epsilon
 eps_638 = tol2.result.epsilon
 eps_638_unc = tol2.result.sigma_epsilon
 
-
 textstr = (f"ε₆₄₀ = {eps_640:.4f} ± {eps_640_unc:.4f}  |  ε₆₃₈ = {eps_638:.4f} ± {eps_638_unc:.4f}")
-ax.text(0, 0, textstr, transform=ax.transAxes, fontsize=11,
+ax.text(0.02, 0.02, textstr, transform=ax.transAxes, fontsize=11,
     verticalalignment='bottom', horizontalalignment='left',
     bbox=dict(boxstyle='round,pad=0', facecolor='white', alpha=0.7),
     clip_on=True)
