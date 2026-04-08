@@ -84,8 +84,13 @@ def extract_roi(img, center, size):
     half = size // 2
     return img[y-half:y+half, x-half:x+half]
 
+
 cal_roi = extract_roi(cal_img, (cx_seed, cy_seed), roi_size)
 dark_roi = extract_roi(dark_img, (cx_seed, cy_seed), roi_size)
+
+# After extracting ROI, reset seed to center of ROI
+roi_cx_seed = roi_size // 2
+roi_cy_seed = roi_size // 2
 
 
 # --- (f) Show ROI images and histograms (now with dark-subtracted ROI) ---
@@ -115,8 +120,18 @@ plt.show()
 
 
 
+
+# --- (h) Center finding (intermediate diagnostic plot) ---
+
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.imshow(dark_subtracted, cmap='gray')
+ax.scatter([roi_cx_seed], [roi_cy_seed], color='orange', label='Seed center (ROI)', s=80)
+ax.set_title(f'Seed Center for Coarse Grid: (cx_seed={roi_cx_seed}, cy_seed={roi_cy_seed})')
+ax.legend()
+plt.show()
+
 # --- (h) Center finding (coarse and fine) ---
-cx_fine, cy_fine, cost_min, best_cx, best_cy, best_cost = center_finder.azimuthal_variance_centre(dark_subtracted, cx_seed, cy_seed)
+cx_fine, cy_fine, cost_min, best_cx, best_cy, best_cost = center_finder.azimuthal_variance_centre(dark_subtracted, roi_cx_seed, roi_cy_seed)
 fine_result = center_finder.find_centre(dark_subtracted, cx_fine, cy_fine)
 
 
