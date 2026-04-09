@@ -12,6 +12,12 @@ import sys
 import tkinter as tk
 from tkinter import filedialog
 
+# Ensure the project root (soc_sewell/) is on sys.path regardless of where
+# the script is invoked from.
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
