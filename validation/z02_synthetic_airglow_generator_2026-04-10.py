@@ -440,17 +440,17 @@ def print_parameter_table(
 def show_diagnostic_figure(
     pixel_block: np.ndarray,
     result: dict,
-    params: object,
+    params,
     output_path: pathlib.Path,
     tolansky_result=None,
 ) -> None:
     """
-    Show a 3- or 4-panel matplotlib diagnostic figure.
+    Show a 2×2 diagnostic figure.
 
-    Panel A: 2D airglow image (imshow, gray).
-    Panel B: 1D radial profile with fringe peak markers.
-    Panel C: Text panel showing decoded header fields from the saved file.
-    Panel D: Tolansky r² vs p WLS fit (shown only when tolansky_result provided).
+    Row 0 — Panel A: 2D airglow image (imshow, gray).
+             Panel B: 1D radial profile with fringe peak markers.
+    Row 1 — Panel C: Text panel showing decoded header fields from the saved file.
+             Panel D: Tolansky r² vs p WLS fit (hidden when tolansky_result is None).
     """
     import matplotlib.pyplot as plt
     from scipy.signal import find_peaks
@@ -459,15 +459,18 @@ def show_diagnostic_figure(
     c_start = 10
     img_display = pixel_block[r_start:r_start + 256, c_start:c_start + 256]
 
-    n_panels = 4 if tolansky_result is not None else 3
-    fig, axes = plt.subplots(1, n_panels, figsize=(20 if n_panels == 4 else 16, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     fig.suptitle(
         f"Z02 — Synthetic Airglow Image  |  {output_path.name}",
         fontsize=11,
     )
 
+    ax_a = axes[0, 0]
+    ax_b = axes[0, 1]
+    ax_c = axes[1, 0]
+    ax_d = axes[1, 1]
+
     # ── Panel A: 2D image ──────────────────────────────────────────────────
-    ax_a = axes[0]
     im = ax_a.imshow(img_display, cmap="gray", vmin=0, vmax=16383, origin="upper")
     plt.colorbar(im, ax=ax_a, label="ADU (14-bit)")
     ax_a.set_title("Synthetic airglow image (2D)")
@@ -475,7 +478,6 @@ def show_diagnostic_figure(
     ax_a.set_ylabel("Row (px)")
 
     # ── Panel B: 1D radial profile ─────────────────────────────────────────
-    ax_b = axes[1]
     profile = result["profile_1d"]
     r_grid  = result["r_grid"]
     ax_b.plot(r_grid, profile, "b-", linewidth=1.2, label="Profile")
@@ -507,7 +509,6 @@ def show_diagnostic_figure(
     ax_b.legend(fontsize=8)
 
     # ── Panel C: Header decode check ───────────────────────────────────────
-    ax_c = axes[2]
     ax_c.axis("off")
 
     # Re-read row 0 of the saved file and decode key fields
@@ -570,7 +571,6 @@ def show_diagnostic_figure(
 
     # ── Panel D: Tolansky r² vs p WLS fit ─────────────────────────────────
     if tolansky_result is not None:
-        ax_d = axes[3]
         tr = tolansky_result
 
         p_plot    = np.linspace(tr.p[0] - 0.5, tr.p[-1] + 0.5, 200)
@@ -583,31 +583,46 @@ def show_diagnostic_figure(
         )
         ax_d.plot(p_plot, fit_line, "r-", linewidth=1.4, label="WLS fit")
 
+        # Recover λ_c and Doppler velocity from slope: λ_c = S·d/f²
+        from src.fpi.m01_airy_forward_model_2026_04_05 import (
+            OI_WAVELENGTH_M, SPEED_OF_LIGHT_MS,
+        )
+        _f_px    = 1.0 / params.alpha           # pixels
+        _d_m     = params.t                      # metres
+        _lam_c   = tr.slope * _d_m / _f_px ** 2
+        _v_rec   = SPEED_OF_LIGHT_MS * (_lam_c / OI_WAVELENGTH_M - 1.0)
+        _sv_rec  = SPEED_OF_LIGHT_MS * tr.sigma_slope * _d_m / (_f_px ** 2 * OI_WAVELENGTH_M)
+
+        ann_lines = [
+            f"ε = {tr.epsilon:.6f} ± {tr.sigma_epsilon:.2e}",
+            f"R² = {tr.r2_fit:.8f}",
+        ]
+        if tr.recovered_f_px is not None:
+            f_mm_rec  = tr.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
+            sf_mm_rec = (tr.sigma_f_px or 0.0) * PIXEL_SIZE_BINNED_M * 1e3
+            ann_lines.append(f"f = {f_mm_rec:.3f} ± {sf_mm_rec:.3f} mm  (rec)")
+        if tr.recovered_d_m is not None:
+            d_mm_rec  = tr.recovered_d_m * 1e3
+            sd_um_rec = (tr.sigma_d_m or 0.0) * 1e6
+            ann_lines.append(f"d = {d_mm_rec:.6f} ± {sd_um_rec:.3f} µm mm  (rec)")
+        ann_lines.append(f"v = {_v_rec:+.1f} ± {_sv_rec:.1f} m/s  (rec)")
+
         ax_d.text(
             0.05, 0.97,
-            f"ε = {tr.epsilon:.6f}\nσ(ε) = {tr.sigma_epsilon:.2e}"
-            f"\nR² = {tr.r2_fit:.6f}",
+            "\n".join(ann_lines),
             transform=ax_d.transAxes,
             ha="left", va="top",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.9),
+            fontsize=8.5,
+            fontfamily="monospace",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow", alpha=0.9),
         )
-
-        if tr.recovered_f_px is not None:
-            f_mm_rec = tr.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
-            ax_d.text(
-                0.97, 0.05,
-                f"f = {f_mm_rec:.2f} mm\n(recovered)",
-                transform=ax_d.transAxes,
-                ha="right", va="bottom",
-                fontsize=8,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="lavender", alpha=0.8),
-            )
 
         ax_d.set_xlabel("Fringe index p")
         ax_d.set_ylabel("r²  (px²)")
         ax_d.set_title("Tolansky: r² vs p  (OI 630 nm, single-line WLS)")
         ax_d.legend(fontsize=8)
+    else:
+        ax_d.axis("off")
 
     plt.tight_layout()
     plt.show(block=False)
@@ -623,15 +638,20 @@ def _run_tolansky_stage(
     profile_1d: np.ndarray,
     r_grid: np.ndarray,
     t_m: float,
+    f_lens_m: float,
 ):
     """
     Run M03 peak finder then single-line TolanskyAnalyser on a synthetic profile.
+
+    Passes both d_m and f_px to TolanskyAnalyser so the result contains both
+    recovered_f_px (from known d) and recovered_d_m (from known f).
 
     Parameters
     ----------
     profile_1d : 1D radial profile, counts (noiseless, from synthesis result)
     r_grid     : radial bin centres, pixels
-    t_m        : etalon gap, metres  — passed as d_m to recover f_px
+    t_m        : etalon gap, metres
+    f_lens_m   : imaging lens focal length, metres
 
     Returns
     -------
@@ -679,11 +699,13 @@ def _run_tolansky_stage(
     ])
 
     lam_nm = OI_WAVELENGTH_M * 1e9
+    f_px   = f_lens_m / PIXEL_SIZE_BINNED_M
 
     analyser = TolanskyAnalyser(
         p=p, r=r, sigma_r=sigma_r,
         lam_nm=lam_nm,
         d_m=t_m,                       # known gap → recovers f_px
+        f_px=f_px,                     # known focal length → recovers d_m
         pixel_pitch_m=PIXEL_SIZE_BINNED_M,
     )
     tol_result = analyser.run()
@@ -798,6 +820,46 @@ def main() -> None:
             print(f"    ⚠  Invalid input '{raw}'. Please enter a number.\n")
     print()
 
+    # ── Prompt: Doppler velocity ──────────────────────────────────────────
+    V_DEFAULT = 0.0
+    V_MIN, V_MAX = -500.0, 500.0
+    while True:
+        print(f"  Doppler LOS wind velocity [m/s]")
+        print(f"    Default: {V_DEFAULT} m/s  (zero wind)")
+        print(f"    Range:   {V_MIN} – {V_MAX} m/s")
+        raw = input(f"  ➤ Enter velocity [{V_DEFAULT}]: ").strip()
+        if raw == "":
+            v_rel_ms = V_DEFAULT
+            break
+        try:
+            v_rel_ms = float(raw)
+            if V_MIN <= v_rel_ms <= V_MAX:
+                break
+            print(f"    ⚠  Value {v_rel_ms} out of range [{V_MIN}, {V_MAX}]. Please try again.\n")
+        except ValueError:
+            print(f"    ⚠  Invalid input '{raw}'. Please enter a number.\n")
+    print()
+
+    # ── Prompt: signal-to-noise ratio ────────────────────────────────────
+    SNR_DEFAULT = 5.0
+    SNR_MIN, SNR_MAX = 1.0, 50.0
+    while True:
+        print(f"  Target signal-to-noise ratio")
+        print(f"    Default: {SNR_DEFAULT}")
+        print(f"    Range:   {SNR_MIN} – {SNR_MAX}")
+        raw = input(f"  ➤ Enter SNR [{SNR_DEFAULT}]: ").strip()
+        if raw == "":
+            snr = SNR_DEFAULT
+            break
+        try:
+            snr = float(raw)
+            if SNR_MIN <= snr <= SNR_MAX:
+                break
+            print(f"    ⚠  Value {snr} out of range [{SNR_MIN}, {SNR_MAX}]. Please try again.\n")
+        except ValueError:
+            print(f"    ⚠  Invalid input '{raw}'. Please enter a number.\n")
+    print()
+
     # Convert to SI units
     t_m      = t_mm * 1e-3
     f_lens_m = f_lens_mm * 1e-3
@@ -814,8 +876,8 @@ def main() -> None:
         t_m=t_m,
         R_refl=R_refl,
         f_lens_m=f_lens_m,
-        v_rel_ms=0.0,
-        snr=5.0,
+        v_rel_ms=v_rel_ms,
+        snr=snr,
     )
 
     # ── Save ──────────────────────────────────────────────────────────────
@@ -832,8 +894,8 @@ def main() -> None:
         R_refl=R_refl,
         f_lens_m=f_lens_m,
         alpha=alpha,
-        v_rel_ms=0.0,
-        snr=5.0,
+        v_rel_ms=v_rel_ms,
+        snr=snr,
         result=result,
         output_path=output_path,
     )
@@ -845,20 +907,42 @@ def main() -> None:
             profile_1d=result["profile_1d"],
             r_grid=result["r_grid"],
             t_m=t_m,
+            f_lens_m=f_lens_m,
         )
+        from src.fpi.m01_airy_forward_model_2026_04_05 import (
+            OI_WAVELENGTH_M, SPEED_OF_LIGHT_MS,
+        )
+        _S  = tol_result.slope
+        _sS = tol_result.sigma_slope
+        _lam_c_rec = _S * t_m / (1.0 / params.alpha) ** 2   # S·d/f²  [m]
+        _v_rec_ms  = SPEED_OF_LIGHT_MS * (_lam_c_rec / OI_WAVELENGTH_M - 1.0)
+        _sv_rec_ms = SPEED_OF_LIGHT_MS * (_sS * t_m / (1.0 / params.alpha) ** 2
+                                           / OI_WAVELENGTH_M)
         print()
         print("── Tolansky Recovery (OI 630 nm, single-line WLS) " + "─" * 16)
-        print(f"  Peaks found          {len(_good_peaks)}")
-        print(f"  ε  (fractional order)  {tol_result.epsilon:.6f}")
-        print(f"  σ(ε)                   {tol_result.sigma_epsilon:.2e}")
-        print(f"  WLS slope S            {tol_result.slope:.4f} ± {tol_result.sigma_slope:.4f}  px²/fringe")
-        print(f"  WLS intercept b        {tol_result.intercept:.4f} ± {tol_result.sigma_int:.4f}")
-        print(f"  R²                     {tol_result.r2_fit:.8f}")
+        print(f"  Peaks found              {len(_good_peaks)}")
+        print(f"  ε  (fractional order)    "
+              f"{tol_result.epsilon:.6f} ± {tol_result.sigma_epsilon:.2e}")
+        print(f"  WLS slope S              "
+              f"{tol_result.slope:.4f} ± {tol_result.sigma_slope:.4f}  px²/fringe")
+        print(f"  WLS intercept b          "
+              f"{tol_result.intercept:.4f} ± {tol_result.sigma_int:.4f}")
+        print(f"  R²                       {tol_result.r2_fit:.8f}")
         if tol_result.recovered_f_px is not None:
             f_rec_mm = tol_result.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
-            print(f"  Recovered f            {f_rec_mm:.3f} mm  "
-                  f"(input: {f_lens_mm:.3f} mm, "
-                  f"Δ = {f_rec_mm - f_lens_mm:+.3f} mm)")
+            sf_rec_mm = (tol_result.sigma_f_px or 0.0) * PIXEL_SIZE_BINNED_M * 1e3
+            print(f"  Recovered f              "
+                  f"{f_rec_mm:.3f} ± {sf_rec_mm:.3f} mm  "
+                  f"(input {f_lens_mm:.3f} mm,  Δ = {f_rec_mm - f_lens_mm:+.3f} mm)")
+        if tol_result.recovered_d_m is not None:
+            d_rec_mm  = tol_result.recovered_d_m * 1e3
+            sd_rec_um = (tol_result.sigma_d_m or 0.0) * 1e6
+            print(f"  Recovered d              "
+                  f"{d_rec_mm:.6f} ± {sd_rec_um:.3f} µm mm  "
+                  f"(input {t_mm:.4f} mm,  Δ = {(d_rec_mm - t_mm)*1e3:+.1f} µm)")
+        print(f"  Recovered v              "
+              f"{_v_rec_ms:+.1f} ± {_sv_rec_ms:.1f} m/s  "
+              f"(input {v_rel_ms:+.1f} m/s,  Δ = {_v_rec_ms - v_rel_ms:+.1f} m/s)")
         print()
     except Exception as exc:
         print(f"  ⚠  Tolansky stage failed: {exc}")
