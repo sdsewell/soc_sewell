@@ -442,13 +442,15 @@ def show_diagnostic_figure(
     result: dict,
     params: object,
     output_path: pathlib.Path,
+    tolansky_result=None,
 ) -> None:
     """
-    Show a 3-panel matplotlib diagnostic figure.
+    Show a 3- or 4-panel matplotlib diagnostic figure.
 
     Panel A: 2D airglow image (imshow, gray).
     Panel B: 1D radial profile with fringe peak markers.
     Panel C: Text panel showing decoded header fields from the saved file.
+    Panel D: Tolansky r² vs p WLS fit (shown only when tolansky_result provided).
     """
     import matplotlib.pyplot as plt
     from scipy.signal import find_peaks
@@ -457,7 +459,8 @@ def show_diagnostic_figure(
     c_start = 10
     img_display = pixel_block[r_start:r_start + 256, c_start:c_start + 256]
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    n_panels = 4 if tolansky_result is not None else 3
+    fig, axes = plt.subplots(1, n_panels, figsize=(20 if n_panels == 4 else 16, 5))
     fig.suptitle(
         f"Z02 — Synthetic Airglow Image  |  {output_path.name}",
         fontsize=11,
@@ -565,9 +568,126 @@ def show_diagnostic_figure(
     )
     ax_c.set_title("Header decode check (row 0)")
 
+    # ── Panel D: Tolansky r² vs p WLS fit ─────────────────────────────────
+    if tolansky_result is not None:
+        ax_d = axes[3]
+        tr = tolansky_result
+
+        p_plot    = np.linspace(tr.p[0] - 0.5, tr.p[-1] + 0.5, 200)
+        fit_line  = tr.slope * p_plot + tr.intercept
+
+        ax_d.errorbar(
+            tr.p, tr.r_sq, yerr=tr.sigma_r_sq,
+            fmt="o", color="steelblue", markersize=5,
+            capsize=3, linewidth=0.8, label="r² data",
+        )
+        ax_d.plot(p_plot, fit_line, "r-", linewidth=1.4, label="WLS fit")
+
+        ax_d.text(
+            0.05, 0.97,
+            f"ε = {tr.epsilon:.6f}\nσ(ε) = {tr.sigma_epsilon:.2e}"
+            f"\nR² = {tr.r2_fit:.6f}",
+            transform=ax_d.transAxes,
+            ha="left", va="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.9),
+        )
+
+        if tr.recovered_f_px is not None:
+            f_mm_rec = tr.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
+            ax_d.text(
+                0.97, 0.05,
+                f"f = {f_mm_rec:.2f} mm\n(recovered)",
+                transform=ax_d.transAxes,
+                ha="right", va="bottom",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lavender", alpha=0.8),
+            )
+
+        ax_d.set_xlabel("Fringe index p")
+        ax_d.set_ylabel("r²  (px²)")
+        ax_d.set_title("Tolansky: r² vs p  (OI 630 nm, single-line WLS)")
+        ax_d.legend(fontsize=8)
+
     plt.tight_layout()
     plt.show(block=False)
     print("\nDiagnostic figure displayed. Close the window or press Enter to continue.")
+
+
+# ---------------------------------------------------------------------------
+# Tolansky stage — peak finding + single-line WLS fit
+# ---------------------------------------------------------------------------
+
+
+def _run_tolansky_stage(
+    profile_1d: np.ndarray,
+    r_grid: np.ndarray,
+    t_m: float,
+):
+    """
+    Run M03 peak finder then single-line TolanskyAnalyser on a synthetic profile.
+
+    Parameters
+    ----------
+    profile_1d : 1D radial profile, counts (noiseless, from synthesis result)
+    r_grid     : radial bin centres, pixels
+    t_m        : etalon gap, metres  — passed as d_m to recover f_px
+
+    Returns
+    -------
+    (good_peaks, tol_result)
+        good_peaks  : list[PeakFit] with fit_ok=True, sorted by r_fit_px
+        tol_result  : TolanskyResult from TolanskyAnalyser.run()
+    """
+    from src.fpi.m03_annular_reduction_2026_04_06 import _find_and_fit_peaks
+    from src.fpi.tolansky_2026_04_05 import TolanskyAnalyser
+    from src.fpi.m01_airy_forward_model_2026_04_05 import OI_WAVELENGTH_M
+
+    # Build placeholder uncertainty and mask arrays for the noiseless profile.
+    # Use 5 % of peak-to-peak range as a uniform σ so the Gaussian fitter
+    # has sensible weights without artificially tiny uncertainties.
+    ptp = float(np.ptp(profile_1d))
+    sigma_profile = np.full_like(profile_1d, max(ptp * 0.05, 1.0))
+    masked = np.zeros(len(profile_1d), dtype=bool)
+
+    peaks = _find_and_fit_peaks(
+        r_grid=r_grid,
+        profile=profile_1d,
+        sigma_profile=sigma_profile,
+        masked=masked,
+        prominence=ptp * 0.10,   # 10 % of full swing — catches all fringe peaks
+    )
+
+    good_peaks = sorted(
+        [pk for pk in peaks if pk.fit_ok],
+        key=lambda pk: pk.r_fit_px,
+    )
+
+    if len(good_peaks) < 2:
+        raise RuntimeError(
+            f"Tolansky stage: only {len(good_peaks)} good peaks found "
+            f"(need ≥ 2). Try reducing prominence or SNR."
+        )
+
+    p       = np.arange(1, len(good_peaks) + 1, dtype=float)
+    r       = np.array([pk.r_fit_px for pk in good_peaks])
+    sigma_r = np.array([
+        pk.sigma_r_fit_px
+        if np.isfinite(pk.sigma_r_fit_px) and pk.sigma_r_fit_px > 0.0
+        else 0.5
+        for pk in good_peaks
+    ])
+
+    lam_nm = OI_WAVELENGTH_M * 1e9
+
+    analyser = TolanskyAnalyser(
+        p=p, r=r, sigma_r=sigma_r,
+        lam_nm=lam_nm,
+        d_m=t_m,                       # known gap → recovers f_px
+        pixel_pitch_m=PIXEL_SIZE_BINNED_M,
+    )
+    tol_result = analyser.run()
+    return good_peaks, tol_result
 
 
 # ---------------------------------------------------------------------------
@@ -718,8 +838,35 @@ def main() -> None:
         output_path=output_path,
     )
 
+    # ── Tolansky stage: peak finding + single-line WLS fit ───────────────
+    print("  Running Tolansky analysis on synthetic profile …")
+    try:
+        _good_peaks, tol_result = _run_tolansky_stage(
+            profile_1d=result["profile_1d"],
+            r_grid=result["r_grid"],
+            t_m=t_m,
+        )
+        print()
+        print("── Tolansky Recovery (OI 630 nm, single-line WLS) " + "─" * 16)
+        print(f"  Peaks found          {len(_good_peaks)}")
+        print(f"  ε  (fractional order)  {tol_result.epsilon:.6f}")
+        print(f"  σ(ε)                   {tol_result.sigma_epsilon:.2e}")
+        print(f"  WLS slope S            {tol_result.slope:.4f} ± {tol_result.sigma_slope:.4f}  px²/fringe")
+        print(f"  WLS intercept b        {tol_result.intercept:.4f} ± {tol_result.sigma_int:.4f}")
+        print(f"  R²                     {tol_result.r2_fit:.8f}")
+        if tol_result.recovered_f_px is not None:
+            f_rec_mm = tol_result.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
+            print(f"  Recovered f            {f_rec_mm:.3f} mm  "
+                  f"(input: {f_lens_mm:.3f} mm, "
+                  f"Δ = {f_rec_mm - f_lens_mm:+.3f} mm)")
+        print()
+    except Exception as exc:
+        print(f"  ⚠  Tolansky stage failed: {exc}")
+        tol_result = None
+
     # ── Diagnostic figure ─────────────────────────────────────────────────
-    show_diagnostic_figure(pixel_block, result, params, output_path)
+    show_diagnostic_figure(pixel_block, result, params, output_path,
+                           tolansky_result=tol_result)
 
     input("\nDone. Press Enter to exit.")
 

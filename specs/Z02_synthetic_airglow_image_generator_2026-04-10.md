@@ -5,12 +5,14 @@
 **Tier:** 9 — Validation & Standalone Utilities  
 **Project:** WindCube FPI Science Operations Center Pipeline  
 **Institution:** NCAR / High Altitude Observatory (HAO)  
-**Status:** Specification — ready for implementation in VS Code  
+**Status:** Implemented — 8/8 tests pass  
 **Depends on:**
   - S09 (M01) — `InstrumentParams`, `airy_modified`, `OI_WAVELENGTH_M`, `SPEED_OF_LIGHT_MS`
   - S11 (M04) — `synthesise_airglow_image`, `v_rel_to_lambda_c`
   - S19 (P01) — `ImageMetadata` dataclass, binary format (Section 2), header word map (Section 2.3)
   - S03 — Physical constants (pixel size, CCD geometry)
+  - S12 (M03) — `_find_and_fit_peaks` (used by `_run_tolansky_stage`)
+  - S13 (Tolansky) — `TolanskyAnalyser` single-line analysis (used by `_run_tolansky_stage`)
 **Used by:** Standalone utility; feeds real `.bin` files into Z01 for validation  
 **References:**
   - Harding et al. (2014) Applied Optics 53(4)
@@ -26,6 +28,8 @@
 | Date | Section | Change |
 |------|---------|--------|
 | 2026-04-10 | T6 | Documented implementation deviation: gap range widened to [10, 15, 20] mm; narrow operational range [19.8, 20.106, 20.4] mm is numerically brittle due to boundary fringe straddling r_max |
+| 2026-04-10 | All | Initial implementation complete — 8/8 tests pass; script lives in `validation/` not `scripts/` |
+| 2026-04-10 | §4, §6, §7 | Added `_run_tolansky_stage()`, extended `show_diagnostic_figure()` to 4 panels, updated `main()` flow |
 
 > **Purpose in one sentence:** Generate a synthetic 2D airglow fringe image,
 > pack a complete S19-compliant metadata header into its first row of pixels,
@@ -46,10 +50,17 @@ parameters and a save location, and the script produces:
 3. A `.bin` file saved to a user-selected folder (Windows path dialog or
    typed path).
 4. A printed parameter table summarising all instrument and metadata values.
+5. A Tolansky single-line analysis of the synthesised fringe profile,
+   recovering the fringe fraction ε and focal length f as a self-consistency
+   check (see Section 4.8).
 
 The output file is byte-for-byte compatible with `ingest_real_image()` from
 P01 — the Z01 validation script can load it directly as if it were a real
 on-orbit image.
+
+> **Implementation note:** The script lives at
+> `validation/z02_synthetic_airglow_generator_2026-04-10.py`, not `scripts/`
+> as originally specified. The `validation/` directory is its canonical home.
 
 **What Z02 does not do:**
 - Z02 does not implement any new physics. It calls M01/M04 for image
@@ -564,6 +575,65 @@ def print_parameter_table(
     """
 ```
 
+### 4.8 `_run_tolansky_stage` *(added 2026-04-10)*
+
+```python
+def _run_tolansky_stage(
+    profile_1d: np.ndarray,   # 1D radial profile from synthesise_and_embed()
+    r_grid:     np.ndarray,   # corresponding radial positions, pixels
+    t_m:        float,        # etalon gap, metres (used to seed TolanskyAnalyser)
+) -> dict | None:
+    """
+    Run a single-line Tolansky analysis on the synthesised fringe profile.
+
+    This is a self-consistency check: given that the fringe was synthesised
+    with a known etalon gap t_m, the recovered ε should be physically
+    reasonable and the recovered f should agree with the input focal length.
+
+    Steps:
+    1. Build a uniform sigma_profile = 5% of peak-to-peak range of profile_1d.
+    2. Build an all-False masked array (no pixels excluded).
+    3. Call M03's _find_and_fit_peaks(profile_1d, r_grid, sigma_profile, masked,
+       prominence=0.1 * ptp) to identify Gaussian-fitted ring positions and
+       their uncertainties.
+    4. Assign fringe indices p = 1, 2, ..., N for the N detected peaks
+       (innermost = order 1).
+    5. Pass the fitted radii and uncertainties to TolanskyAnalyser(d_m=t_m).
+    6. Return the result dict from TolanskyAnalyser, or None if fewer than
+       3 peaks are found or any exception is raised.
+
+    Parameters
+    ----------
+    profile_1d : 1D radial intensity profile, counts
+    r_grid     : radial positions corresponding to profile_1d, pixels
+    t_m        : etalon gap in metres — seeds TolanskyAnalyser
+
+    Returns
+    -------
+    dict with keys: epsilon, sigma_epsilon, f_mm, sigma_f_mm, S, b, R2,
+                    n_peaks, peak_radii, peak_orders
+    or None on failure (graceful degradation — panel D is omitted).
+
+    Notes
+    -----
+    Failures are caught and reported to stdout; they do not abort the script.
+    Panel D of the diagnostic figure is simply omitted when this returns None.
+    """
+```
+
+**Printed output from `_run_tolansky_stage`:**
+
+```
+── Tolansky Self-Consistency Check ───────────────────────────────
+  Peaks found          {n_peaks}
+  Fringe fraction ε    {epsilon:.6f}  ±  {sigma_epsilon:.6f}
+  Slope S              {S:.4f}
+  Intercept b          {b:.4f}
+  R²                   {R2:.6f}
+  Recovered f          {f_mm:.2f} mm   (input: {f_input:.2f} mm)
+══════════════════════════════════════════════════════════════════
+```
+
 ---
 
 ## 5. Interactive parameter prompts
@@ -619,8 +689,12 @@ def main():
     4. Synthesise image: synthesise_and_embed().
     5. Save: save_bin_file().
     6. Print parameter table: print_parameter_table().
-    7. Display 3-panel diagnostic figure: show_diagnostic_figure().
-    8. Print "Done. Press Enter to exit." and wait.
+    7. Run Tolansky self-consistency check: _run_tolansky_stage().
+       Print compact results table (peaks, ε ± σ(ε), S, b, R², recovered f).
+       On failure: print warning, set tol_result = None, continue.
+    8. Display diagnostic figure: show_diagnostic_figure(tolansky_result=tol_result).
+       3 panels if tol_result is None; 4 panels if Tolansky succeeded.
+    9. Print "Done. Press Enter to exit." and wait.
 
     if __name__ == '__main__':
         main()
@@ -631,9 +705,9 @@ def main():
 
 ## 7. Diagnostic figure
 
-After saving, Z02 displays a 3-panel matplotlib figure for visual verification.
-This is important for catching obvious synthesis failures before feeding the
-file into Z01.
+After saving, Z02 displays a diagnostic figure with **3 or 4 panels** depending
+on whether the Tolansky stage succeeded. This is important for catching obvious
+synthesis failures before feeding the file into Z01.
 
 ```
 ┌────────────────────┬──────────────────────┬────────────────────────┐
@@ -643,7 +717,27 @@ file into Z01.
 │  imshow, gray)     │  with fringe rings   │  decode key fields,    │
 │  Colourbar: ADU    │  labelled            │  print as text         │
 └────────────────────┴──────────────────────┴────────────────────────┘
+         (Panel D added automatically when Tolansky stage succeeds)
+┌──────────────────────────────────────────────────────────────────────┐
+│  Panel D  (optional)                                                 │
+│  Tolansky WLS fit — r² vs p scatter with error bars, fit line,       │
+│  annotation box showing ε ± σ(ε) and R²; second annotation          │
+│  showing recovered f vs input f in mm                               │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+**`show_diagnostic_figure` signature:**
+```python
+def show_diagnostic_figure(
+    pixel_block:      np.ndarray,
+    result:           dict,
+    params:           'InstrumentParams',
+    output_path:      pathlib.Path,
+    tolansky_result:  dict | None = None,   # None → 3-panel; dict → 4-panel
+) -> None:
+```
+Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
+`(1, 4)` when a result dict is provided.
 
 **Panel A — 2D image:**
 - `imshow(pixel_block[r_start:r_start+256, c_start:c_start+256], cmap='gray', vmin=0, vmax=16383)`
@@ -664,6 +758,13 @@ file into Z01.
 - Show: `rows`, `cols`, `exp_time`, `lua_timestamp` (as UTC string),
   `etalon_temps[0]`, `img_type` (derived from lamp/gpio state)
 - Title: `"Header decode check (row 0)"`
+
+**Panel D — Tolansky WLS fit** *(present only when `tolansky_result` is not None):*
+- Scatter plot of r² vs fringe order p, with error bars from peak fit uncertainties
+- Overlaid WLS fit line
+- Annotation box (upper left): `ε = {epsilon:.6f} ± {sigma_epsilon:.6f}` and `R² = {R2:.6f}`
+- Second annotation: `f_recovered = {f_mm:.2f} mm  (input: {f_input:.2f} mm)`
+- Title: `"Tolansky self-consistency  |  {n_peaks} peaks"`
 
 Figure title: `"Z02 — Synthetic Airglow Image  |  {filename}"`
 
@@ -841,16 +942,17 @@ def test_save_wrong_shape_raises(tmp_path):
 
 ```
 soc_sewell/
-├── scripts/
-│   └── z02_synthetic_airglow_generator_2026-04-10.py   ← this script
+├── validation/
+│   └── z02_synthetic_airglow_generator_2026-04-10.py   ← this script (actual location)
 ├── tests/
 │   └── test_z02_synthetic_airglow_generator.py
 └── docs/specs/
     └── Z02_synthetic_airglow_image_generator_2026-04-10.md   ← this file
 ```
 
-Note: Z02 lives in `scripts/` (not `fpi/`) because it is a standalone
-interactive utility, not an importable library module.
+> **Location deviation:** The script was placed in `validation/` rather than
+> `scripts/` as originally specified. `validation/` is the correct home for
+> all Z-series standalone scripts in `soc_sewell`.
 
 ---
 
