@@ -32,6 +32,7 @@
 | 2026-04-10 | §4, §6, §7 | Added `_run_tolansky_stage()`, extended `show_diagnostic_figure()` to 4 panels, updated `main()` flow |
 | 2026-04-10 | §4.8, §5, §6, §7 | Added user control over Doppler LOS velocity (−500–+500 m/s, default 0) and target SNR (1–50, default 5); `_run_tolansky_stage` gains `f_lens_m` param and now recovers d, f, and v; Panel D annotation consolidated to single monospace text box |
 | 2026-04-10 | §4.8, §7 | Removed velocity recovery from `_run_tolansky_stage`: λ_c = S·d/f² is insensitive to Doppler shifts at single-image precision (ΔS/S ≈ 3×10⁻⁷ per 100 m/s vs σ_S/S ≈ 4×10⁻⁴ — 1000× too noisy). Velocity belongs in M06. Panel D is now a 4-line annotation box: ε ± σ, R², recovered f ± σ, recovered d ± σ |
+| 2026-04-10 | §4.8, §7 | Redesigned Tolansky stage: d and f are now fixed prior inputs (determined by two-line neon calibration, not re-fitted here); ε is the sole fitted quantity; v_rel is then derived from ε via λ_c → Doppler formula. This is the correct pipeline role: Z02 validates the ε→v chain with known ground truth |
 
 > **Purpose in one sentence:** Generate a synthetic 2D airglow fringe image,
 > pack a complete S19-compliant metadata header into its first row of pixels,
@@ -579,19 +580,38 @@ def print_parameter_table(
 
 ### 4.8 `_run_tolansky_stage` *(added 2026-04-10)*
 
+> **Design principle:** `d` (etalon gap) and `f` (focal length) are
+> opto-mechanical constants — invariant between science frames, determined
+> once per calibration cycle from the two-line neon fringe pattern by S13's
+> `TwoLineAnalyser`. They are **inputs** here, not outputs. The sole fitted
+> quantity is **ε** (fractional interference order at r=0 for the OI 630 nm
+> line). From ε, λ_c is computed analytically, and from λ_c, v_rel follows
+> directly via the Doppler formula. This is the correct pipeline role for the
+> single-line Tolansky fit on a science frame, and Z02 validates the
+> ε → λ_c → v_rel chain against known synthetic ground truth.
+
 ```python
 def _run_tolansky_stage(
     profile_1d: np.ndarray,   # 1D radial profile from synthesise_and_embed()
     r_grid:     np.ndarray,   # corresponding radial positions, pixels
-    t_m:        float,        # etalon gap, metres (seeds TolanskyAnalyser d_m)
-    f_lens_m:   float,        # imaging lens focal length, metres (seeds TolanskyAnalyser f_px)
+    d_m:        float,        # etalon gap, metres  — FIXED PRIOR from neon calibration
+    f_m:        float,        # focal length, metres — FIXED PRIOR from neon calibration
+    v_input_ms: float = 0.0,  # ground-truth wind used for synthesis (for Δv annotation)
 ) -> dict | None:
     """
-    Run a single-line Tolansky analysis on the synthesised fringe profile.
+    Run a single-line Tolansky fit on the synthesised OI 630 nm fringe profile.
 
-    This is a self-consistency check: given that the fringe was synthesised
-    with known t_m and f_lens_m, the recovered d and f should agree with
-    the input values within uncertainty.
+    d and f are treated as fixed, well-determined priors from the two-line
+    neon calibration (S13 TwoLineAnalyser). They are passed directly to
+    TolanskyAnalyser and are NOT re-fitted. The sole free parameter is ε.
+
+    Recovery chain:
+        ring positions r_p  →  WLS fit (fixed d, f)  →  ε
+        ε  →  λ_c = (ε + m₀) · λ_FSR           (Tolansky relation)
+        λ_c  →  v_rel = c · (λ_c/λ₀ − 1)       (Doppler formula, M04)
+
+    This is a validation check: Z02 knows the ground-truth v_input_ms used
+    during synthesis, so the recovered v_rel can be compared directly.
 
     Steps:
     1. Build a uniform sigma_profile = 5% of peak-to-peak range of profile_1d.
@@ -599,53 +619,56 @@ def _run_tolansky_stage(
     3. Call M03's _find_and_fit_peaks(profile_1d, r_grid, sigma_profile, masked,
        prominence=0.1 * ptp) to identify Gaussian-fitted ring positions and
        their uncertainties.
-    4. Assign fringe indices p = 1, 2, ..., N for the N detected peaks
-       (innermost = order 1).
-    5. Compute f_px = f_lens_m / PIXEL_SIZE_BINNED_M  (focal length in pixels).
-    6. Pass fitted radii, uncertainties, d_m=t_m, and f_px to TolanskyAnalyser.
-    7. Return the result dict, or None if fewer than 3 peaks are found or any
-       exception is raised.
+    4. Assign fringe indices p = 1, 2, ..., N (innermost ring = order 1).
+    5. Compute f_px = f_m / PIXEL_SIZE_BINNED_M.
+    6. Call TolanskyAnalyser(d_m=d_m, f_px=f_px) with fitted radii and
+       uncertainties. d and f are fixed — only ε is fitted.
+    7. Derive λ_c from ε using the Tolansky relation with fixed d.
+    8. Derive v_rel from λ_c via the Doppler formula.
+    9. Return result dict, or None if fewer than 3 peaks found or exception raised.
 
     Parameters
     ----------
-    profile_1d : 1D radial intensity profile, counts
-    r_grid     : radial positions corresponding to profile_1d, pixels
-    t_m        : etalon gap in metres — seeds TolanskyAnalyser d_m
-    f_lens_m   : focal length in metres — used to compute f_px for TolanskyAnalyser
+    profile_1d  : 1D radial intensity profile, counts
+    r_grid      : radial positions, pixels
+    d_m         : etalon gap, metres — fixed prior from neon calibration
+    f_m         : focal length, metres — fixed prior from neon calibration
+    v_input_ms  : ground-truth LOS wind used in synthesis, m/s (for Δv display)
 
     Returns
     -------
     dict with keys:
-        epsilon, sigma_epsilon    — fringe fraction and uncertainty
-        f_mm, sigma_f_mm          — recovered focal length, mm
-        d_mm, sigma_d_um          — recovered etalon gap, mm and uncertainty in µm
-        S, b, R2                  — WLS slope, intercept, fit quality
-        n_peaks                   — number of peaks used
-        peak_radii, peak_orders   — fitted ring positions and assigned orders
+        epsilon, sigma_epsilon    — fitted fringe fraction ε and uncertainty
+        lambda_c_m, sigma_lc_m   — recovered line centre wavelength, metres
+        v_rel_ms, sigma_v_ms     — recovered LOS wind speed, m/s
+        delta_v_ms               — v_rel_ms − v_input_ms (recovery error)
+        S, b, R2                 — WLS slope, intercept, fit quality
+        n_peaks                  — number of peaks used
+        peak_radii, peak_orders  — fitted ring positions and assigned orders
     or None on failure (graceful degradation — panel D is omitted).
 
     Notes
     -----
-    Velocity is NOT recovered here. The WLS slope S = f²·λ_c/d is
-    insensitive to Doppler shifts at single-image precision:
-    ΔS/S ≈ 3×10⁻⁷ per 100 m/s, versus σ_S/S ≈ 4×10⁻⁴ from a typical
-    13-peak fit — a signal-to-noise ratio of ~0.001. Velocity retrieval
-    belongs in M06, which compares the airglow fringe positions against
-    the calibration-derived reference pattern.
+    d and f are intentionally NOT in the return dict — they are fixed inputs,
+    not recovered quantities. Recovering d and f from a science frame would
+    be incorrect; that is the neon calibration's job (S13 TwoLineAnalyser).
     Failures are caught and reported to stdout; they do not abort the script.
-    Panel D of the diagnostic figure is simply omitted when this returns None.
+    Panel D is omitted when this returns None.
     """
 ```
 
 **Printed output from `_run_tolansky_stage`:**
 
 ```
-── Tolansky Self-Consistency Check ───────────────────────────────
+── Tolansky Self-Consistency Check (OI 630 nm, fixed d and f) ────
   Peaks found          {n_peaks}
+  Fixed prior d        {d_m*1000:.4f} mm   (from neon calibration)
+  Fixed prior f        {f_m*1000:.2f} mm   (from neon calibration)
   ε ± σ(ε)             {epsilon:.6f}  ±  {sigma_epsilon:.2e}
   R²                   {R2:.8f}
-  Recovered f          {f_mm:.3f}  ±  {sigma_f_mm:.3f} mm   (input: {f_input:.3f} mm)
-  Recovered d          {d_mm:.6f}  ±  {sigma_d_um:.3f} µm   (input: {t_input_mm:.6f} mm)
+  Recovered λ_c        {lc_nm:.6f}  ±  {sigma_lc_pm:.4f} pm  nm
+  Recovered v_rel      {v_rel_ms:+.1f}  ±  {sigma_v_ms:.1f} m/s
+  Input v_rel          {v_input_ms:+.1f} m/s   Δv = {delta_v_ms:+.1f} m/s
 ══════════════════════════════════════════════════════════════════
 ```
 
@@ -713,8 +736,12 @@ def main():
     5. Synthesise image: synthesise_and_embed(v_rel_ms=v_rel_ms, snr=snr).
     6. Save: save_bin_file().
     7. Print parameter table: print_parameter_table().
-    8. Run Tolansky self-consistency check: _run_tolansky_stage(f_lens_m=f_lens_m).
-       Print compact results table (peaks, ε ± σ(ε), recovered d, f, v vs input).
+    8. Run Tolansky self-consistency check:
+         _run_tolansky_stage(d_m=t_m, f_m=f_lens_m, v_input_ms=v_rel_ms).
+       d and f passed as fixed priors from neon calibration — NOT refitted.
+       ε is the sole fitted quantity; λ_c and v_rel are derived analytically.
+       Print: ε ± σ(ε), R², recovered λ_c, recovered v_rel, input v_rel, Δv.
+       On failure: print warning, set tol_result = None, continue.
        On failure: print warning, set tol_result = None, continue.
     9. Display diagnostic figure: show_diagnostic_figure(tolansky_result=tol_result).
        3 panels if tol_result is None; 4 panels if Tolansky succeeded.
@@ -785,19 +812,22 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
 
 **Panel D — Tolansky WLS fit** *(present only when `tolansky_result` is not None):*
 - Scatter plot of r² vs fringe order p, with error bars from peak fit uncertainties
-- Overlaid WLS fit line
+- Overlaid WLS fit line (d and f fixed; ε is the only free parameter)
 - Single monospace annotation text box containing:
   ```
   ε = x.xxxxxx ± x.xxe-xx
   R² = x.xxxxxxxx
-  f = xxx.xxx ± x.xxx mm (rec)
-  d = xx.xxxxxx ± x.xxx µm (rec)
+  λ_c = xxx.xxxxxx ± x.xxxx pm  nm
+  v = +xxx.x ± xx.x m/s  (rec)
+  v = +xxx.x m/s          (input)
+  Δv = +xx.x m/s
   ```
-- Title: `"Tolansky self-consistency  |  {n_peaks} peaks"`
+- Title: `"Tolansky: ε → v_rel  (fixed d, f)  |  {n_peaks} peaks"`
 
-> **Design note:** Velocity is intentionally absent from Panel D. The WLS
-> slope S = f²·λ_c/d cannot resolve Doppler shifts at single-image precision
-> (SNR ≈ 0.001 for 100 m/s). Velocity retrieval is M06's responsibility.
+> **Design note:** d and f are fixed priors from the neon calibration —
+> they are labelled in the panel title but not refitted. The WLS fit recovers
+> ε only; λ_c and v_rel are then derived analytically. This mirrors exactly
+> what M06 will do on real science frames.
 
 Figure title: `"Z02 — Synthetic Airglow Image  |  {filename}"`
 
