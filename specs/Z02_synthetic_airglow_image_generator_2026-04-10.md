@@ -31,6 +31,7 @@
 | 2026-04-10 | All | Initial implementation complete — 8/8 tests pass; script lives in `validation/` not `scripts/` |
 | 2026-04-10 | §4, §6, §7 | Added `_run_tolansky_stage()`, extended `show_diagnostic_figure()` to 4 panels, updated `main()` flow |
 | 2026-04-10 | §4.8, §5, §6, §7 | Added user control over Doppler LOS velocity (−500–+500 m/s, default 0) and target SNR (1–50, default 5); `_run_tolansky_stage` gains `f_lens_m` param and now recovers d, f, and v; Panel D annotation consolidated to single monospace text box |
+| 2026-04-10 | §4.8, §7 | Removed velocity recovery from `_run_tolansky_stage`: λ_c = S·d/f² is insensitive to Doppler shifts at single-image precision (ΔS/S ≈ 3×10⁻⁷ per 100 m/s vs σ_S/S ≈ 4×10⁻⁴ — 1000× too noisy). Velocity belongs in M06. Panel D is now a 4-line annotation box: ε ± σ, R², recovered f ± σ, recovered d ± σ |
 
 > **Purpose in one sentence:** Generate a synthetic 2D airglow fringe image,
 > pack a complete S19-compliant metadata header into its first row of pixels,
@@ -589,8 +590,8 @@ def _run_tolansky_stage(
     Run a single-line Tolansky analysis on the synthesised fringe profile.
 
     This is a self-consistency check: given that the fringe was synthesised
-    with known t_m, f_lens_m, and v_rel_ms, the recovered d, f, and v should
-    agree with the input values within uncertainty.
+    with known t_m and f_lens_m, the recovered d and f should agree with
+    the input values within uncertainty.
 
     Steps:
     1. Build a uniform sigma_profile = 5% of peak-to-peak range of profile_1d.
@@ -602,8 +603,7 @@ def _run_tolansky_stage(
        (innermost = order 1).
     5. Compute f_px = f_lens_m / PIXEL_SIZE_BINNED_M  (focal length in pixels).
     6. Pass fitted radii, uncertainties, d_m=t_m, and f_px to TolanskyAnalyser.
-    7. Recover d, f, and v from the WLS slope S via λ_c = S·d/f².
-    8. Return the result dict, or None if fewer than 3 peaks are found or any
+    7. Return the result dict, or None if fewer than 3 peaks are found or any
        exception is raised.
 
     Parameters
@@ -619,7 +619,6 @@ def _run_tolansky_stage(
         epsilon, sigma_epsilon    — fringe fraction and uncertainty
         f_mm, sigma_f_mm          — recovered focal length, mm
         d_mm, sigma_d_um          — recovered etalon gap, mm and uncertainty in µm
-        v_ms, sigma_v_ms          — recovered LOS velocity, m/s
         S, b, R2                  — WLS slope, intercept, fit quality
         n_peaks                   — number of peaks used
         peak_radii, peak_orders   — fitted ring positions and assigned orders
@@ -627,8 +626,12 @@ def _run_tolansky_stage(
 
     Notes
     -----
-    Velocity is recovered from the WLS slope independently of ε, via
-    λ_c = S·d/f², providing a cross-check on the Doppler shift.
+    Velocity is NOT recovered here. The WLS slope S = f²·λ_c/d is
+    insensitive to Doppler shifts at single-image precision:
+    ΔS/S ≈ 3×10⁻⁷ per 100 m/s, versus σ_S/S ≈ 4×10⁻⁴ from a typical
+    13-peak fit — a signal-to-noise ratio of ~0.001. Velocity retrieval
+    belongs in M06, which compares the airglow fringe positions against
+    the calibration-derived reference pattern.
     Failures are caught and reported to stdout; they do not abort the script.
     Panel D of the diagnostic figure is simply omitted when this returns None.
     """
@@ -643,7 +646,6 @@ def _run_tolansky_stage(
   R²                   {R2:.8f}
   Recovered f          {f_mm:.3f}  ±  {sigma_f_mm:.3f} mm   (input: {f_input:.3f} mm)
   Recovered d          {d_mm:.6f}  ±  {sigma_d_um:.3f} µm   (input: {t_input_mm:.6f} mm)
-  Recovered v          {v_ms:+.1f}  ±  {sigma_v_ms:.1f} m/s  (input: {v_input:+.1f} m/s,  Δ = {delta_v:+.1f} m/s)
 ══════════════════════════════════════════════════════════════════
 ```
 
@@ -790,9 +792,12 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
   R² = x.xxxxxxxx
   f = xxx.xxx ± x.xxx mm (rec)
   d = xx.xxxxxx ± x.xxx µm (rec)
-  v = +xxx.x ± xx.x m/s (rec)
   ```
 - Title: `"Tolansky self-consistency  |  {n_peaks} peaks"`
+
+> **Design note:** Velocity is intentionally absent from Panel D. The WLS
+> slope S = f²·λ_c/d cannot resolve Doppler shifts at single-image precision
+> (SNR ≈ 0.001 for 100 m/s). Velocity retrieval is M06's responsibility.
 
 Figure title: `"Z02 — Synthetic Airglow Image  |  {filename}"`
 

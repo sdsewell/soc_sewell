@@ -583,16 +583,6 @@ def show_diagnostic_figure(
         )
         ax_d.plot(p_plot, fit_line, "r-", linewidth=1.4, label="WLS fit")
 
-        # Recover λ_c and Doppler velocity from slope: λ_c = S·d/f²
-        from src.fpi.m01_airy_forward_model_2026_04_05 import (
-            OI_WAVELENGTH_M, SPEED_OF_LIGHT_MS,
-        )
-        _f_px    = 1.0 / params.alpha           # pixels
-        _d_m     = params.t                      # metres
-        _lam_c   = tr.slope * _d_m / _f_px ** 2
-        _v_rec   = SPEED_OF_LIGHT_MS * (_lam_c / OI_WAVELENGTH_M - 1.0)
-        _sv_rec  = SPEED_OF_LIGHT_MS * tr.sigma_slope * _d_m / (_f_px ** 2 * OI_WAVELENGTH_M)
-
         ann_lines = [
             f"ε = {tr.epsilon:.6f} ± {tr.sigma_epsilon:.2e}",
             f"R² = {tr.r2_fit:.8f}",
@@ -605,7 +595,6 @@ def show_diagnostic_figure(
             d_mm_rec  = tr.recovered_d_m * 1e3
             sd_um_rec = (tr.sigma_d_m or 0.0) * 1e6
             ann_lines.append(f"d = {d_mm_rec:.6f} ± {sd_um_rec:.3f} µm mm  (rec)")
-        ann_lines.append(f"v = {_v_rec:+.1f} ± {_sv_rec:.1f} m/s  (rec)")
 
         ax_d.text(
             0.05, 0.97,
@@ -909,15 +898,6 @@ def main() -> None:
             t_m=t_m,
             f_lens_m=f_lens_m,
         )
-        from src.fpi.m01_airy_forward_model_2026_04_05 import (
-            OI_WAVELENGTH_M, SPEED_OF_LIGHT_MS,
-        )
-        _S  = tol_result.slope
-        _sS = tol_result.sigma_slope
-        _lam_c_rec = _S * t_m / (1.0 / params.alpha) ** 2   # S·d/f²  [m]
-        _v_rec_ms  = SPEED_OF_LIGHT_MS * (_lam_c_rec / OI_WAVELENGTH_M - 1.0)
-        _sv_rec_ms = SPEED_OF_LIGHT_MS * (_sS * t_m / (1.0 / params.alpha) ** 2
-                                           / OI_WAVELENGTH_M)
         print()
         print("── Tolansky Recovery (OI 630 nm, single-line WLS) " + "─" * 16)
         print(f"  Peaks found              {len(_good_peaks)}")
@@ -929,7 +909,7 @@ def main() -> None:
               f"{tol_result.intercept:.4f} ± {tol_result.sigma_int:.4f}")
         print(f"  R²                       {tol_result.r2_fit:.8f}")
         if tol_result.recovered_f_px is not None:
-            f_rec_mm = tol_result.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
+            f_rec_mm  = tol_result.recovered_f_px * PIXEL_SIZE_BINNED_M * 1e3
             sf_rec_mm = (tol_result.sigma_f_px or 0.0) * PIXEL_SIZE_BINNED_M * 1e3
             print(f"  Recovered f              "
                   f"{f_rec_mm:.3f} ± {sf_rec_mm:.3f} mm  "
@@ -940,9 +920,6 @@ def main() -> None:
             print(f"  Recovered d              "
                   f"{d_rec_mm:.6f} ± {sd_rec_um:.3f} µm mm  "
                   f"(input {t_mm:.4f} mm,  Δ = {(d_rec_mm - t_mm)*1e3:+.1f} µm)")
-        print(f"  Recovered v              "
-              f"{_v_rec_ms:+.1f} ± {_sv_rec_ms:.1f} m/s  "
-              f"(input {v_rel_ms:+.1f} m/s,  Δ = {_v_rec_ms - v_rel_ms:+.1f} m/s)")
         print()
     except Exception as exc:
         print(f"  ⚠  Tolansky stage failed: {exc}")
