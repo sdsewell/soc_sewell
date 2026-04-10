@@ -3,7 +3,7 @@
 **Spec ID:** Z03  
 **Tier:** 9 — Validation Testing  
 **Module:** `z03_synthetic_calibration_image_generator.py`  
-**Status:** Draft — ready for implementation  
+**Status:** Draft — implemented, tests passing  
 **Date:** 2026-04-10  
 **Author:** Scott Sewell / HAO  
 **Repo:** `soc_sewell`  
@@ -73,7 +73,7 @@ def prompt_float(label: str, default: float, units: str = "") -> float:
     return float(raw) if raw else default
 ```
 
-All prompts are wrapped in `try/except ValueError` with a re-prompt loop. Out-of-range values trigger a warning and re-prompt (ranges defined in Section 9).
+All prompts are wrapped in `try/except ValueError` with a re-prompt loop. Out-of-range values trigger a warning and re-prompt (ranges defined in Section 9). Values outside hard limits are rejected immediately and force re-entry.
 
 ---
 
@@ -90,7 +90,7 @@ T(θ; λ, d, R) = 1 / [1 + F·sin²(δ/2)]
 where:
 - `δ = (4π/λ) · d · cos(θ)` — round-trip phase
 - `F = 4R / (1 − R)²` — coefficient of finesse
-- `θ(r) = arctan(α · r)` — angle from optical axis, with plate scale `α = 1 / f` (rad/pixel, to first order)
+- `θ(r) = arctan(α · r)` — angle from optical axis, with plate scale `α = pixel_pitch / f` (rad/pixel)
 - `r` — radial distance from image centre in pixels
 
 ### 5.2 Two neon reference lines
@@ -100,7 +100,8 @@ where:
 | Ne 640.2 nm | 640.2248 | 15615.211 | 1.0 (reference) |
 | Ne 638.3 nm | 638.2991 | 15662.315 | `rel_638` (user-set) |
 
-Source: Burns, Adams & Longwell (1950), IAU "S" standard.
+Source: Burns, Adams & Longwell (1950), IAU "S" standard.  
+Wavelengths are imported from `src.constants.NE_WAVELENGTH_1_M` / `NE_WAVELENGTH_2_M` at runtime, with fallback to module-level literals.
 
 The composite image is:
 
@@ -115,23 +116,27 @@ where:
 
 ### 5.3 Deriving I_peak from SNR
 
-For a photon-noise-limited detector:
+Peak SNR is defined as:
 
 ```
-snr_peak = I_peak / sqrt(I_peak + B_dc + sigma_read²)
+SNR = I_peak / sqrt(I_peak + B_dc + sigma_read²)
 ```
 
-Solving for `I_peak` (positive root of quadratic):
+Rearranging gives the general quadratic in I_peak:
+
+```
+I_peak² - SNR²·I_peak - SNR²·(B_dc + sigma_read²) = 0
+```
+
+The correct positive root (valid for all SNR ≥ 0, including SNR ≤ 1) is:
 
 ```python
-# snr_peak² · I_peak  =  I_peak + B_dc + sigma_read²
-# I_peak(snr² - 1) = B_dc + sigma_read²
-# (only valid when snr_peak² >> 1, otherwise full quadratic)
-a = 1.0 - snr_peak**2
-b = snr_peak**2
-c = snr_peak**2 * (B_dc + sigma_read**2)
-# I_peak = (-b ± sqrt(b²-4ac)) / (2a)  [select positive root]
+def snr_to_ipeak(snr: float, B_dc: float, sigma_read: float) -> float:
+    noise_floor = B_dc + sigma_read**2
+    return (snr**2 + math.sqrt(snr**4 + 4 * snr**2 * noise_floor)) / 2
 ```
+
+> **Note:** The simplified approximation `I_peak ≈ SNR²·(B_dc + σ_read²) / (SNR² - 1)` is only valid for SNR >> 1 and must not be used in code — it diverges at SNR = 1 and is negative for SNR < 1.
 
 ### 5.4 Plate scale α derivation
 
@@ -139,15 +144,13 @@ c = snr_peak**2 * (B_dc + sigma_read**2)
 α [rad/pixel] = pixel_pitch [m] / f [m]
 ```
 
-Default `pixel_pitch = 16.0 µm` (CCD97, 2×2 binned → 32 µm effective; see Section 6).
-
-> **Note:** The CCD97 native pixel pitch is 16 µm. In 2×2 binning the effective pitch is 32 µm. Z03 uses 2×2 binned geometry (256 × 256 active pixels within the 260 × 276 array) by default.
+Default `pixel_pitch = 32.0 µm` (CCD97 native 16 µm × 2×2 binning).
 
 ---
 
 ## 6. Fixed Default Parameters
 
-These are physics-motivated constants not prompted from the user. They are written into `_truth.json` for full traceability.
+These are physics-motivated constants not prompted from the user. They are written into `_truth.json` for full traceability. Wavelength constants are imported from `src.constants` at runtime.
 
 | Parameter | Symbol | Default Value | Source |
 |-----------|--------|--------------|--------|
@@ -197,14 +200,14 @@ the default shown in parentheses.
   Relative intensity of 638 nm line vs 640 nm (default 0.8):
 ```
 
-After all prompts, the script echoes a parameter summary table and asks the user to confirm before proceeding.
+After all prompts, the script echoes a parameter summary table and asks the user to confirm (Y/n) before proceeding.
 
 ### Stage B — Derive Secondary Parameters
 
 Computed (not prompted) from user inputs plus fixed defaults:
 
-- `alpha_rad_per_px = pix_m / (f_mm * 1e-3)`  — plate scale
-- `I_peak` — from SNR quadratic (Section 5.3)
+- `alpha_rad_per_px = pix_m / (f_mm * 1e-3)` — plate scale
+- `I_peak` — from SNR quadratic (Section 5.3, positive root)
 - `FSR_mm = lam_640**2 / (2 * d_mm * 1e-3)` — free spectral range
 - `finesse_F = 4*R / (1-R)**2`
 
@@ -212,7 +215,7 @@ These are printed to the terminal for the user's information.
 
 ### Stage C — Synthesise Fringe Image
 
-1. Build pixel coordinate grids `X, Y` over `(nrows, ncols)`.
+1. Build pixel coordinate grids `X, Y` over `(nrows, ncols)` via `np.meshgrid`.
 2. Compute `r = sqrt((X - cx)² + (Y - cy)²)` for all pixels.
 3. Compute `theta = arctan(alpha_rad_per_px * r)`.
 4. Evaluate `T_640 = airy(theta, lam_640, d_mm, R)` and `T_638 = airy(theta, lam_638, d_mm, R)`.
@@ -229,28 +232,30 @@ def airy(theta: np.ndarray, lam: float, d_mm: float, R: float) -> np.ndarray:
     return 1.0 / (1.0 + F * np.sin(delta / 2)**2)
 ```
 
-> **Important:** The centre region corresponding to metadata rows (rows 0–3 inclusive) is synthesised normally at this stage; it will be overwritten in Stage E.
+> **Important:** Rows 0–3 are synthesised normally at this stage. They are overwritten with metadata in Stage E.
 
 ### Stage D — Apply Noise Model
 
 ```python
+rng = np.random.default_rng(seed)   # seed from np.random.SeedSequence()
+
 # Poisson noise on signal
-signal_counts = np.random.poisson(np.clip(I_float, 0, None)).astype(np.float64)
+signal_counts = rng.poisson(np.clip(I_float, 0, None)).astype(np.float64)
 
 # Gaussian read noise
-read_noise = np.random.normal(0, sigma_read, size=signal_counts.shape)
+read_noise = rng.standard_normal(size=signal_counts.shape) * sigma_read
 
 # Combine and clip to valid ADU range [0, 16383] (14-bit)
 image_noisy = np.clip(signal_counts + read_noise, 0, 16383).astype(np.uint16)
 ```
 
-The numpy random seed is logged in `_truth.json` (auto-generated via `np.random.SeedSequence`) to allow reproducibility.
+The integer seed is logged in `_truth.json` to allow exact reproducibility.
 
 ### Stage E — Build and Embed S19 Metadata
 
 S19 defines a metadata structure embedded in the **first `n_meta_rows` rows** (rows 0–3) of the image array. Each row is 276 uint16 pixels = 552 bytes.
 
-#### 5.1 Metadata field mapping
+#### 7.1 Metadata field mapping
 
 Fields explicitly set from user input or synthesis parameters:
 
@@ -270,25 +275,21 @@ Fields explicitly set from user input or synthesis parameters:
 | `etalon_temp_1` | Fixed default | `24.00` °C |
 | All other fields | Default | `0` |
 
-All fields not listed above are set to their S19-defined zero/null defaults.
-
-#### 5.2 Serialisation into pixel rows
-
-The metadata is serialised as a UTF-8 JSON string, zero-padded to fill exactly `n_meta_rows × ncols × 2` bytes, then reinterpreted as uint16 little-endian values and written into `image[0:n_meta_rows, :]`.
+#### 7.2 Serialisation into pixel rows
 
 ```python
-import json, datetime
+import json
 meta = build_s19_metadata(user_params, fixed_defaults)
 meta_json = json.dumps(meta, separators=(',', ':'))
 meta_bytes = meta_json.encode('utf-8')
-# Pad to exact size
+# Pad to exact size: 4 rows × 276 cols × 2 bytes = 2208 bytes
 target_bytes = n_meta_rows * ncols * 2
 meta_padded = meta_bytes.ljust(target_bytes, b'\x00')
 meta_uint16 = np.frombuffer(meta_padded, dtype='<u2').reshape(n_meta_rows, ncols)
 image[0:n_meta_rows, :] = meta_uint16
 ```
 
-> **Consistency note:** This is the exact inverse operation of the metadata-read procedure used in Z01 and Z02, ensuring round-trip fidelity.
+> **Single-write guarantee:** metadata is written exactly once, here in Stage E. No other stage writes to rows 0–3 after this point.
 
 ### Stage F — Write .bin File and _truth.json Sidecar
 
@@ -299,17 +300,19 @@ yyyymmddThhmmssZ_cal_synth_z03.bin
 yyyymmddThhmmssZ_cal_synth_z03_truth.json
 ```
 
-The `_synth_z03` infix distinguishes synthetic files from real flight data.
+The `_synth_z03` infix distinguishes synthetic files from real flight data while remaining parseable by S01 (which keys on the `_cal` suffix).
 
 #### .bin write
 
 ```python
 image.astype('<u2').tofile(output_path_bin)
+# File size assertion: must equal nrows * ncols * 2 bytes
+assert output_path_bin.stat().st_size == 260 * 276 * 2
 ```
 
 #### _truth.json sidecar
 
-Contains all synthesis parameters (both user-entered and fixed defaults), derived secondary parameters, random seed, and synthesis timestamp. This is the ground-truth record for downstream validation.
+Contains all synthesis parameters (user-entered and fixed defaults), derived secondary parameters, random seed, and synthesis timestamp.
 
 ```json
 {
@@ -344,18 +347,31 @@ Contains all synthesis parameters (both user-entered and fixed defaults), derive
 }
 ```
 
+#### Output directory
+
+Default output path: `C:\Users\sewell\Documents\GitHub\soc_synthesized_data\`, created if absent.
+
+This path is overridable via the `Z03_OUTPUT_DIR` environment variable, which allows the script to run on Linux (e.g., `windcube.hao.ucar.edu`) or in CI without modification:
+
+```python
+DEFAULT_OUTPUT_DIR = Path(
+    os.environ.get(
+        "Z03_OUTPUT_DIR",
+        r"C:\Users\sewell\Documents\GitHub\soc_synthesized_data"
+    )
+)
+```
+
 ### Stage G — Diagnostic Display
 
-A 4-panel matplotlib figure is shown after writing the files:
+A 2×2 matplotlib figure is saved as `{stem}_diagnostic.png` alongside the `.bin` file. `plt.show()` is never called — the figure is saved only.
 
 | Panel | Content |
 |-------|---------|
-| **Top-left** | Full synthetic image (imshow, grey colormap, log-scaled) with title showing key parameters |
-| **Top-right** | Azimuthally averaged radial profile I(r²) — two-line composite, showing both Ne line families labelled |
-| **Bottom-left** | Noise-free model vs noisy realisation overlay at a 1-pixel-wide horizontal slice through centre |
-| **Bottom-right** | Text summary box: all input parameters, derived α, I_peak, FSR, output filename |
-
-The figure is saved as `{stem}_diagnostic.png` alongside the `.bin` file.
+| **Top-left (A)** | Full synthetic image (imshow, grey colormap, log-scaled) with title showing key parameters |
+| **Top-right (B)** | Azimuthally averaged radial profile I(r²) — noise-free vs noisy overlay |
+| **Bottom-left (C)** | Horizontal centre slice: noise-free model vs noisy realisation overlay |
+| **Bottom-right (D)** | Monospace parameter text box: all input parameters, derived α, I_peak, FSR, output filename |
 
 ---
 
@@ -365,7 +381,7 @@ The figure is saved as `{stem}_diagnostic.png` alongside the `.bin` file.
 |------|-------------|
 | `yyyymmddThhmmssZ_cal_synth_z03.bin` | Synthetic calibration image in WindCube Level-0 format |
 | `yyyymmddThhmmssZ_cal_synth_z03_truth.json` | Ground-truth sidecar with all synthesis parameters |
-| `yyyymmddThhmmssZ_cal_synth_z03_diagnostic.png` | 4-panel diagnostic figure |
+| `yyyymmddThhmmssZ_cal_synth_z03_diagnostic.png` | 2×2 diagnostic figure |
 
 ---
 
@@ -378,7 +394,7 @@ The figure is saved as `{stem}_diagnostic.png` alongside the `.bin` file.
 | `snr_peak` | 1.0 | 500.0 | Outside (10.0, 200.0) |
 | `rel_638` | 0.0 | 2.0 | Outside (0.3, 1.5) |
 
-If any value falls outside the warning range, the script prints a yellow warning but proceeds after the user confirms. Values outside the hard limits raise `ValueError` and force re-entry.
+Values outside hard limits are rejected with a re-prompt (no exception raised). Values inside hard limits but outside the warning range print a yellow advisory and proceed after the confirmation step.
 
 ---
 
@@ -389,16 +405,17 @@ z03_synthetic_calibration_image_generator.py
 │
 ├── CONSTANTS (top-level)   R, sigma_read, B_dc, pix_m, cx, cy, lam_640, lam_638
 │
-├── def prompt_float(...)   validated interactive float prompt
-├── def prompt_all_params() returns dataclass SynthParams
-├── def airy(...)           Airy transmission function (vectorised numpy)
-├── def snr_to_ipeak(...)   quadratic solve for I_peak from SNR
-├── def synthesise_image(params) → np.ndarray (float64, noise-free)
+├── def _validated_prompt(...)  validated interactive float prompt with hard/warn bounds
+├── def prompt_all_params()     returns dataclass SynthParams; confirms Y/n
+├── def airy(...)               Airy transmission function (vectorised numpy)
+├── def snr_to_ipeak(...)       correct quadratic positive root (Section 5.3)
+├── def derive_secondary(params) → DerivedParams (α, I_peak, FSR, F)
+├── def synthesise_image(params, derived) → np.ndarray (float64, noise-free)
 ├── def add_noise(image, params, seed) → np.ndarray (uint16)
 ├── def build_s19_metadata(params) → dict
 ├── def embed_metadata(image, meta_dict) → np.ndarray (uint16, in-place)
 ├── def write_bin(image, path)
-├── def write_truth_json(params, derived, path)
+├── def write_truth_json(params, derived, seed, path)
 ├── def make_diagnostic_figure(image_noisy, image_noisefree, params, derived, paths)
 └── def main()
 ```
@@ -409,7 +426,7 @@ z03_synthetic_calibration_image_generator.py
 
 ### Ingestion by Z01 / Z02
 
-The output `.bin` file is indistinguishable in format from a real WindCube calibration image. Z01 and Z02 can load it directly using their standard `load_bin()` routines:
+The output `.bin` file is indistinguishable in format from a real WindCube calibration image:
 
 ```python
 image = np.fromfile("20260410T183000Z_cal_synth_z03.bin", dtype='<u2').reshape(260, 276)
@@ -429,17 +446,13 @@ Z03 → .bin (known d, f, α, rel_638)
   Compare to _truth.json  ← quantitative validation
 ```
 
-The `_truth.json` sidecar provides the ground truth for this comparison. A future Z04 spec may automate this comparison loop.
-
-### Ingestion by S01
-
-S01 reads `.bin` files according to the WindCube Level-0 data standard. The `_synth_z03` filename infix does not affect S01's file parser (which keys on the `_cal` suffix).
+A future Z04 spec may automate this comparison loop.
 
 ---
 
 ## 12. Test Verification
 
-The following pytest cases shall be implemented in `tests/test_z03.py`:
+Implemented in `tests/test_z03.py`. All seven tests pass.
 
 | Test ID | Description | Pass criterion |
 |---------|-------------|---------------|
@@ -455,25 +468,33 @@ The following pytest cases shall be implemented in `tests/test_z03.py`:
 
 ## 13. Known Limitations and Future Work
 
-- **Instrument defects not modelled:** The synthesised image uses an ideal Airy function. Etalon flatness defects, vignetting, and lens aberrations (σ₀, σ₁, σ₂ broadening terms from M05) are not included in the initial version. A `--include-defects` flag may be added in a future revision.
-- **Single dark frame not generated:** Z03 does not synthesise a companion dark frame. The user should run the dark generator separately (future Z04) or use a real dark.
+- **Instrument defects not modelled:** The synthesised image uses an ideal Airy function. Etalon flatness defects, vignetting, and lens aberrations (σ₀, σ₁, σ₂ broadening terms from M05) are not included. A `--include-defects` flag may be added in a future revision.
+- **No companion dark frame:** Z03 does not synthesise a dark frame. Use a real dark or a future Z04 dark generator.
 - **Fixed image centre:** `(cx, cy)` is fixed at the geometric centre. A future parameter could offset the centre to test S12's centre-finding robustness.
 - **No EM gain model:** The noise model uses Poisson + Gaussian read noise. A more complete model including EMCCD excess noise factor (F_EM ≈ √2) may be added for higher realism.
+- **Output path portability:** The default output path is Windows-specific. Override via `Z03_OUTPUT_DIR` environment variable for Linux/CI use (see Section 7, Stage F).
 
 ---
 
 ## 14. Spec Roadmap Position
 
-This spec sits in **Tier 9 — Validation Testing**, alongside Z01 and Z02.
-
 ```
-Z01  Validate calibration using real images        [written]
+Z01  Validate calibration using real images         [written]
 Z02  Validate calibration: ring analysis + Tolansky [written]
-Z03  Synthetic calibration image generator          [this spec]
+Z03  Synthetic calibration image generator          [implemented, tests passing]
 Z04  (future) Automated Z03→Z01/Z02 round-trip comparison
 ```
 
 Z03 is the first Z-series spec that *generates* rather than *analyses*, completing the synthetic ↔ real validation loop.
+
+---
+
+## Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-04-10 | Initial spec written |
+| 2026-04-10 | Updated after implementation: corrected SNR quadratic (Section 5.3); added `Z03_OUTPUT_DIR` env-var override (Section 7, Stage F); updated Stage G to reflect 2×2 figure layout; confirmed all 7 pytest cases pass; added revision history |
 
 ---
 
