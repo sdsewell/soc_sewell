@@ -30,6 +30,7 @@
 | 2026-04-10 | T6 | Documented implementation deviation: gap range widened to [10, 15, 20] mm; narrow operational range [19.8, 20.106, 20.4] mm is numerically brittle due to boundary fringe straddling r_max |
 | 2026-04-10 | All | Initial implementation complete — 8/8 tests pass; script lives in `validation/` not `scripts/` |
 | 2026-04-10 | §4, §6, §7 | Added `_run_tolansky_stage()`, extended `show_diagnostic_figure()` to 4 panels, updated `main()` flow |
+| 2026-04-10 | §4.8, §5, §6, §7 | Added user control over Doppler LOS velocity (−500–+500 m/s, default 0) and target SNR (1–50, default 5); `_run_tolansky_stage` gains `f_lens_m` param and now recovers d, f, and v; Panel D annotation consolidated to single monospace text box |
 
 > **Purpose in one sentence:** Generate a synthetic 2D airglow fringe image,
 > pack a complete S19-compliant metadata header into its first row of pixels,
@@ -581,14 +582,15 @@ def print_parameter_table(
 def _run_tolansky_stage(
     profile_1d: np.ndarray,   # 1D radial profile from synthesise_and_embed()
     r_grid:     np.ndarray,   # corresponding radial positions, pixels
-    t_m:        float,        # etalon gap, metres (used to seed TolanskyAnalyser)
+    t_m:        float,        # etalon gap, metres (seeds TolanskyAnalyser d_m)
+    f_lens_m:   float,        # imaging lens focal length, metres (seeds TolanskyAnalyser f_px)
 ) -> dict | None:
     """
     Run a single-line Tolansky analysis on the synthesised fringe profile.
 
     This is a self-consistency check: given that the fringe was synthesised
-    with a known etalon gap t_m, the recovered ε should be physically
-    reasonable and the recovered f should agree with the input focal length.
+    with known t_m, f_lens_m, and v_rel_ms, the recovered d, f, and v should
+    agree with the input values within uncertainty.
 
     Steps:
     1. Build a uniform sigma_profile = 5% of peak-to-peak range of profile_1d.
@@ -598,24 +600,35 @@ def _run_tolansky_stage(
        their uncertainties.
     4. Assign fringe indices p = 1, 2, ..., N for the N detected peaks
        (innermost = order 1).
-    5. Pass the fitted radii and uncertainties to TolanskyAnalyser(d_m=t_m).
-    6. Return the result dict from TolanskyAnalyser, or None if fewer than
-       3 peaks are found or any exception is raised.
+    5. Compute f_px = f_lens_m / PIXEL_SIZE_BINNED_M  (focal length in pixels).
+    6. Pass fitted radii, uncertainties, d_m=t_m, and f_px to TolanskyAnalyser.
+    7. Recover d, f, and v from the WLS slope S via λ_c = S·d/f².
+    8. Return the result dict, or None if fewer than 3 peaks are found or any
+       exception is raised.
 
     Parameters
     ----------
     profile_1d : 1D radial intensity profile, counts
     r_grid     : radial positions corresponding to profile_1d, pixels
-    t_m        : etalon gap in metres — seeds TolanskyAnalyser
+    t_m        : etalon gap in metres — seeds TolanskyAnalyser d_m
+    f_lens_m   : focal length in metres — used to compute f_px for TolanskyAnalyser
 
     Returns
     -------
-    dict with keys: epsilon, sigma_epsilon, f_mm, sigma_f_mm, S, b, R2,
-                    n_peaks, peak_radii, peak_orders
+    dict with keys:
+        epsilon, sigma_epsilon    — fringe fraction and uncertainty
+        f_mm, sigma_f_mm          — recovered focal length, mm
+        d_mm, sigma_d_um          — recovered etalon gap, mm and uncertainty in µm
+        v_ms, sigma_v_ms          — recovered LOS velocity, m/s
+        S, b, R2                  — WLS slope, intercept, fit quality
+        n_peaks                   — number of peaks used
+        peak_radii, peak_orders   — fitted ring positions and assigned orders
     or None on failure (graceful degradation — panel D is omitted).
 
     Notes
     -----
+    Velocity is recovered from the WLS slope independently of ε, via
+    λ_c = S·d/f², providing a cross-check on the Doppler shift.
     Failures are caught and reported to stdout; they do not abort the script.
     Panel D of the diagnostic figure is simply omitted when this returns None.
     """
@@ -626,11 +639,11 @@ def _run_tolansky_stage(
 ```
 ── Tolansky Self-Consistency Check ───────────────────────────────
   Peaks found          {n_peaks}
-  Fringe fraction ε    {epsilon:.6f}  ±  {sigma_epsilon:.6f}
-  Slope S              {S:.4f}
-  Intercept b          {b:.4f}
-  R²                   {R2:.6f}
-  Recovered f          {f_mm:.2f} mm   (input: {f_input:.2f} mm)
+  ε ± σ(ε)             {epsilon:.6f}  ±  {sigma_epsilon:.2e}
+  R²                   {R2:.8f}
+  Recovered f          {f_mm:.3f}  ±  {sigma_f_mm:.3f} mm   (input: {f_input:.3f} mm)
+  Recovered d          {d_mm:.6f}  ±  {sigma_d_um:.3f} µm   (input: {t_input_mm:.6f} mm)
+  Recovered v          {v_ms:+.1f}  ±  {sigma_v_ms:.1f} m/s  (input: {v_input:+.1f} m/s,  Δ = {delta_v:+.1f} m/s)
 ══════════════════════════════════════════════════════════════════
 ```
 
@@ -638,12 +651,9 @@ def _run_tolansky_stage(
 
 ## 5. Interactive parameter prompts
 
-The script prompts for three instrument parameters and provides the
-Tolansky/FlatSat calibration values as defaults. Each prompt shows:
-- The physical meaning of the parameter
-- The units
-- The default value in brackets
-- Acceptable range
+The script prompts for **five** parameters. The first three are instrument
+parameters; the last two are synthesis controls. All follow the same
+guard-loop style: re-prompt on out-of-range input, Enter accepts the default.
 
 ```
 ══════════════════════════════════════════════════════════════════
@@ -668,10 +678,21 @@ Instrument parameters (press Enter to accept default):
     Range:   150.0 – 250.0 mm
     Note:    plate scale α = 32 µm / f  → ring positions in image
   ➤ Enter focal length [199.10]: _
-```
 
-If the user enters an out-of-range value, re-prompt with a warning.
-If the user presses Enter with no input, use the default.
+Synthesis parameters:
+
+  Doppler LOS velocity [m/s]
+    Default: 0 m/s  (zero wind — fringe rings at rest positions)
+    Range:   −500 to +500 m/s
+    Note:    positive = recession (redshift); shifts rings inward
+  ➤ Enter LOS velocity [0]: _
+
+  Target SNR
+    Default: 5
+    Range:   1 – 50
+    Note:    SNR = ΔS / σ_noise  where ΔS = fringe contrast (counts)
+  ➤ Enter target SNR [5]: _
+```
 
 ---
 
@@ -684,17 +705,18 @@ def main():
 
     Flow:
     1. Print banner.
-    2. Prompt user for t_mm, R_refl, f_lens_mm.
-    3. Prompt for output folder (tkinter dialog or typed path).
-    4. Synthesise image: synthesise_and_embed().
-    5. Save: save_bin_file().
-    6. Print parameter table: print_parameter_table().
-    7. Run Tolansky self-consistency check: _run_tolansky_stage().
-       Print compact results table (peaks, ε ± σ(ε), S, b, R², recovered f).
+    2. Prompt user for t_mm, R_refl, f_lens_mm  (instrument parameters).
+    3. Prompt user for v_rel_ms (−500–+500 m/s, default 0) and snr (1–50, default 5).
+    4. Prompt for output folder (tkinter dialog or typed path).
+    5. Synthesise image: synthesise_and_embed(v_rel_ms=v_rel_ms, snr=snr).
+    6. Save: save_bin_file().
+    7. Print parameter table: print_parameter_table().
+    8. Run Tolansky self-consistency check: _run_tolansky_stage(f_lens_m=f_lens_m).
+       Print compact results table (peaks, ε ± σ(ε), recovered d, f, v vs input).
        On failure: print warning, set tol_result = None, continue.
-    8. Display diagnostic figure: show_diagnostic_figure(tolansky_result=tol_result).
+    9. Display diagnostic figure: show_diagnostic_figure(tolansky_result=tol_result).
        3 panels if tol_result is None; 4 panels if Tolansky succeeded.
-    9. Print "Done. Press Enter to exit." and wait.
+    10. Print "Done. Press Enter to exit." and wait.
 
     if __name__ == '__main__':
         main()
@@ -748,7 +770,7 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
 - Plot `result['profile_1d']` vs `result['r_grid']` (pixels)
 - Mark fringe peak positions with vertical dashed lines
 - X-label: `"Radius (pixels)"`, Y-label: `"Intensity (counts)"`
-- Title: `"1D radial profile  |  v_rel = 0 m/s  |  SNR = {snr_actual:.1f}"`
+- Title: `"1D radial profile  |  v_rel = {v_rel_ms:+.0f} m/s  |  SNR = {snr_actual:.1f}"`
 - Annotate FSR and finesse values in the plot
 
 **Panel C — Header decode check:**
@@ -762,8 +784,14 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
 **Panel D — Tolansky WLS fit** *(present only when `tolansky_result` is not None):*
 - Scatter plot of r² vs fringe order p, with error bars from peak fit uncertainties
 - Overlaid WLS fit line
-- Annotation box (upper left): `ε = {epsilon:.6f} ± {sigma_epsilon:.6f}` and `R² = {R2:.6f}`
-- Second annotation: `f_recovered = {f_mm:.2f} mm  (input: {f_input:.2f} mm)`
+- Single monospace annotation text box containing:
+  ```
+  ε = x.xxxxxx ± x.xxe-xx
+  R² = x.xxxxxxxx
+  f = xxx.xxx ± x.xxx mm (rec)
+  d = xx.xxxxxx ± x.xxx µm (rec)
+  v = +xxx.x ± xx.x m/s (rec)
+  ```
 - Title: `"Tolansky self-consistency  |  {n_peaks} peaks"`
 
 Figure title: `"Z02 — Synthetic Airglow Image  |  {filename}"`
