@@ -33,6 +33,7 @@
 | 2026-04-10 | §4.8, §5, §6, §7 | Added user control over Doppler LOS velocity (−500–+500 m/s, default 0) and target SNR (1–50, default 5); `_run_tolansky_stage` gains `f_lens_m` param and now recovers d, f, and v; Panel D annotation consolidated to single monospace text box |
 | 2026-04-10 | §4.8, §7 | Removed velocity recovery from `_run_tolansky_stage`: λ_c = S·d/f² is insensitive to Doppler shifts at single-image precision (ΔS/S ≈ 3×10⁻⁷ per 100 m/s vs σ_S/S ≈ 4×10⁻⁴ — 1000× too noisy). Velocity belongs in M06. Panel D is now a 4-line annotation box: ε ± σ, R², recovered f ± σ, recovered d ± σ |
 | 2026-04-10 | §4.8, §7 | Redesigned Tolansky stage: d and f are now fixed prior inputs (determined by two-line neon calibration, not re-fitted here); ε is the sole fitted quantity; v_rel is then derived from ε via λ_c → Doppler formula. This is the correct pipeline role: Z02 validates the ε→v chain with known ground truth |
+| 2026-04-10 | §4.8, §7 | Synced spec to implementation: λ_c derivation formula documented (m₀=round(2dn/λ₀), λ_c=2dn/(m₀+ε)); min peaks threshold = 3; entire body wrapped in try/except; Panel D uses dict key access; 6-line annotation box confirmed; title format confirmed |
 
 > **Purpose in one sentence:** Generate a synthetic 2D airglow fringe image,
 > pack a complete S19-compliant metadata header into its first row of pixels,
@@ -623,9 +624,14 @@ def _run_tolansky_stage(
     5. Compute f_px = f_m / PIXEL_SIZE_BINNED_M.
     6. Call TolanskyAnalyser(d_m=d_m, f_px=f_px) with fitted radii and
        uncertainties. d and f are fixed — only ε is fitted.
-    7. Derive λ_c from ε using the Tolansky relation with fixed d.
-    8. Derive v_rel from λ_c via the Doppler formula.
+    7. Derive λ_c analytically:
+           m₀ = round(2·d·n / λ₀)
+           λ_c = 2·d·n / (m₀ + ε)
+           σ_λc = λ_c · σ_ε / (m₀ + ε)
+    8. Derive v_rel via `lambda_c_to_v_rel(lambda_c_m)` from M04.
+       Propagate uncertainty: σ_v = c · σ_λc / λ₀
     9. Return result dict, or None if fewer than 3 peaks found or exception raised.
+       The entire body is wrapped in try/except — any failure returns None gracefully.
 
     Parameters
     ----------
@@ -813,7 +819,8 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
 **Panel D — Tolansky WLS fit** *(present only when `tolansky_result` is not None):*
 - Scatter plot of r² vs fringe order p, with error bars from peak fit uncertainties
 - Overlaid WLS fit line (d and f fixed; ε is the only free parameter)
-- Single monospace annotation text box containing:
+- All result values accessed via dict keys (`tr["peak_orders"]`, `tr["S"]`, etc.)
+- Single monospace annotation text box — 6 lines:
   ```
   ε = x.xxxxxx ± x.xxe-xx
   R² = x.xxxxxxxx
@@ -822,7 +829,7 @@ Layout switches automatically: `(1, 3)` when `tolansky_result is None`,
   v = +xxx.x m/s          (input)
   Δv = +xx.x m/s
   ```
-- Title: `"Tolansky: ε → v_rel  (fixed d, f)  |  {n_peaks} peaks"`
+- Title: `"Tolansky: ε → v_rel (fixed d, f) | {n_peaks} peaks"`
 
 > **Design note:** d and f are fixed priors from the neon calibration —
 > they are labelled in the panel title but not refitted. The WLS fit recovers
