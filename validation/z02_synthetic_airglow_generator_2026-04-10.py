@@ -305,17 +305,17 @@ def save_bin_file(
 
 
 # ---------------------------------------------------------------------------
-# Interactive output path selection
+# Output path — fixed to the synthesized-data repository
 # ---------------------------------------------------------------------------
 
+OUTPUT_DIR = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\soc_synthesized_data")
 
-def get_output_path_from_user(default_stem: str = "z02_synthetic_airglow") -> pathlib.Path:
+
+def get_output_path(default_stem: str = "z02_synthetic_airglow") -> pathlib.Path:
     """
-    Prompt user for a save folder, then return a full .bin file path.
+    Return a timestamped .bin path inside the fixed output directory.
 
-    On Windows: attempt to open a native folder-chooser dialog via
-    tkinter.filedialog.askdirectory(). Falls back to a typed-path prompt
-    if tkinter is unavailable or the dialog is cancelled.
+    The directory is created automatically if it does not yet exist.
 
     Returns
     -------
@@ -324,35 +324,8 @@ def get_output_path_from_user(default_stem: str = "z02_synthetic_airglow") -> pa
     import datetime
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{default_stem}_{timestamp_str}.bin"
-
-    folder = None
-
-    # Try tkinter folder dialog (Windows primary path)
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.lift()
-        root.attributes("-topmost", True)
-        folder = filedialog.askdirectory(
-            title="Select folder to save synthetic airglow .bin file"
-        )
-        root.destroy()
-    except Exception:
-        folder = None
-
-    # Fall back to typed path
-    if not folder:
-        print("\nEnter the full path to the folder where the .bin file should be saved.")
-        print(r"Example (Windows): C:\Users\scott\WindCube\synthetic_images")
-        print("Example (Linux):   /home/scott/windcube/synthetic_images")
-        folder = input("Folder path: ").strip().strip('"').strip("'")
-
-    if not folder:
-        raise RuntimeError("No folder selected — aborting.")
-
-    return pathlib.Path(folder) / filename
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR / filename
 
 
 # ---------------------------------------------------------------------------
@@ -911,7 +884,7 @@ def main() -> None:
     alpha    = PIXEL_SIZE_BINNED_M / f_lens_m
 
     # ── Output path ───────────────────────────────────────────────────────
-    output_path = get_output_path_from_user()
+    output_path = get_output_path()
     print(f"\n  Output file: {output_path}")
     print()
 
