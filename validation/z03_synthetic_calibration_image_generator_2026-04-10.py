@@ -515,7 +515,9 @@ def make_diagnostic_figure(
     plt.colorbar(im, ax=ax_img, label="ADU (log scale)")
     ax_img.set_title(
         f"Synthetic cal image  d={params.d_mm:.3f} mm  "
-        f"f={params.f_mm:.1f} mm"
+        f"f={params.f_mm:.1f} mm\n"
+        f"Ne lines: {params.lam_640*1e9:.4f} nm (×1.0)  "
+        f"{params.lam_638*1e9:.4f} nm (×{params.rel_638:.2f})"
     )
     ax_img.set_xlabel("Column (px)")
     ax_img.set_ylabel("Row (px)")
@@ -577,9 +579,10 @@ def make_diagnostic_figure(
         f"d        = {params.d_mm:.4f} mm\n"
         f"f        = {params.f_mm:.2f} mm\n"
         f"α        = {derived['alpha_rad_per_px']:.4e} rad/px\n"
+        f"λ_640    = {params.lam_640*1e9:.4f} nm  (rel = 1.000)\n"
+        f"λ_638    = {params.lam_638*1e9:.4f} nm  (rel = {params.rel_638:.3f})\n"
         f"snr_peak = {params.snr_peak:.1f}\n"
         f"I_peak   = {derived['I_peak_adu']:.1f} ADU\n"
-        f"rel_638  = {params.rel_638:.3f}\n"
         f"R        = {params.R}\n"
         f"F_coeff  = {derived['finesse_coefficient_F']:.1f}\n"
         f"Finesse  = {derived['finesse']:.1f}\n"
