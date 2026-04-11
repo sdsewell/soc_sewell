@@ -6,6 +6,7 @@ Tool: Claude Code
 Last updated: 2026-04-09
 """
 
+import dataclasses
 import math
 import pathlib
 import sys
@@ -27,6 +28,7 @@ from src.fpi.m03_annular_reduction_2026_04_06 import (
     FringeProfile,
     make_master_dark,
     reduce_calibration_frame,
+    subtract_dark,
 )
 from src.fpi.tolansky_2026_04_05 import TolanskyPipeline, TwoLineResult
 from src.metadata.p01_image_metadata_2026_04_06 import ingest_real_image, ImageMetadata
@@ -163,10 +165,18 @@ def extract_metadata(load_result: dict) -> dict:
 def figure_image_pair(
     load_result: dict,
     meta_result: dict,
-) -> None:
+) -> tuple:
     """
-    Figure 1: side-by-side display of raw calibration and dark images
-    with metadata tables below each. Blocks until the user closes the figure.
+    Figure 1: side-by-side display of raw calibration and dark images with
+    full metadata tables below each.
+
+    The user clicks on the CAL image to mark the initial fringe centre seed
+    (cx, cy). Blocks until the figure is closed.
+
+    Returns
+    -------
+    (cx_seed, cy_seed) : tuple[float, float]
+        Pixel coordinates selected by the user, or image centre if no click.
     """
     cal_image  = load_result["cal_image"]
     dark_image = load_result["dark_image"]
@@ -175,59 +185,143 @@ def figure_image_pair(
     cal_meta   = meta_result["cal_meta"]
     dark_meta  = meta_result["dark_meta"]
 
+    BIT_DEPTH = 14
+    ADU_MAX   = 2 ** BIT_DEPTH - 1   # 16 383
+
+    # ── Build metadata table rows from the full ImageMetadata dataclass ──────
+    def _meta_table_rows(meta):
+        """Return list-of-[field, value] for every ImageMetadata field."""
+        if meta is None:
+            return [["(synthetic — no embedded metadata)", ""]]
+
+        # Decode ADCS quality flag bitmask to human-readable string
+        flag = meta.adcs_quality_flag
+        flag_names = []
+        if flag == 0:
+            flag_names = ["GOOD"]
+        else:
+            if flag & 0x01: flag_names.append("SLEW_IN_PROGRESS")
+            if flag & 0x02: flag_names.append("STR_UNAVAILABLE")
+            if flag & 0x04: flag_names.append("GNSS_UNAVAILABLE")
+            if flag & 0x08: flag_names.append("ADCS_DEGRADED")
+            if flag & 0x10: flag_names.append("POINTING_UNKNOWN")
+        adcs_str = f"0x{flag:02X}  ({', '.join(flag_names)})"
+
+        # Special-case formatters keyed by field name
+        special = {
+            "spacecraft_latitude":  lambda v: f"{math.degrees(v):.5f} °",
+            "spacecraft_longitude": lambda v: f"{math.degrees(v):.5f} °",
+            "spacecraft_altitude":  lambda v: f"{v / 1000:.3f} km",
+            "adcs_quality_flag":    lambda _: adcs_str,
+        }
+
+        def _fmt(v):
+            if v is None:
+                return "—"
+            if isinstance(v, float):
+                return f"{v:.6g}"
+            if isinstance(v, list):
+                parts = [f"{x:.6g}" if isinstance(x, float) else str(x) for x in v]
+                return "[" + ", ".join(parts) + "]"
+            return str(v)
+
+        d = dataclasses.asdict(meta)
+        rows = []
+        for fld in dataclasses.fields(meta):
+            name = fld.name
+            raw  = d[name]
+            if name in special and raw is not None:
+                val_str = special[name](raw)
+            else:
+                val_str = _fmt(raw)
+            rows.append([name, val_str])
+        return rows
+
+    # ── Figure layout ────────────────────────────────────────────────────────
     fig, axes = plt.subplots(
-        2, 2, figsize=(16, 12),
-        gridspec_kw={"height_ratios": [3, 2]},
+        2, 2, figsize=(18, 28),
+        gridspec_kw={"height_ratios": [2, 5]},
     )
     ax_cal_img, ax_dark_img = axes[0, 0], axes[0, 1]
     ax_cal_tab, ax_dark_tab = axes[1, 0], axes[1, 1]
 
-    # Image display
+    # ── Image display — grayscale, full 14-bit scale ─────────────────────────
     for ax, img, title in [
-        (ax_cal_img, cal_image,
-         f"CAL: {cal_path.name}  |  {cal_image.shape[1]}×{cal_image.shape[0]} px"),
-        (ax_dark_img, dark_image,
-         f"DARK: {dark_path.name}  |  {dark_image.shape[1]}×{dark_image.shape[0]} px"),
+        (ax_cal_img, cal_image,  f"CAL: {cal_path.name}\n[click to mark fringe centre seed]"),
+        (ax_dark_img, dark_image, f"DARK: {dark_path.name}"),
     ]:
-        vmin = float(np.percentile(img, 1))
-        vmax = float(np.percentile(img, 99))
-        im = ax.imshow(img, cmap="viridis", vmin=vmin, vmax=vmax, origin="upper")
-        plt.colorbar(im, ax=ax, label="ADU")
-        ax.set_title(title, fontsize=10)
+        im = ax.imshow(img, cmap="gray", vmin=0, vmax=ADU_MAX, origin="upper")
+        plt.colorbar(im, ax=ax, label="ADU  (0 – 16 383)")
+        ax.set_title(title, fontsize=9)
 
-    # Metadata tables
+    # ── Interactive click on CAL image to collect cx/cy seed ─────────────────
+    clicks = []
+
+    def on_click(event):
+        if event.inaxes is not ax_cal_img:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        clicks.clear()
+        clicks.append((event.xdata, event.ydata))
+        # Remove any previous marker lines
+        for _ln in ax_cal_img.lines[:]:
+            _ln.remove()
+        ax_cal_img.plot(event.xdata, event.ydata, "r+",
+                        markersize=14, markeredgewidth=2)
+        ax_cal_img.set_title(
+            f"CAL: {cal_path.name}\n"
+            f"Seed: ({event.xdata:.1f}, {event.ydata:.1f}) px  "
+            f"[click to update, close when done]",
+            fontsize=9,
+        )
+        fig.canvas.draw()
+
+    fig.canvas.mpl_connect("button_press_event", on_click)
+
+    # ── Metadata tables — all ImageMetadata fields ───────────────────────────
     for ax, meta in [(ax_cal_tab, cal_meta), (ax_dark_tab, dark_meta)]:
         ax.axis("off")
-        if meta is None:
-            table_data = [["Synthetic image — no embedded metadata", ""]]
-            col_labels = ["Field", "Value"]
-        else:
-            lamp_on = [i for i, v in enumerate(meta.lamp_ch_array) if v]
-            table_data = [
-                ["Timestamp (UTC)",       str(meta.utc_timestamp)],
-                ["Exposure time (cs)",    str(meta.exp_time)],
-                ["CCD temp (°C)",         f"{meta.ccd_temp1:.1f}"],
-                ["Etalon temps (°C)",     ", ".join(f"{t:.1f}" for t in meta.etalon_temps)],
-                ["Lamp channels on",      str(lamp_on) if lamp_on else "none"],
-                ["S/C latitude (°)",      f"{math.degrees(meta.spacecraft_latitude):.2f}"],
-                ["S/C longitude (°)",     f"{math.degrees(meta.spacecraft_longitude):.2f}"],
-                ["S/C altitude (km)",     f"{meta.spacecraft_altitude / 1000:.1f}"],
-                ["Obs mode",              str(meta.obs_mode)],
-                ["Is synthetic",          str(meta.is_synthetic)],
-            ]
-            col_labels = ["Field", "Value"]
+        table_data = _meta_table_rows(meta)
         tbl = ax.table(
             cellText=table_data,
-            colLabels=col_labels,
-            loc="center",
+            colLabels=["Field", "Value"],
+            loc="upper center",
             cellLoc="left",
         )
         tbl.auto_set_font_size(False)
-        tbl.set_fontsize(9)
+        tbl.set_fontsize(7)
+        tbl.auto_set_column_width([0, 1])
 
-    fig.suptitle("Figure 1 — Image Pair Inspection  [close to continue]", fontsize=13)
+    # ── Figure title — include image directory path(s) ───────────────────────
+    cal_dir  = cal_path.parent
+    dark_dir = dark_path.parent
+    if cal_dir == dark_dir:
+        path_str = str(cal_dir)
+    else:
+        path_str = f"CAL: {cal_dir}  |  DARK: {dark_dir}"
+
+    fig.suptitle(
+        f"Figure 1 — Image Pair Inspection\n"
+        f"{path_str}\n"
+        f"[click the CAL image to set fringe centre seed, then close to continue]",
+        fontsize=11,
+    )
     plt.tight_layout()
     plt.show()
+
+    # ── Return seed (default to image centre if no click recorded) ───────────
+    H, W = cal_image.shape
+    if clicks:
+        cx_seed, cy_seed = clicks[0]
+        print(f"  Fringe centre seed from Figure 1 click: "
+              f"(cx={cx_seed:.1f}, cy={cy_seed:.1f}) px")
+    else:
+        cx_seed, cy_seed = W / 2.0, H / 2.0
+        print(f"  No click recorded — defaulting to image centre "
+              f"(cx={cx_seed:.1f}, cy={cy_seed:.1f}) px")
+
+    return cx_seed, cy_seed
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +329,17 @@ def figure_image_pair(
 # ---------------------------------------------------------------------------
 
 def get_roi_from_user(
-    cal_image: np.ndarray,
+    cal_image:   np.ndarray,
     default_roi: tuple = (216, 216),
+    cx_seed:     float | None = None,
+    cy_seed:     float | None = None,
 ) -> dict:
     """
-    Prompt the user for a fringe centre seed via an interactive matplotlib
-    click and a console ROI size prompt.
+    Prompt the user for a fringe centre seed and ROI size.
+
+    If cx_seed and cy_seed are already supplied (e.g. from a Figure 1 click)
+    the interactive Figure 1b is skipped and only the console ROI prompt runs.
+    Otherwise a Figure 1b window is shown so the user can click to set the seed.
 
     Returns
     -------
@@ -249,37 +348,47 @@ def get_roi_from_user(
         'roi_x0', 'roi_y0', 'roi_x1', 'roi_y1'
     """
     H, W = cal_image.shape
-    clicks = []
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    vmin = float(np.percentile(cal_image, 1))
-    vmax = float(np.percentile(cal_image, 99))
-    ax.imshow(cal_image, cmap="viridis", vmin=vmin, vmax=vmax, origin="upper")
-    ax.set_title("Figure 1b — Click to mark fringe centre seed  [close after clicking]")
-
-    def on_click(event):
-        if event.inaxes is not ax:
-            return
-        if event.xdata is None or event.ydata is None:
-            return
-        clicks.clear()
-        clicks.append((event.xdata, event.ydata))
-        ax.plot(event.xdata, event.ydata, "r+", markersize=14, markeredgewidth=2)
+    if cx_seed is None or cy_seed is None:
+        # Fall back to the interactive Figure 1b click window
+        clicks = []
+        fig, ax = plt.subplots(figsize=(8, 8))
+        vmin = float(np.percentile(cal_image, 1))
+        vmax = float(np.percentile(cal_image, 99))
+        ax.imshow(cal_image, cmap="gray", vmin=vmin, vmax=vmax, origin="upper")
         ax.set_title(
-            f"Seed set: ({event.xdata:.1f}, {event.ydata:.1f})  [close to continue]"
+            "Figure 1b — Click to mark fringe centre seed  [close after clicking]"
         )
-        fig.canvas.draw()
 
-    fig.canvas.mpl_connect("button_press_event", on_click)
-    plt.tight_layout()
-    plt.show()
+        def on_click(event):
+            if event.inaxes is not ax:
+                return
+            if event.xdata is None or event.ydata is None:
+                return
+            clicks.clear()
+            clicks.append((event.xdata, event.ydata))
+            for _ln in ax.lines[:]:
+                _ln.remove()
+            ax.plot(event.xdata, event.ydata, "r+", markersize=14, markeredgewidth=2)
+            ax.set_title(
+                f"Seed set: ({event.xdata:.1f}, {event.ydata:.1f})  "
+                f"[close to continue]"
+            )
+            fig.canvas.draw()
 
-    if clicks:
-        cx_seed, cy_seed = clicks[0]
+        fig.canvas.mpl_connect("button_press_event", on_click)
+        plt.tight_layout()
+        plt.show()
+
+        if clicks:
+            cx_seed, cy_seed = clicks[0]
+        else:
+            cx_seed, cy_seed = W / 2.0, H / 2.0
+            print(f"  No click registered — defaulting to image centre "
+                  f"({cx_seed:.1f}, {cy_seed:.1f})")
     else:
-        cx_seed, cy_seed = W / 2.0, H / 2.0
-        print(f"  No click registered — defaulting to image centre "
-              f"({cx_seed:.1f}, {cy_seed:.1f})")
+        print(f"  Using fringe centre seed from Figure 1: "
+              f"(cx={cx_seed:.1f}, cy={cy_seed:.1f})")
 
     print(f"  Fringe centre seed: (cx={cx_seed:.1f}, cy={cy_seed:.1f})")
     roi_input = input(
@@ -301,6 +410,7 @@ def get_roi_from_user(
             print("  Invalid input — using default ROI.")
             roi_rows, roi_cols = default_roi
 
+    assert cx_seed is not None and cy_seed is not None
     roi_x0 = max(0, int(round(cx_seed)) - roi_cols // 2)
     roi_y0 = max(0, int(round(cy_seed)) - roi_rows // 2)
     roi_x1 = min(W, roi_x0 + roi_cols)
@@ -335,60 +445,43 @@ def figure_roi_inspection(
     cal_image:  np.ndarray,
     dark_image: np.ndarray,
     roi:        dict,
-) -> np.ndarray:
+) -> None:
     """
-    Figure 2: Display cal ROI, dark ROI, and visual dark-subtracted cal ROI
-    side by side with ADU histograms below each panel.
+    Figure 2: Cal ROI and dark ROI side by side with ADU histograms below.
 
-    Computes diff_roi using simple array arithmetic FOR VISUAL DISPLAY ONLY.
-    Does NOT use S12's subtract_dark() and the returned array is NOT passed
-    to reduce_calibration_frame() in Stage F.
-
-    Returns
-    -------
-    np.ndarray — visual diff_roi (float64, clipped >= 0). For display only.
+    Both images use grayscale and the full 14-bit ADU scale (0–16 383).
     """
+    ADU_MAX = 2 ** 14 - 1
     x0, y0, x1, y1 = roi["roi_x0"], roi["roi_y0"], roi["roi_x1"], roi["roi_y1"]
     cal_roi  = cal_image[y0:y1, x0:x1]
     dark_roi = dark_image[y0:y1, x0:x1]
-    diff_roi = np.clip(
-        cal_roi.astype(np.float64) - dark_roi.astype(np.float64), 0.0, None
-    )
 
     fig, axes = plt.subplots(
-        2, 3, figsize=(18, 10),
+        2, 2, figsize=(14, 10),
         gridspec_kw={"height_ratios": [3, 1.5]},
     )
 
-    images   = [cal_roi, dark_roi, diff_roi]
-    # Title strings include cal_path and dark_path info when available
-    # (roi dict doesn't carry paths; use generic labels)
-    titles = [
-        f"CAL ROI  |  seed=({roi['cx_seed']:.1f}, {roi['cy_seed']:.1f})\n"
-        f"{roi['roi_cols']}×{roi['roi_rows']} px",
-        "DARK ROI",
-        "CAL \u2212 DARK (visual only \u2014 not passed to S12)",
+    pairs = [
+        (axes[0, 0], axes[1, 0], cal_roi,
+         f"CAL ROI  |  seed=({roi['cx_seed']:.1f}, {roi['cy_seed']:.1f})"),
+        (axes[0, 1], axes[1, 1], dark_roi,
+         "DARK ROI"),
     ]
 
-    for col, (img, title) in enumerate(zip(images, titles)):
-        ax_img  = axes[0, col]
-        ax_hist = axes[1, col]
-
-        vmin = float(np.percentile(img, 1))
-        vmax = float(np.percentile(img, 99))
-        im = ax_img.imshow(img, cmap="viridis", vmin=vmin, vmax=vmax, origin="upper")
-        plt.colorbar(im, ax=ax_img, label="ADU")
+    for ax_img, ax_hist, img, title in pairs:
+        im = ax_img.imshow(img, cmap="gray", vmin=0, vmax=ADU_MAX, origin="upper")
+        plt.colorbar(im, ax=ax_img, label="ADU  (0 – 16 383)")
         ax_img.set_title(title, fontsize=9)
 
-        # Histogram
         hist_max = float(np.percentile(img, 99.9))
         hist_min = float(img.min())
-        ax_hist.hist(img.ravel(), bins=128,
-                     range=(hist_min, hist_max) if hist_max > hist_min else (hist_min, hist_min + 1),
-                     color="steelblue", alpha=0.7)
+        ax_hist.hist(
+            img.ravel(), bins=128,
+            range=(hist_min, hist_max) if hist_max > hist_min else (hist_min, hist_min + 1),
+            color="steelblue", alpha=0.7,
+        )
         med = float(np.median(img))
-        ax_hist.axvline(med, color="red", linestyle="--",
-                        label=f"median={med:.0f}")
+        ax_hist.axvline(med, color="red", linestyle="--", label=f"median={med:.0f}")
         ax_hist.set_xlabel("ADU")
         ax_hist.set_ylabel("Count")
         ax_hist.legend(fontsize=8)
@@ -397,34 +490,31 @@ def figure_roi_inspection(
     plt.tight_layout()
     plt.show()
 
-    return diff_roi
-
 
 # ---------------------------------------------------------------------------
-# Stage F — figure_reduction_peaks
+# Stage F-1 — run_s12_reduction  (computation only, no figure)
 # ---------------------------------------------------------------------------
 
-def figure_reduction_peaks(
+def run_s12_reduction(
     cal_image:  np.ndarray,
     dark_image: np.ndarray,
     roi:        dict,
-    cal_path:   pathlib.Path,
-) -> FringeProfile:
+) -> tuple:
     """
-    Run S12's reduce_calibration_frame() on the full cal image (not the ROI)
-    with master_dark provided, then plot the r²-binned profile + 20-peak overlay.
+    Run S12's reduce_calibration_frame() on the full cal image.
 
-    Stage F passes the raw cal_image and master_dark as SEPARATE arguments to
-    reduce_calibration_frame() so that S12 performs the one and only dark
-    subtraction internally. diff_roi from Stage E is NOT used here.
+    Also replicates the identical subtract_dark() call that S12 applies
+    internally, so the caller can extract the dark-subtracted image for
+    comparison (Figure 3).
 
     Returns
     -------
-    FringeProfile — full S12 output used by Stage G
+    (FringeProfile, s12_dark_sub_image)
+        FringeProfile — full S12 output.
+        s12_dark_sub_image — np.ndarray float64, same shape as cal_image,
+            produced by the same subtract_dark() call S12 uses internally.
     """
-    # Build master dark from the single dark frame
     master_dark = make_master_dark([dark_image])
-
     r_max = min(roi["roi_rows"], roi["roi_cols"]) / 2.0
 
     fp = reduce_calibration_frame(
@@ -436,6 +526,10 @@ def figure_reduction_peaks(
         n_bins      = 150,
     )
 
+    # Replicate the identical dark subtraction S12 performs at line 1 of
+    # reduce_calibration_frame — same master_dark, same clip_negative=True.
+    s12_dark_sub = subtract_dark(cal_image, master_dark, clip_negative=True)
+
     n_ok = sum(1 for p in fp.peak_fits if p.fit_ok)
     print(f"  S12 annular reduction complete:")
     print(f"    Centre: ({fp.cx:.3f}, {fp.cy:.3f}) px  "
@@ -444,6 +538,109 @@ def figure_reduction_peaks(
     print(f"    Bins used: {fp.n_bins}")
     print(f"    Dark subtracted: {fp.dark_subtracted}")
     print(f"    Peaks found: {n_ok} / {len(fp.peak_fits)}")
+
+    return fp, s12_dark_sub
+
+
+# ---------------------------------------------------------------------------
+# Stage F-2 — figure_dark_comparison  (Figure 3)
+# ---------------------------------------------------------------------------
+
+def figure_dark_comparison(
+    cal_image:        np.ndarray,
+    dark_image:       np.ndarray,
+    roi:              dict,
+    s12_dark_sub:     np.ndarray,
+) -> None:
+    """
+    Figure 3: side-by-side comparison of the visual dark-subtracted cal ROI
+    and the S12 dark-subtracted cal ROI, with histograms below each.
+
+    The visual diff uses simple numpy arithmetic (clip >= 0) applied to the
+    ROI pixels.  The S12 diff is extracted from the full-image result of
+    subtract_dark() called with the same master_dark that S12 used internally.
+
+    They should be numerically identical for a single dark frame; this figure
+    exists to verify that the payload control scripts are correctly delivering
+    the dark image that S12 receives.
+    """
+    x0, y0, x1, y1 = roi["roi_x0"], roi["roi_y0"], roi["roi_x1"], roi["roi_y1"]
+
+    visual_diff = np.clip(
+        cal_image[y0:y1, x0:x1].astype(np.float64)
+        - dark_image[y0:y1, x0:x1].astype(np.float64),
+        0.0, None,
+    )
+    s12_diff = s12_dark_sub[y0:y1, x0:x1]
+
+    max_abs_diff = float(np.max(np.abs(visual_diff - s12_diff)))
+    are_equal    = np.allclose(visual_diff, s12_diff, atol=0.0, rtol=0.0)
+    equality_str = (
+        "IDENTICAL (max |diff| = 0)"
+        if are_equal
+        else f"DIFFER  max |diff| = {max_abs_diff:.4g} ADU"
+    )
+    print(f"  Dark comparison: visual diff vs S12 diff — {equality_str}")
+
+    # Shared grayscale limits so the two images are directly comparable
+    combined = np.concatenate([visual_diff.ravel(), s12_diff.ravel()])
+    vmax = float(np.percentile(combined, 99.5))
+
+    fig, axes = plt.subplots(
+        2, 2, figsize=(14, 10),
+        gridspec_kw={"height_ratios": [3, 1.5]},
+    )
+
+    panels = [
+        (axes[0, 0], axes[1, 0], visual_diff,
+         "CAL \u2212 DARK  (visual: simple numpy clip \u2265 0)"),
+        (axes[0, 1], axes[1, 1], s12_diff,
+         "CAL \u2212 DARK  (S12: subtract_dark, same master_dark)"),
+    ]
+
+    for ax_img, ax_hist, img, title in panels:
+        im = ax_img.imshow(img, cmap="gray", vmin=0, vmax=vmax, origin="upper")
+        plt.colorbar(im, ax=ax_img, label="ADU")
+        ax_img.set_title(title, fontsize=9)
+
+        hist_max = float(np.percentile(img, 99.9))
+        hist_min = float(img.min())
+        ax_hist.hist(
+            img.ravel(), bins=128,
+            range=(hist_min, hist_max) if hist_max > hist_min else (hist_min, hist_min + 1),
+            color="steelblue", alpha=0.7,
+        )
+        med = float(np.median(img))
+        ax_hist.axvline(med, color="red", linestyle="--", label=f"median={med:.0f}")
+        ax_hist.set_xlabel("ADU")
+        ax_hist.set_ylabel("Count")
+        ax_hist.legend(fontsize=8)
+
+    fig.suptitle(
+        f"Figure 3 \u2014 Dark Subtraction Comparison: Visual vs S12\n"
+        f"ROI [{x0}:{x1}, {y0}:{y1}]  |  {equality_str}  [close to continue]",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Stage F-3 — figure_reduction_peaks  (Figure 4)
+# ---------------------------------------------------------------------------
+
+def figure_reduction_peaks(
+    fp:       FringeProfile,
+    roi:      dict,
+    cal_path: pathlib.Path,
+) -> None:
+    """
+    Figure 4: r²-binned radial profile with 20-peak overlay and peak table.
+
+    Takes a pre-computed FringeProfile from run_s12_reduction() rather than
+    re-running S12.
+    """
+    n_ok = sum(1 for p in fp.peak_fits if p.fit_ok)
 
     # --- Build figure -------------------------------------------------------
     fig, (ax_profile, ax_table) = plt.subplots(
@@ -501,7 +698,7 @@ def figure_reduction_peaks(
                                 va="bottom", fontsize=6, color="grey")
 
     suptitle = (
-        f"Figure 3 \u2014 Annular Reduction and Peak Identification\n"
+        f"Figure 4 \u2014 Annular Reduction and Peak Identification\n"
         f"File: {cal_path.name}  |  "
         f"Centre: ({fp.cx:.3f}, {fp.cy:.3f}) px  "
         f"[\u03c3=({fp.sigma_cx:.3f}, {fp.sigma_cy:.3f}) px]  |  "
@@ -548,7 +745,6 @@ def figure_reduction_peaks(
     plt.tight_layout()
     plt.show()
 
-    return fp
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +757,7 @@ def figure_tolansky(
 ) -> TwoLineResult:
     """
     Run S13's TolanskyPipeline on the FringeProfile from Stage F and
-    produce Figure 4: the two-line Tolansky r² characterisation.
+    produce Figure 5: the two-line Tolansky r² characterisation.
 
     Returns
     -------
@@ -709,7 +905,7 @@ def figure_tolansky(
     tbl.set_fontsize(9)
 
     suptitle = (
-        f"Figure 4 \u2014 Tolansky Two-Line Etalon Characterisation\n"
+        f"Figure 5 \u2014 Tolansky Two-Line Etalon Characterisation\n"
         f"File: {cal_path.name}  |  "
         f"d = {result.d_m * 1e3:.4f} \u00b1 {result.sigma_d_m * 1e3:.4f} mm  |  "
         f"f = {f_mm:.2f} \u00b1 {sf_mm:.2f} mm  |  "
@@ -748,31 +944,41 @@ def main():
 
     # Stage C
     print("\nStage C: Displaying image pair (Figure 1)...")
-    figure_image_pair(load, meta)
+    cx_seed, cy_seed = figure_image_pair(load, meta)
 
     # Stage D
-    print("\nStage D: Collecting centre seed and ROI from user...")
-    roi = get_roi_from_user(load["cal_image"])
+    print("\nStage D: Collecting ROI from user...")
+    roi = get_roi_from_user(load["cal_image"], cx_seed=cx_seed, cy_seed=cy_seed)
     print(f"  Seed: ({roi['cx_seed']:.1f}, {roi['cy_seed']:.1f}) px")
     print(f"  ROI:  {roi['roi_cols']}×{roi['roi_rows']} px")
 
     # Stage E
     print("\nStage E: Displaying ROI inspection (Figure 2)...")
     figure_roi_inspection(load["cal_image"], load["dark_image"], roi)
-    # Note: figure_roi_inspection returns the visual diff array but we
-    # do NOT pass it to Stage F. Stage F gets the raw cal image + dark.
 
-    # Stage F
-    print("\nStage F: Running S12 annular reduction + peak finding (Figure 3)...")
-    fp = figure_reduction_peaks(
+    # Stage F-1: run S12 annular reduction (no figure yet)
+    print("\nStage F: Running S12 annular reduction + peak finding...")
+    fp, s12_dark_sub = run_s12_reduction(
         cal_image  = load["cal_image"],
         dark_image = load["dark_image"],
         roi        = roi,
-        cal_path   = load["cal_path"],
     )
 
+    # Stage F-2: dark subtraction comparison (Figure 3)
+    print("\nStage F: Displaying dark subtraction comparison (Figure 3)...")
+    figure_dark_comparison(
+        cal_image    = load["cal_image"],
+        dark_image   = load["dark_image"],
+        roi          = roi,
+        s12_dark_sub = s12_dark_sub,
+    )
+
+    # Stage F-3: radial profile + peak table (Figure 4)
+    print("\nStage F: Displaying radial profile and peaks (Figure 4)...")
+    figure_reduction_peaks(fp, roi, load["cal_path"])
+
     # Stage G
-    print("\nStage G: Running S13 Tolansky analysis (Figure 4)...")
+    print("\nStage G: Running S13 Tolansky analysis (Figure 5)...")
     result = figure_tolansky(fp, load["cal_path"])
 
     print("\n" + "=" * 70)
