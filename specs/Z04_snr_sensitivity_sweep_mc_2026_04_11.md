@@ -3,8 +3,9 @@
 **Spec:** Z04  
 **Module:** `validation/z04_snr_sensitivity_sweep.py`  
 **Tier:** 9 — Validation  
-**Status:** Written — ready for Claude Code implementation  
-**Date:** 2026-04-11  
+**Status:** Implemented — 6/6 tests passing  
+**Date written:** 2026-04-11  
+**Date implemented:** 2026-04-11  
 **Author:** S. Sewell, HAO/NCAR  
 **Depends on:** S09 (M01), S11 (M04), S12 (M03), S13 (Tolansky), S14 (M05), S15 (M06)  
 **Analogous to:** Harding et al. 2014 §4, Figs. 7–8
@@ -149,61 +150,42 @@ Both panels share a common x-axis (log scale, SNR).  Vertical grey band marks th
 ### 4.1 File location
 
 ```
-validation/z04_snr_sensitivity_sweep.py
+validation/z04_snr_sensitivity_sweep.py   (~430 lines)
+tests/test_z04.py
 ```
-
-This follows the Z02/Z03 convention of placing validation scripts in `validation/`.
 
 ### 4.2 Module imports
 
-Z04 calls existing production modules directly — it does not re-implement physics:
+Z04 calls existing production modules directly:
 
 ```python
 from soc_sewell.m04_airglow_synthesis import synthesize_airglow_frame
 from soc_sewell.m03_annular_reduction  import reduce_science_frame
 from soc_sewell.m06_airglow_inversion  import invert_airglow_fringe
-from soc_sewell.constants              import PHY   # λ₀, c, d, f, α, R_refl
+from soc_sewell.constants              import PHY
 ```
 
-If M06 is not yet fully implemented, Z04 falls back to the Tolansky sub-pipeline (S13 path) as used in Z02's `_run_tolansky_stage()`, with a compatibility shim documented in §4.4.
+### 4.3 Key implementation functions
 
-### 4.3 Per-trial function signature
-
-```python
-def _run_single_trial(
-    v_true_ms: float,
-    snr: float,
-    rng: np.random.Generator,
-    priors: dict,
-) -> dict:
-    """
-    Synthesise one noisy airglow frame, reduce, invert, return results.
-
-    Returns
-    -------
-    dict with keys:
-        v_rec    : float  recovered LOS velocity (m/s)
-        sigma_est: float  pipeline-reported 1σ uncertainty (m/s)
-        eps      : float  recovered fractional order ε
-        lam_c    : float  recovered line centre (nm)
-        converged: bool   True if fit converged
-    """
-```
+| Function | Description |
+|----------|-------------|
+| `_build_calibration_result()` | Noiseless synthetic `CalibrationResult` via M05. Uses conftest.py centre convention to avoid systematic offsets |
+| `_run_single_trial()` | Synthesise → reduce (M03) → invert (M06). Returns `v_rec`, `sigma_est`, `converged`, `delta_s` |
+| `_run_sim1()` | N=10 000 trials at fixed v=100 m/s, SNR=5 |
+| `_run_sim2()` | N=1 000 trials with randomised v ∈ [−300, +300] m/s |
+| `_run_sim3()` | N=10 000 trials across SNR grid; joblib-parallel via `_run_snr_bin()` |
+| `_run_snr_bin()` | Module-level joblib worker — builds its own `CalibrationResult` to avoid pickling issues with complex dataclass fields |
+| `_check_acceptance_gates()` | Evaluates all 8 ORR gates (G01–G08), returns dict |
 
 ### 4.4 SNR injection
 
-SNR is injected by scaling the Gaussian noise added to the synthetic science frame:
-
 ```python
-# After synthesise_airglow_frame():
 delta_S = profile.max() - profile.min()   # fringe contrast (ADU)
 sigma_N = delta_S / snr                    # noise std (ADU)
 noisy_frame = frame + rng.normal(0, sigma_N, frame.shape)
 ```
 
-This exactly implements the Harding SNR definition (§2.1).
-
-Poisson noise on the calibration frame is added as:
+Poisson noise on calibration frame:
 
 ```python
 cal_frame_noisy = rng.poisson(cal_frame.astype(float)).astype(np.float32)
@@ -211,11 +193,13 @@ cal_frame_noisy = rng.poisson(cal_frame.astype(float)).astype(np.float32)
 
 ### 4.5 Reproducibility
 
-A global `rng = np.random.default_rng(seed=42)` is used for all three simulations, ensuring bit-exact reproducibility.  The seed is exposed as a CLI argument `--seed`.
+Global `rng = np.random.default_rng(seed=42)`.  Seed exposed as `--seed` CLI argument.
 
 ### 4.6 Parallelism
 
-`joblib.Parallel(n_jobs=-1)` wraps the per-trial loop for Sim-3 (largest simulation).  Each worker receives an independent derived RNG child generator via `rng.spawn(N_workers)`.
+`joblib.Parallel(n_jobs=-1)` wraps Sim-3 SNR bins.  Each worker receives an independent RNG child via `rng.spawn(N_workers)`.  `joblib` added to `requirements.txt`.
+
+**Implementation note:** `_run_snr_bin()` is defined at module level (not as a nested or lambda function) specifically to avoid joblib pickling failures with complex dataclass fields in `CalibrationResult`.  Each worker rebuilds its own `CalibrationResult` from scratch.
 
 ---
 
@@ -229,12 +213,12 @@ All outputs written to `validation/outputs/z04/`:
 | `z04_sim2_bias_vs_velocity.png` | Harding Fig. 7 analogue |
 | `z04_sim3_bias_vs_snr.png` | Harding Fig. 8 analogue — **primary ORR figure** |
 | `z04_mc_results.csv` | Trial-level CSV: [sim_id, trial, v_true, snr, v_rec, sigma_est, converged] |
-| `z04_acceptance.json` | Pass/fail dict keyed by gate name (§7) |
-| `z04_summary.txt` | Human-readable summary printed to stdout and saved |
+| `z04_acceptance.json` | Pass/fail dict keyed by gate name (G01–G08) |
+| `z04_summary.txt` | Human-readable summary |
 
 ### 5.1 Figure style
 
-All figures use `matplotlib` with NCAR brand colours where appropriate:
+All figures use `matplotlib` with NCAR brand colours:
 - Bias curve: `#003479` (NCAR navy)
 - σ_v curve: `#0057C2` (NCAR blue)
 - ORR limit lines: `#CC0000` dashed
@@ -246,24 +230,22 @@ Figure size: 8 × 10 inches at 150 dpi for Sim-3 two-panel; 10 × 5 inches for S
 
 ## 6. Pytest Suite
 
-Test file: `tests/test_z04.py`
+Test file: `tests/test_z04.py` — **6/6 passing, CI runtime 38 s**
 
-| Test ID | Description | Pass Criterion |
-|---------|-------------|----------------|
-| T1 | Smoke test: N=10 trials, SNR=5 run completes without exception | No exception |
-| T2 | ΔS > 0 for synthesised frame (fringe contrast non-zero) | `delta_S > 0` |
-| T3 | Recovered v within ±50 m/s of truth at SNR=5 for 10 trials | All 10 pass |
-| T4 | σ_ratio ∈ [0.5, 2.0] for N=100 trials at SNR=5 | Passes (loose bound for fast CI) |
-| T5 | acceptance.json is valid JSON with all required gate keys | All 8 gate keys present |
-| T6 | Output PNG files created for all three simulations | All 5 files exist |
-
-CI runtime target: < 120 seconds (N kept low in CI; full run is `--full` flag).
+| Test ID | Description | Result |
+|---------|-------------|--------|
+| T1 | Smoke test: N=10 trials, all sims, no exception | PASS |
+| T2 | ΔS > 0 for synthesised frame (fringe contrast non-zero) | PASS |
+| T3 | \|v_rec − v_true\| < 50 m/s at SNR=5 for 10 trials | PASS |
+| T4 | σ_ratio ∈ [0.5, 2.0] for N=100 trials at SNR=5 | PASS |
+| T5 | acceptance.json has all G01–G08 keys | PASS |
+| T6 | All 5 output PNG/CSV/JSON files created | PASS |
 
 ---
 
 ## 7. ORR Acceptance Gates
 
-The following conditions, evaluated from `z04_acceptance.json`, must all be `PASS` before the ORR:
+The following conditions, evaluated from `z04_acceptance.json`, must all be `PASS` before the ORR.  The full-run evaluation (`--full`) is the authoritative ORR check:
 
 | Gate ID | Metric | Threshold | Rationale |
 |---------|--------|-----------|-----------|
@@ -275,6 +257,12 @@ The following conditions, evaluated from `z04_acceptance.json`, must all be `PAS
 | G06 | K–S p-value (Sim-1) | > 0.05 | Residuals consistent with Gaussian |
 | G07 | Velocity-error slope (Sim-2) | < 0.01 m/s per m/s | No gain error |
 | G08 | Convergence rate (all sims) | > 95% | Robust inversion |
+
+**To run the full ORR evaluation:**
+```bash
+python validation/z04_snr_sensitivity_sweep.py --full --verbose
+cat validation/outputs/z04/z04_acceptance.json
+```
 
 ---
 
@@ -305,16 +293,15 @@ Options:
 | S14 (M05) | Provides calibration priors (d, f, α) for inversion |
 | S15 (M06) | Full airglow inversion (Z04 calls this if available) |
 | Z02 | Proof-of-concept single-frame synthesis + Tolansky; Z04 generalises to MC |
-| Z03 | Related validation (if implemented); Z04 is independent |
 
 ---
 
 ## 10. Known Limitations and Future Work
 
 - **Delta-function approximation:** Z04 does not sweep temperature because the delta-function source model (S11) has no thermal broadening free parameter.  A future spec (Z05, post-ORR) will validate bias under different assumed temperatures when a Gaussian source model is optionally substituted.
-- **Calibration noise coupling:** Z04 adds Poisson noise to the calibration frame but does not perturb the instrument parameters (d, f, α) between trials.  A full treatment would draw (d, f, α) from their posterior distributions on each trial; this is deferred to Z05.
-- **Single LOS direction:** Z04 tests a single LOS (science frame centre).  Off-axis LOS geometry bias is not assessed here; that is an M07/Z06 concern.
-- **No hot-pixel injection:** The M03 99.5th-percentile clip is not stressed in Z04.  Hot-pixel robustness is covered in Z01.
+- **Calibration noise coupling:** Z04 adds Poisson noise to the calibration frame but does not perturb the instrument parameters (d, f, α) between trials.  A full treatment would draw (d, f, α) from their posterior distributions; deferred to Z05.
+- **Single LOS direction:** Z04 tests a single LOS (science frame centre).  Off-axis geometry bias is an M07/Z06 concern.
+- **No hot-pixel injection:** Hot-pixel robustness is covered in Z01.
 
 ---
 
@@ -323,3 +310,4 @@ Options:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-04-11 | S. Sewell | Initial spec written |
+| 2026-04-11 | S. Sewell | Updated after Claude Code implementation: added §4.3 function table, joblib pickling note (§4.6), T-series results (§6), revised status to Implemented |
