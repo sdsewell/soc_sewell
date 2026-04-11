@@ -23,3 +23,4 @@
 | Z01  | validate-cal| impl   | 6-stage  | 2026-04-11    |
 | Z02  | airglow-gen | impl   | 8/8      | 2026-04-10    |
 | Z03  | cal-gen     | impl   | passing  | 2026-04-10    |
+| Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |

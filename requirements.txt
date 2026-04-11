@@ -8,3 +8,4 @@ matplotlib
 pandas
 astropy
 pytest
+joblib
