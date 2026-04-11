@@ -2,8 +2,8 @@
 
 **Specification ID:** S20  
 **Tier:** 10 — Data Product Formats  
-**Status:** Draft  
-**Date:** 2026-04-11  
+**Status:** Implemented (v0.2)  
+**Date:** 2026-04-11 (rev. 2026-04-11)  
 **Author:** Scott Sewell / HAO-NCAR  
 **Repository:** `soc_sewell`  
 **Related specs:** S01–S19, Z01  
@@ -53,13 +53,13 @@ Example: `windcube_l2_20270315_v01.nc`
 
 ## 4. Dimensions
 
-| Dimension | Symbol | Description |
-|---|---|---|
-| `obs` | N_obs | Number of merged wind vector samples in the file. Unlimited (extendable). |
-| `pair` | 2 | Index over the two orbit look directions (along-track = 0, cross-track = 1). |
-| `strlen` | 16 | Fixed length for short enumerated string flags. |
+| Dimension | Symbol | Description | Status |
+|---|---|---|---|
+| `obs` | N_obs | Number of merged wind vector samples in the file. Unlimited (extendable). | **Active** |
+| `pair` | 2 | Reserved for future use: index over the two orbit look directions (along-track = 0, cross-track = 1). | **Reserved — not yet used by any variable** |
+| `strlen` | 16 | Reserved for future use: fixed length for short enumerated string flag variables. | **Reserved — not yet used by any variable** |
 
-> **Design note:** `obs` is the primary scientific index. Each observation corresponds to one merged (u, v) wind vector located at a geolocated thermospheric tangent point, combining data from an adjacent along-track / cross-track orbit pair.
+> **Design note:** `obs` is the only dimension currently used by implemented variables. `pair` and `strlen` are reserved for future schema extensions (e.g., storing per-orbit-pair geometry matrices or string-typed quality flags). They are **not created** in the current `m08_l2_writer.py` implementation and should be added if and when variables requiring them are defined. This resolves Implementation Open Question 3.
 
 ---
 
@@ -150,7 +150,13 @@ All coordinate variables have dimension `(obs)`. These are the primary independe
 
 ## 7. Science data variables
 
-All science variables have dimension `(obs)` and type `float32` unless noted. Fill value is `NaN` (IEEE 754) for all float variables.
+All science variables have dimension `(obs)` and type `float32` unless noted.
+
+**Fill value convention — AUTHORITATIVE:** Fill value for all `float32` variables is `np.float32(np.nan)` (IEEE 754 NaN). This is the value that netCDF4-python writes to the `_FillValue` attribute and uses to auto-mask missing elements on readback. The CF-1.8 default sentinel `9.96921e36` is **not used** for float32 variables in this schema. Rationale: IEEE NaN propagates correctly through NumPy arithmetic (masked results remain NaN without silent data corruption), whereas the CF sentinel would require explicit masking before every computation. The FORTRAN Merger (Qian Wu) should treat any float value where `isnan(x) == .true.` as missing.
+
+**Fill value for `float64`** (`time` only): the netCDF4-python default `9.969209968386869e+36` is used, consistent with CF §7.3 for coordinate variables. This is the standard CF fill for double precision and is intentional.
+
+**Fill value for `uint8` flags:** `255` (all bits set). **Fill value for `int32`:** `-2147483647` (INT32_MIN + 1, per CF convention).
 
 ### 7.1 Primary wind vector components
 
@@ -393,7 +399,7 @@ import netCDF4 as nc
 from datetime import datetime, timezone
 
 
-FILL_F32 = np.float32(9.96921e36)   # CF default fill for float32
+FILL_F32 = np.float32(np.nan)        # IEEE NaN — authoritative fill for all float32 vars (see §7)
 FILL_U8  = np.uint8(255)
 FILL_I32 = np.int32(-2147483647)
 
@@ -772,13 +778,13 @@ A L2 file is considered schema-conformant when:
 
 ## 16. Open questions and future work
 
-| # | Question | Priority |
-|---|---|---|
-| 1 | Should L2 files be daily or per-orbit? Per-orbit would simplify reprocessing. | Medium |
-| 2 | Should `altitude` be a fixed scalar (e.g., 250.0 km nominal) or computed per-obs from emission-weighted radiative transfer? | High — needed before first flight data |
-| 3 | Merger geometry matrix elements: store as ancillary variable for transparency? | Low |
-| 4 | SPDF/CDF-A compliant metadata for NASA OMNIWeb submission? | Medium — needed for SQ1/SQ2 archive |
-| 5 | Version-controlled calibration chain: should `calibration_file` point to a DOI or a local path? | Medium |
+| # | Question | Priority | Status |
+|---|---|---|---|
+| 1 | Should L2 files be daily or per-orbit? Per-orbit would simplify reprocessing. | Medium | Open |
+| 2 | Should `altitude` be a fixed scalar (e.g., 250.0 km nominal) or computed per-obs from emission-weighted radiative transfer? | High — needed before first flight data | Open |
+| 3 | `pair` and `strlen` dimensions — no current variables use them; omitted from v0.2 implementation. Add when variables requiring them are defined. | Low | **Resolved — see §4** |
+| 4 | SPDF/CDF-A compliant metadata for NASA OMNIWeb submission? | Medium — needed for SQ1/SQ2 archive | Open |
+| 5 | Version-controlled calibration chain: should `calibration_file` point to a DOI or a local path? | Medium | Open |
 
 ---
 
@@ -787,6 +793,7 @@ A L2 file is considered schema-conformant when:
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-04-11 | Initial draft — S20 |
+| 0.2 | 2026-04-11 | Post-implementation sync from Claude Code report. (1) `FILL_F32` changed from `9.96921e36` to `np.float32(np.nan)` — §7 and §13 now consistent; NaN is authoritative. (2) §4 dimensions table updated: `pair` and `strlen` marked Reserved/not-yet-created. (3) §16 open question 3 resolved. (4) Status updated to Implemented. |
 
 ---
 
