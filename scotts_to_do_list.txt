@@ -1,0 +1,19 @@
+Start working on better physics:
+figure out how to reduce the number of fringes in an airglow synthesis by limiting the field of view to 1.65 degrees with details of the field stop.  Use claude ai to readin in an optical design description perhpas from zemax or from some export r from my own explanation
+
+
+process delaney's lab images of the 630 neon lamp line propagatedthrough the fieldsteop
+and get tolansky working (1-line) as this should providce
+and independent measure of of etalong gap from the 2-line tolansky using th cal images
+
+develop a more accurate source strength model
+start by seeing how source strenght is define in the pipline but
+then go back and ask claude to load and summarize alfred's signal code
+It should, I believe create a voume emission rate model (as a function of altitude) based
+on some of our papers
+
+the VER model will be used by the orbitl propatator tool with the desired tangent height
+as an input parameter.
+
+then the signal is calculated as the integration of the 1.65 degree FOV centerd on this tangent 
+height using the aforementioned volume emission rate model
