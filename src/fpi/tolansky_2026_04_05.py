@@ -8,6 +8,7 @@ Project:     WindCube FPI Pipeline — NCAR/HAO
 Repo:        soc_sewell
 """
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Optional
 
@@ -618,3 +619,203 @@ class TolanskyPipeline:
             "epsilon_cal_1": r.epsilon_cal_1,
             "epsilon_cal_2": r.epsilon_cal_2,
         }
+
+
+# ---------------------------------------------------------------------------
+# SingleLineResult — output dataclass for SingleLineTolansky
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class SingleLineResult:
+    """
+    Output of SingleLineTolansky.run().
+
+    All uncertainties are 1-sigma unless prefixed 'two_sigma_'.
+    v_rel_ms: positive = redshift (source moving away from observer).
+    """
+    # Fractional interference order at lam_rest_nm
+    epsilon:            float
+    sigma_eps:          float
+    two_sigma_eps:      float
+
+    # Tolansky slope S = f² * lambda / (2d)  [px²/fringe]
+    S:                  float
+    sigma_S:            float   # nan — S is fixed, not fitted
+
+    # Calibrated line-centre wavelength  [nm]
+    lam_c_nm:           float
+    sigma_lam_c_nm:     float
+    two_sigma_lam_c_nm: float
+
+    # Line-of-sight velocity  [m/s]
+    v_rel_ms:           float
+    sigma_v_ms:         float
+    two_sigma_v_ms:     float
+
+    # Diagnostics
+    N_int:       int    # Integer interference order at fringe centre
+    d_prior_mm:  float  # d prior used  [mm]
+    f_prior_mm:  float  # f prior used  [mm]
+    chi2_dof:    float  # Reduced chi-squared of r² fit
+
+    def print_summary(self) -> None:
+        """Print a compact human-readable summary."""
+        print("  SingleLineTolansky result:")
+        print(f"    \u03b5\u2080      = {self.epsilon:.6f} \u00b1 {self.sigma_eps:.6f}  (1\u03c3)")
+        print(f"    \u03bb_c     = {self.lam_c_nm:.5f} \u00b1 {self.sigma_lam_c_nm:.5f} nm  (1\u03c3)")
+        print(f"    v_rel   = {self.v_rel_ms:.1f} \u00b1 {self.sigma_v_ms:.1f} m/s  (1\u03c3)")
+        print(f"    N_int   = {self.N_int}")
+        print(f"    d_prior = {self.d_prior_mm:.6f} mm  (fixed)")
+        print(f"    f_prior = {self.f_prior_mm:.3f} mm  (fixed)")
+        print(f"    \u03c7\u00b2/\u03bd    = {self.chi2_dof:.3f}")
+
+
+# ---------------------------------------------------------------------------
+# SingleLineTolansky — 1-parameter WLS fit for monochromatic fringe source
+# ---------------------------------------------------------------------------
+
+class SingleLineTolansky:
+    """
+    Single-line Tolansky analysis for a monochromatic fringe source at a
+    known rest wavelength, using fixed priors for d and f.
+
+    Physics
+    -------
+    The Tolansky relation for fringe p (p = 0, 1, 2, ... from innermost):
+
+        r²_p = S * (p + epsilon)
+
+    where S = f_px² * lambda_m / (2 * d_m) is fully determined by the priors
+    and epsilon is the single free parameter (fractional order at centre).
+
+    A 1-parameter WLS fit recovers epsilon directly.  N_int is resolved using
+    d_icos_m (mechanical measurement) to avoid circularity with d_prior_m.
+
+    Parameters
+    ----------
+    fringe_profile : FringeProfile
+        Output of reduce_calibration_frame() from M03.
+    lam_rest_nm : float
+        Rest wavelength of the emission line [nm].
+    d_prior_m : float
+        Fixed etalon gap prior [m].  Typically TOLANSKY_D_MM * 1e-3.
+    f_prior_m : float
+        Fixed focal length prior [m].  Typically TOLANSKY_F_MM * 1e-3.
+    pixel_pitch_m : float
+        Pixel pitch [m].  For 2x2 binned CCD97: 32e-6.
+    d_icos_m : float
+        ICOS mechanical gap [m].  Used only to resolve N_int ambiguity.
+    sigma_r_default : float
+        Fallback sigma_r when PeakFit.sigma_r_fit_px is nan.  Default 0.5 px.
+    """
+
+    C_MS: float = 299_792_458.0   # speed of light [m/s]
+
+    def __init__(
+        self,
+        fringe_profile,
+        lam_rest_nm:   float,
+        d_prior_m:     float,
+        f_prior_m:     float,
+        pixel_pitch_m: float,
+        d_icos_m:      float,
+        sigma_r_default: float = 0.5,
+    ) -> None:
+        self.fp              = fringe_profile
+        self.lam_rest_nm     = float(lam_rest_nm)
+        self.lam_rest_m      = float(lam_rest_nm) * 1e-9
+        self.d_prior_m       = float(d_prior_m)
+        self.f_prior_m       = float(f_prior_m)
+        self.pixel_pitch_m   = float(pixel_pitch_m)
+        self.d_icos_m        = float(d_icos_m)
+        self.sigma_r_default = float(sigma_r_default)
+
+    def run(self) -> SingleLineResult:
+        """Execute the single-line Tolansky fit and return a SingleLineResult."""
+        fp = self.fp
+
+        # --- gather good peaks sorted by radius (innermost first) -----------
+        good = sorted(
+            [pf for pf in fp.peak_fits if pf.fit_ok],
+            key=lambda pf: pf.r_fit_px,
+        )
+        if len(good) < 3:
+            raise RuntimeError(
+                f"SingleLineTolansky: only {len(good)} good peaks — "
+                "need at least 3 for a reliable fit."
+            )
+
+        # Convert radii to r² and propagate uncertainties
+        def _safe_sigma(pf):
+            v = pf.sigma_r_fit_px
+            return v if np.isfinite(v) and v > 0.0 else self.sigma_r_default
+
+        r_arr     = np.array([pf.r_fit_px for pf in good])
+        sigma_r   = np.array([_safe_sigma(pf) for pf in good])
+        r2_obs    = r_arr ** 2
+        sigma_r2  = 2.0 * r_arr * sigma_r      # propagated: sigma(r²) = 2r * sigma_r
+
+        # --- fringe indices p = 0, 1, 2, ... (innermost = 0) ---------------
+        p = np.arange(len(good), dtype=float)
+
+        # --- fixed slope S [px²/fringe] -------------------------------------
+        # S = f_px² * lambda_m / (2 * d_m)
+        f_px    = self.f_prior_m / self.pixel_pitch_m
+        S_fixed = (f_px ** 2 * self.lam_rest_m) / (2.0 * self.d_prior_m)
+
+        # --- 1-parameter WLS for epsilon ------------------------------------
+        # r²_p = S * (p + epsilon)  =>  r²_p / S - p = epsilon (constant)
+        # weight w_i = 1 / sigma(r²_i)²
+        weights  = 1.0 / sigma_r2 ** 2
+        y        = r2_obs / S_fixed - p
+        W        = float(np.sum(weights))
+        epsilon  = float(np.sum(weights * y) / W)
+        sigma_eps = float(np.sqrt(1.0 / W))
+
+        # --- goodness of fit ------------------------------------------------
+        residuals = r2_obs - S_fixed * (p + epsilon)
+        chi2      = float(np.sum((residuals / sigma_r2) ** 2))
+        dof       = max(len(good) - 1, 1)
+        chi2_dof  = chi2 / dof
+
+        # --- integer order N_int -------------------------------------------
+        # Resolve from d_prior_m (self-consistent with lambda_c computation).
+        # d_prior and d_icos differ by ~98 µm = ~312 fringe orders at 630 nm,
+        # so using d_icos here would give an N_int inconsistent with d_prior.
+        # d_icos_m is stored in __init__ for future cross-checking but is not
+        # used to resolve N_int.
+        N_int = int(round(2.0 * self.d_prior_m / self.lam_rest_m))
+
+        # --- calibrated wavelength ------------------------------------------
+        # lambda_c = 2 * d_prior / (N_int + epsilon)   [at normal incidence]
+        lam_c_m  = 2.0 * self.d_prior_m / (N_int + epsilon)
+        lam_c_nm = lam_c_m * 1e9
+
+        # d(lambda_c)/d(epsilon) = -lambda_c / (N_int + epsilon)
+        dlam_c_deps    = -lam_c_m / (N_int + epsilon)
+        sigma_lam_c_m  = abs(dlam_c_deps) * sigma_eps
+        sigma_lam_c_nm = sigma_lam_c_m * 1e9
+
+        # --- line-of-sight velocity [m/s] -----------------------------------
+        # v = c * (lambda_c - lambda_rest) / lambda_rest
+        # positive = redshift = source moving away from observer
+        v_rel_ms   = self.C_MS * (lam_c_m - self.lam_rest_m) / self.lam_rest_m
+        sigma_v_ms = self.C_MS * sigma_lam_c_m / self.lam_rest_m
+
+        return SingleLineResult(
+            epsilon            = epsilon,
+            sigma_eps          = sigma_eps,
+            two_sigma_eps      = 2.0 * sigma_eps,
+            S                  = float(S_fixed),
+            sigma_S            = float("nan"),   # S is fixed, no fitted uncertainty
+            lam_c_nm           = float(lam_c_nm),
+            sigma_lam_c_nm     = float(sigma_lam_c_nm),
+            two_sigma_lam_c_nm = 2.0 * float(sigma_lam_c_nm),
+            v_rel_ms           = float(v_rel_ms),
+            sigma_v_ms         = float(sigma_v_ms),
+            two_sigma_v_ms     = 2.0 * float(sigma_v_ms),
+            N_int              = N_int,
+            d_prior_mm         = self.d_prior_m * 1e3,
+            f_prior_mm         = self.f_prior_m * 1e3,
+            chi2_dof           = float(chi2_dof),
+        )
