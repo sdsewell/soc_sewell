@@ -778,11 +778,11 @@ def main() -> None:
     print()
 
     # ── Prompt: etalon gap ────────────────────────────────────────────────
-    T_DEFAULT = 20.106
+    T_DEFAULT = 20.106  # discredited Tolansky fit; true gap is D_25C_MM ≈ 20.008 mm
     T_MIN, T_MAX = 19.5, 20.5
     while True:
         print(f"  Etalon gap [mm]")
-        print(f"    Default: {T_DEFAULT} mm  (operational Tolansky value)")
+        print(f"    Default: {T_DEFAULT} mm  (discredited Tolansky fit; true gap ~20.008 mm)")
         print(f"    Range:   {T_MIN} – {T_MAX} mm")
         raw = input(f"  ➤ Enter etalon gap [{T_DEFAULT}]: ").strip()
         if raw == "":

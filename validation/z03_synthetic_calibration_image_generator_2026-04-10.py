@@ -170,7 +170,7 @@ def prompt_all_params() -> SynthParams:
         print(" INSTRUMENTAL PARAMETERS")
         print("─" * 62)
         d_mm = _validated_prompt(
-            "d_mm", "Etalon gap d", 20.106, "mm"
+            "d_mm", "Etalon gap d", 20.106, "mm"  # 20.106 is discredited Tolansky fit; true gap ~20.008 mm
         )
         f_mm = _validated_prompt(
             "f_mm", "Imaging lens focal length f", 199.12, "mm"

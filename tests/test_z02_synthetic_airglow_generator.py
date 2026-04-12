@@ -1,6 +1,9 @@
 """
 Tests for Z02 synthetic airglow image generator.
 
+NOTE: Tests use t_m=20.106e-3 (the discredited Tolansky fit gap) to preserve
+historical test physics. The true operational gap is D_25C_MM ≈ 20.008 mm.
+
 Spec:    specs/Z02_synthetic_airglow_image_generator_2026-04-10.md
 Script:  scripts/z02_synthetic_airglow_generator_2026-04-10.py
 

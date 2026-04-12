@@ -33,10 +33,9 @@ from src.fpi.m03_annular_reduction_2026_04_06 import (
 from src.fpi.tolansky_2026_04_05 import SingleLineTolansky, SingleLineResult
 from windcube.constants import (
     OI_WAVELENGTH_NM,
-    TOLANSKY_D_MM,
-    TOLANSKY_F_MM,
+    D_25C_MM,
+    F_TOLANSKY_MM,
     CCD_PIXEL_PITCH_M,
-    ICOS_GAP_MM,
 )
 
 
@@ -623,10 +622,10 @@ def figure_tolansky_1line(
     analyser = SingleLineTolansky(
         fringe_profile = fp,
         lam_rest_nm    = OI_WAVELENGTH_NM,
-        d_prior_m      = TOLANSKY_D_MM * 1e-3,
-        f_prior_m      = TOLANSKY_F_MM * 1e-3,
+        d_prior_m      = D_25C_MM * 1e-3,       # best physical estimate at 25°C
+        f_prior_m      = F_TOLANSKY_MM * 1e-3,  # Z01 fit result, used for S only
         pixel_pitch_m  = CCD_PIXEL_PITCH_M,
-        d_icos_m       = ICOS_GAP_MM * 1e-3,
+        d_ref_m        = D_25C_MM * 1e-3,
     )
     result = analyser.run()
 
@@ -708,7 +707,7 @@ def figure_tolansky_1line(
          f"{result.S:.3f}",
          "\u2014  (fixed)",
          "\u2014  (fixed)",
-         "px\u00b2/fringe", f"d={TOLANSKY_D_MM:.3f} mm, f={TOLANSKY_F_MM:.2f} mm"],
+         "px\u00b2/fringe", f"d={D_25C_MM:.3f} mm (D_25C), f={F_TOLANSKY_MM:.2f} mm"],
         ["Line-centre \u03bb",  "\u03bb_c",
          f"{result.lam_c_nm:.5f}",
          f"{result.sigma_lam_c_nm:.5f}",

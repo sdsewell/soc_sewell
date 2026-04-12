@@ -16,6 +16,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from src.fpi.tolansky_2026_04_05 import SingleLineTolansky, SingleLineResult
 
+# Fractional order at centre for OI 630 nm at D_25C_MM — physically consistent
+# Used in velocity tests so that the injected epsilon matches the (d, lam) pair.
+# eps = (2 * D_25C_MM * 1e-3 / 630.0e-9) % 1 = 63517.2355... % 1 ≈ 0.2355
+_EPS_OI630 = (2.0 * 20.007929197e-3 / 630.0e-9) % 1.0
+
 
 # ---------------------------------------------------------------------------
 # Minimal FringeProfile stub — mirrors real M03 PeakFit attribute names
@@ -42,7 +47,7 @@ class FringeProfileStub:
 def make_synthetic_profile(
     n_peaks:  int   = 7,
     epsilon:  float = 0.45,
-    d_m:      float = 20.106e-3,
+    d_m:      float = 20.007929197e-3,
     f_m:      float = 199.12e-3,
     pitch_m:  float = 32e-6,
     lam_nm:   float = 630.0,
@@ -99,8 +104,8 @@ class TestSingleLineResult:
         fp = make_synthetic_profile()
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         r = analyser.run()
         assert r.two_sigma_eps      == pytest.approx(2 * r.sigma_eps,      rel=1e-10)
@@ -112,8 +117,8 @@ class TestSingleLineResult:
         fp = make_synthetic_profile()
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         r = analyser.run()
         assert math.isnan(r.sigma_S), "sigma_S should be nan for a fixed slope"
@@ -126,8 +131,8 @@ class TestSingleLineTolansky:
         fp = make_synthetic_profile(epsilon=eps_true, sigma_r=1e-6)
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         assert result.epsilon == pytest.approx(eps_true, abs=1e-4)
@@ -136,12 +141,15 @@ class TestSingleLineTolansky:
         """
         When the profile is generated at lam_rest_nm exactly, v_rel should
         be near 0 m/s (within a few tens of m/s for noisy data).
+        Uses _EPS_OI630 so that injected epsilon is consistent with D_25C_MM
+        at 630 nm — necessary for lambda_c to recover as lam_rest.
         """
-        fp = make_synthetic_profile(lam_nm=630.0, sigma_r=0.05, seed=0)
+        fp = make_synthetic_profile(lam_nm=630.0, sigma_r=0.05, seed=0,
+                                    epsilon=_EPS_OI630)
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         assert abs(result.v_rel_ms) < 50.0, (
@@ -150,14 +158,16 @@ class TestSingleLineTolansky:
 
     def test_velocity_sign_redshift(self):
         """
-        Analysing a 630.0 nm profile with a shorter rest wavelength (629.99 nm)
+        Analysing a 630.0 nm profile with a shorter rest wavelength (629.95 nm)
         makes lambda_c appear longer than lambda_rest => positive v (redshift).
+        Uses _EPS_OI630 (0.236) so epsilon < threshold gap (0.277 from 629.95 nm
+        boundary), keeping the velocity sign positive.
         """
-        fp = make_synthetic_profile(lam_nm=630.0, sigma_r=1e-6)
+        fp = make_synthetic_profile(lam_nm=630.0, sigma_r=1e-6, epsilon=_EPS_OI630)
         analyser = SingleLineTolansky(
-            fringe_profile=fp, lam_rest_nm=629.99,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            fringe_profile=fp, lam_rest_nm=629.95,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         assert result.v_rel_ms > 0, "Expected positive v_rel (redshift)"
@@ -167,8 +177,8 @@ class TestSingleLineTolansky:
         fp = make_synthetic_profile(n_peaks=2)
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         with pytest.raises(RuntimeError, match="only 2 good peaks"):
             analyser.run()
@@ -178,8 +188,8 @@ class TestSingleLineTolansky:
         fp = make_synthetic_profile(n_peaks=7, sigma_r=0.05, seed=7)
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         assert 0.1 < result.chi2_dof < 10.0, (
@@ -190,8 +200,8 @@ class TestSingleLineTolansky:
         fp = make_synthetic_profile()
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         result.print_summary()
@@ -204,8 +214,8 @@ class TestSingleLineTolansky:
         fp = make_synthetic_profile()
         analyser = SingleLineTolansky(
             fringe_profile=fp, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         result = analyser.run()
         assert 19.0 < result.d_prior_mm < 22.0, (
@@ -228,13 +238,13 @@ class TestSingleLineTolansky:
         )
         analyser_all = SingleLineTolansky(
             fringe_profile=fp_all, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         analyser_bad = SingleLineTolansky(
             fringe_profile=fp_with_bad, lam_rest_nm=630.0,
-            d_prior_m=20.106e-3, f_prior_m=199.12e-3,
-            pixel_pitch_m=32e-6, d_icos_m=20.008e-3,
+            d_prior_m=20.007929197e-3, f_prior_m=199.12e-3,
+            pixel_pitch_m=32e-6, d_ref_m=20.007929197e-3,
         )
         r_all = analyser_all.run()
         r_bad = analyser_bad.run()

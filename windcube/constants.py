@@ -6,8 +6,7 @@ here rather than hardcoding.
 
 Sources:
   OI_WAVELENGTH_NM    : NIST atomic line database
-  TOLANSKY_D_MM       : Z01 two-line neon Tolansky fit (FlatSat)
-  TOLANSKY_F_MM       : Z01 two-line neon Tolansky fit (FlatSat)
+  F_TOLANSKY_MM       : Z01 two-line neon Tolansky fit (FlatSat) — focal length only
   ALPHA_RAD_PX        : Z01 two-line neon Tolansky fit (2x2 binned)
   ICOS_GAP_MM         : ICOS mechanical spacer measurement
   D_25C_MM            : ICOS_GAP_MM minus Pat & Nir pre-load compression
@@ -44,13 +43,17 @@ NE_WAVELENGTH_2_NM: float = 638.2991   # rounded to 4 d.p. per S03
 # Recovered from Z01 two-line neon Tolansky fit on FlatSat data
 # ---------------------------------------------------------------------------
 
-# Etalon gap recovered by Tolansky two-line fit [mm]
-# NOTE: ~98 um larger than D_25C_MM -- discrepancy under investigation
-TOLANSKY_D_MM: float = 20.106
+# Focal length recovered from Z01 two-line neon Tolansky fit [mm]
+# COTS lens ~0.68% short of nominal 200 mm.
+# This is a fit result, not a physical constant — used explicitly at
+# call sites rather than imported as a pipeline constant.
+# Stored here for reference only; do not use as a prior for d.
+F_TOLANSKY_MM: float = 199.12
 
-# Focal length recovered by Tolansky two-line fit [mm]
-# COTS lens ~0.68% short of nominal 200 mm
-TOLANSKY_F_MM: float = 199.12
+# NOTE: There is no D_TOLANSKY_MM constant. The Tolansky-recovered
+# d (~20.106 mm) disagrees with D_25C_MM by ~98 µm and the discrepancy
+# is unresolved. All pipeline code must use D_25C_MM for N_int resolution
+# and must not assume a specific etalon gap prior for d.
 
 # Plate scale (2x2 binned) recovered by Tolansky two-line fit [rad/px]
 # Old value 8.5e-5 rad/px permanently retired

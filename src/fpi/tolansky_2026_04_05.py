@@ -698,13 +698,18 @@ class SingleLineTolansky:
     lam_rest_nm : float
         Rest wavelength of the emission line [nm].
     d_prior_m : float
-        Fixed etalon gap prior [m].  Typically TOLANSKY_D_MM * 1e-3.
+        Etalon gap prior used to compute the Tolansky slope S [m].
+        IMPORTANT: This is NOT used to resolve N_int — that uses d_ref_m.
+        The source of this value is the caller's responsibility. For Z01a,
+        pass the best available estimate (e.g. D_25C_MM * 1e-3). Do not
+        hardcode 20.106e-3 here — that value is a discredited fit result.
     f_prior_m : float
-        Fixed focal length prior [m].  Typically TOLANSKY_F_MM * 1e-3.
+        Fixed focal length prior [m].  Typically F_TOLANSKY_MM * 1e-3.
     pixel_pitch_m : float
         Pixel pitch [m].  For 2x2 binned CCD97: 32e-6.
-    d_icos_m : float
-        ICOS mechanical gap [m].  Used only to resolve N_int ambiguity.
+    d_ref_m : float
+        Reference etalon gap [m].  Used only to resolve N_int ambiguity.
+        Use D_25C_MM * 1e-3 (best mechanical estimate at 25°C setpoint).
     sigma_r_default : float
         Fallback sigma_r when PeakFit.sigma_r_fit_px is nan.  Default 0.5 px.
     """
@@ -718,7 +723,7 @@ class SingleLineTolansky:
         d_prior_m:     float,
         f_prior_m:     float,
         pixel_pitch_m: float,
-        d_icos_m:      float,
+        d_ref_m:       float,
         sigma_r_default: float = 0.5,
     ) -> None:
         self.fp              = fringe_profile
@@ -727,7 +732,7 @@ class SingleLineTolansky:
         self.d_prior_m       = float(d_prior_m)
         self.f_prior_m       = float(f_prior_m)
         self.pixel_pitch_m   = float(pixel_pitch_m)
-        self.d_icos_m        = float(d_icos_m)
+        self.d_ref_m         = float(d_ref_m)
         self.sigma_r_default = float(sigma_r_default)
 
     def run(self) -> SingleLineResult:
@@ -780,10 +785,8 @@ class SingleLineTolansky:
 
         # --- integer order N_int -------------------------------------------
         # Resolve from d_prior_m (self-consistent with lambda_c computation).
-        # d_prior and d_icos differ by ~98 µm = ~312 fringe orders at 630 nm,
-        # so using d_icos here would give an N_int inconsistent with d_prior.
-        # d_icos_m is stored in __init__ for future cross-checking but is not
-        # used to resolve N_int.
+        # d_ref_m is stored in __init__ for reference / cross-checking but is
+        # not used to resolve N_int (N_int is computed from d_prior_m).
         N_int = int(round(2.0 * self.d_prior_m / self.lam_rest_m))
 
         # --- calibrated wavelength ------------------------------------------
