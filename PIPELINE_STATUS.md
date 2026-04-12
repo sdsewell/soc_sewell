@@ -21,6 +21,7 @@
 | S19  | P01         | impl   | passing  | 2026-04-06    |
 | S20  | L2 product  | impl   | passing  | 2026-04-11    |
 | Z01  | validate-cal| impl   | 6-stage  | 2026-04-11    |
+| Z01a | OI630-cal   | impl   | 7-stage  | 2026-04-12    |
 | Z02  | airglow-gen | impl   | 8/8      | 2026-04-10    |
 | Z03  | cal-gen     | impl   | passing  | 2026-04-10    |
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
