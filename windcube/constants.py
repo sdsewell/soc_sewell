@@ -95,3 +95,38 @@ ETALON_THERMAL_NM_C: float = 18.585
 
 # 2x2 binned pixel pitch [m]  (16 um native x 2)
 CCD_PIXEL_PITCH_M: float = 32e-6
+
+# ---------------------------------------------------------------------------
+# WindCube instrument / detector constants  (S07b / NB03 addendum)
+# ---------------------------------------------------------------------------
+
+# Entrance pupil area.  Placeholder value — update when aperture is
+# confirmed from the as-built optical design.
+APERTURE_M2: float = 0.06 * 0.03          # m²  (60 mm × 30 mm rectangular pupil)
+
+# Total optical throughput: filters, mirrors, beamsplitters, etalon
+# transmission losses.  From WindCube.py (A. Ridley).  Treat as
+# provisional until measured on FlatSat.
+OPTICAL_THROUGHPUT: float = 0.85           # dimensionless
+
+# CCD97 quantum efficiency at 630 nm.  From Teledyne e2v CCD97 datasheet.
+# Treat as provisional until device-level characterisation.
+CCD97_QE_630NM: float = 0.90               # electrons / photon
+
+# EMCCD electron multiplication gain.  Set to 1.0 (conventional CCD mode)
+# until EM gain calibration is available.  Update when flight gain
+# setting is determined.
+EM_GAIN: float = 1.0                       # dimensionless
+
+# Nominal science frame integration time.
+INTEGRATION_TIME_S: float = 10.0           # seconds
+
+# Plate scale (2×2 binned).  Authoritative Tolansky value from S09/S13.
+# Reproduced here so NB03 can compute pixel solid angle without
+# importing from M01 (which would create a circular Tier dependency).
+ALPHA_RAD_PER_PX: float = 1.6071e-4        # rad / binned pixel
+
+# Orbital and observation geometry defaults
+ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit
+TANGENT_ALTITUDE_M: float = 250_000.0     # m, nominal thermospheric tangent height
+VER_LAYER_TOP_M:    float = 490_000.0     # m, upper bound of emission layer for LOS integration
