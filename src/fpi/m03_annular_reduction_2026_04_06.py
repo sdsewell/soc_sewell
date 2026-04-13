@@ -385,12 +385,17 @@ def azimuthal_variance_centre(
     var_r_max_px: float  = None,
     var_n_bins: int      = 250,
     var_search_px: float = 15.0,
+    return_grid: bool    = False,
 ) -> tuple:
     """
     Pass 1: coarse grid, spacing max(2.0, var_search_px/8), ±var_search_px.
     Pass 2: Nelder-Mead from Pass 1 minimum.
             xatol=0.02, fatol=1.0, maxiter=500.
     Returns (cx_fine, cy_fine, cost_min, grid_cx, grid_cy, grid_cost).
+    If return_grid=True, returns an additional tuple element:
+        (cx_fine, cy_fine, cost_min, grid_cx, grid_cy, grid_cost,
+         all_cx, all_cy, all_cost)
+    where all_cx, all_cy, all_cost are 1D arrays of every grid-search point.
     Single-pass Nelder-Mead MUST NOT be used — it fails T2.
     """
     rows, cols = image.shape
@@ -436,13 +441,23 @@ def azimuthal_variance_centre(
     best_cx   = cx_seed
     best_cy   = cy_seed
 
+    # Collect all grid evaluations for optional return_grid output
+    all_grid_cx   = []
+    all_grid_cy   = []
+    all_grid_cost = []
+
     for dcx in offsets:
         for dcy in offsets:
-            cost = _fast_cost(cx_seed + dcx, cy_seed + dcy)
+            trial_cx = cx_seed + dcx
+            trial_cy = cy_seed + dcy
+            cost = _fast_cost(trial_cx, trial_cy)
+            all_grid_cx.append(trial_cx)
+            all_grid_cy.append(trial_cy)
+            all_grid_cost.append(cost)
             if cost < best_cost:
                 best_cost = cost
-                best_cx   = cx_seed + dcx
-                best_cy   = cy_seed + dcy
+                best_cx   = trial_cx
+                best_cy   = trial_cy
 
     grid_cx   = best_cx
     grid_cy   = best_cy
@@ -460,6 +475,10 @@ def azimuthal_variance_centre(
     cy_fine  = float(result.x[1])
     cost_min = float(result.fun)
 
+    if return_grid:
+        return (cx_fine, cy_fine, cost_min, grid_cx, grid_cy, grid_cost,
+                np.array(all_grid_cx), np.array(all_grid_cy),
+                np.array(all_grid_cost))
     return (cx_fine, cy_fine, cost_min, grid_cx, grid_cy, grid_cost)
 
 
