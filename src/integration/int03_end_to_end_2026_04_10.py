@@ -486,6 +486,10 @@ def stage_e_fpi_chain(config: dict, obs_list: list, cal_results: dict) -> tuple:
     fp_cal  = cal_results["fp_cal"]
     n_total = len(obs_list)
 
+    # NB03: physically grounded I_line (replaces I_line=1.0 placeholder)
+    from src.fpi.nb03_ver_source_model_2026_04_12 import compute_signal_budget
+    _I_line = compute_signal_budget()['I_line']
+
     print(f"\n[Stage E] FPI chain — {n_total} observations:")
 
     for k, obs in enumerate(obs_list):
@@ -502,6 +506,7 @@ def stage_e_fpi_chain(config: dict, obs_list: list, cal_results: dict) -> tuple:
             snr       = snr_val,
             add_noise = add_noise,
             rng       = rng_sci,
+            I_line    = _I_line,
         )
         sci_clean = sci_synth["image_2d"]
 

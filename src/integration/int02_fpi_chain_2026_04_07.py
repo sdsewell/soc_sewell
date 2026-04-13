@@ -543,6 +543,10 @@ def stage_g_synthesise_sci(config: dict, dark_results: dict) -> dict:
     params = config["params"]
     sci_results = {}
 
+    # NB03: physically grounded I_line (replaces I_line=1.0 placeholder)
+    from src.fpi.nb03_ver_source_model_2026_04_12 import compute_signal_budget
+    _I_line = compute_signal_budget()['I_line']
+
     print(f"\n[Stage G] Airglow synthesis:")
     for v_truth in config["v_truth_ms"]:
         sci = synthesise_airglow_image(
@@ -551,6 +555,7 @@ def stage_g_synthesise_sci(config: dict, dark_results: dict) -> dict:
             snr=config["snr"],
             add_noise=True,
             rng=config["rng_sci"][v_truth],
+            I_line=_I_line,
         )
         # Add dark to science image to simulate raw CCD output (Stage H subtracts it)
         dark_arr = dark_results["dark_array"].astype(np.float64)

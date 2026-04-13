@@ -238,11 +238,14 @@ def synthesise_and_embed(
 
     # Step 3: synthesise
     from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    # NB03: physically grounded I_line (replaces I_line=1.0 placeholder)
+    from src.fpi.nb03_ver_source_model_2026_04_12 import compute_signal_budget
+    _I_line = compute_signal_budget()['I_line']
     if rng is None:
         rng = np.random.default_rng(42)
     result = synthesise_airglow_image(
         v_rel_ms=v_rel_ms, params=params, snr=snr,
-        image_size=image_size, add_noise=True, rng=rng
+        image_size=image_size, add_noise=True, rng=rng, I_line=_I_line
     )
     img_float = result["image_2d"]   # (256, 256) float64, counts
 
