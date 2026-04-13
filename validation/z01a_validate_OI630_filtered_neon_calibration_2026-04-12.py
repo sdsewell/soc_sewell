@@ -67,7 +67,7 @@ def load_headerless_bin(path: pathlib.Path, shape: tuple) -> np.ndarray:
 # Stage A — load_images  (Z01a variant)
 # ---------------------------------------------------------------------------
 
-def load_images(image_shape: tuple = (256, 256)) -> dict:
+def load_images(image_shape: tuple = (259, 276)) -> dict:
     """
     Load a headerless calibration image and dark image via file dialogs.
 
@@ -799,7 +799,7 @@ def main() -> None:
 
     # Stage A
     print("\nStage A: Loading images...")
-    load = load_images()
+    load = load_images(image_shape=(259, 276))
     print(f"  CAL:  {load['cal_path'].name}  ({load['cal_type']})")
     print(f"  DARK: {load['dark_path'].name}  ({load['dark_type']})")
 
