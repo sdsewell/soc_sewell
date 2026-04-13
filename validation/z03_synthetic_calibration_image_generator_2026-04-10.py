@@ -14,7 +14,7 @@ companion _truth.json sidecar and _diagnostic.png figure.
 Stages:
   A — Banner + parameter prompting
   B — Derive secondary optical parameters
-  C — Synthesise two-line neon Airy fringe image (noise-free)
+  C — Synthesize two-line neon Airy fringe image (noise-free)
   D — Apply Poisson + Gaussian read noise
   E — Build and embed S19-compliant JSON metadata into rows 0-3
   F — Write .bin file + _truth.json sidecar
@@ -33,15 +33,14 @@ import numpy as np
 # Fixed output directory (same repo as Z02 synthesized data)
 # ---------------------------------------------------------------------------
 OUTPUT_DIR = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\soc_synthesized_data")
-
 # ---------------------------------------------------------------------------
 # Fixed default parameters (Section 6 of spec)
 # ---------------------------------------------------------------------------
 R            = 0.82           # plate reflectivity (WindCube etalon spec GNL4096R)
 SIGMA_READ   = 50.0           # ADU — CCD97 EM gain regime read noise estimate
 B_DC         = 500.0          # ADU — DC background (dark current + stray light)
-CX           = 137.5          # col — geometric centre of 276-col array
-CY           = 129.5          # row — geometric centre of 260-row active region
+CX           = 143            # visual fringe center of flatsat cal images
+CY           = 141            # visual fringe center from flatsat cal images
 PIX_M        = 32.0e-6        # m   — CCD97 16 µm × 2×2 binning
 NROWS        = 260            # total rows (including 4 metadata rows)
 NCOLS        = 276            # total cols
@@ -104,8 +103,8 @@ class SynthParams:
 
 # Validation bounds: (hard_min, hard_max, warn_min, warn_max)
 _BOUNDS = {
-    "d_mm":     (15.0,  25.0,  19.0,  21.5),
-    "f_mm":     (100.0, 300.0, 180.0, 220.0),
+    "d_mm":     (19.0,  21.0,  19.8,  20.2),
+    "f_mm":     (100.0, 300.0, 180.0, 260.0),
     "snr_peak": (1.0,   500.0, 10.0,  200.0),
     "rel_638":  (0.0,   2.0,   0.3,   1.5),
 }
@@ -170,10 +169,10 @@ def prompt_all_params() -> SynthParams:
         print(" INSTRUMENTAL PARAMETERS")
         print("─" * 62)
         d_mm = _validated_prompt(
-            "d_mm", "Etalon gap d", 20.106, "mm"  # 20.106 is discredited Tolansky fit; true gap ~20.008 mm
+            "d_mm", "Etalon gap d", 20.0079, "mm"  # true gap ~20.0079 (under Pat's flexure compression) mm
         )
         f_mm = _validated_prompt(
-            "f_mm", "Imaging lens focal length f", 199.12, "mm"
+            "f_mm", "Imaging lens focal length f", 230.0, "mm"
         )
         print()
         print("─" * 62)
@@ -183,7 +182,7 @@ def prompt_all_params() -> SynthParams:
             "snr_peak", "Peak SNR", 50.0
         )
         rel_638 = _validated_prompt(
-            "rel_638", "Relative intensity of 638 nm line vs 640 nm", 0.8
+            "rel_638", "Relative intensity of 638 nm line vs 640 nm", 0.3
         )
         print()
 
