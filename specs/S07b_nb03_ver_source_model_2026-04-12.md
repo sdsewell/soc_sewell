@@ -17,7 +17,7 @@
   - Solomon & Abreu (1989) JGR 94(A6), 6817–6824 — dayglow VER profiles
   - Wang et al. (2020) European Journal of Remote Sensing 53(1), 145–155 — satellite FPI signal budget
   - Teledyne e2v CCD97 datasheet — QE at 630 nm
-**Last updated:** 2026-04-12
+**Last updated:** 2026-04-12 v0.2 — corrected pitch angle, column brightness bounds, and module filename (post-implementation reconciliation)
 
 > **Design note:** NB03 is a Tier 1 module that is deliberately FPI-agnostic. It
 > has no knowledge of the etalon, Airy function, or fringe pattern. Its sole
@@ -752,12 +752,18 @@ all S03 defaults):
 
 | Quantity | Expected range | Derivation / check |
 |---|---|---|
-| Pitch angle | ~21–22° | arccos(6621/6871) |
-| d_tangent | ~2400–2500 km | R_orbit × sin(pa) |
-| Column brightness B | 1e10–1e12 ph m⁻² s⁻¹ sr⁻¹ | LOS integral |
+| Pitch angle | ~15–16° | arccos((R_e+250km)/(R_e+500km)) = arccos(6621/6871) ≈ 15.5° |
+| d_tangent | ~1800–1900 km | R_orbit × sin(pa) |
+| Column brightness B | 1e10–5e12 ph m⁻² s⁻¹ sr⁻¹ | LOS integral; T4 test bounds [1e9,1e13] are authoritative |
 | Photons/pixel/s F | 1–500 | B × A × Ω |
 | counts/pixel | 10–5000 | F × 10 s × 0.9 × 0.85 × 1.0 |
 | I_line | 0.01–5.0 | counts / 1000 |
+
+> **Note on pitch angle:** An earlier draft of this spec incorrectly estimated
+> 21–22° by using a non-standard Earth radius approximation. The correct
+> value using astropy `R_earth` (6.371 × 10⁶ m) is ~15.5°. The implementation
+> is correct; this table has been updated to match. The T2 test is the
+> authoritative numerical check.
 
 These are order-of-magnitude bounds, not tight tolerances. The VER profile
 is a representative quiet-night model, not a specific event prediction.
@@ -802,14 +808,19 @@ correct `I_line`; the noise model upgrade is a separate spec item.
 soc_sewell/
 ├── windcube/
 │   └── constants.py          ← add 9 new constants from Section 3
-├── fpi/
+├── src/fpi/
 │   ├── __init__.py
-│   └── nb03_ver_source_model_2026-04-12.py   ← this module
+│   └── nb03_ver_source_model_2026_04_12.py   ← this module (underscores in date — Python importable)
 ├── tests/
-│   └── test_nb03_ver_source_model_2026-04-12.py
+│   └── test_nb03_ver_source_model_2026-04-12.py   ← dashes OK in test filenames
 └── docs/specs/
     └── S07b_nb03_ver_source_model_2026-04-12.md   ← this file
 ```
+
+> **Filename convention note:** Python module files use underscores in the
+> date suffix (`2026_04_12`) so the module is directly importable. Test files
+> may use dashes (`2026-04-12`) as they are never imported as modules.
+> Spec `.md` files always use dashes.
 
 ---
 
@@ -822,8 +833,8 @@ soc_sewell/
    touching any `fpi/` code.
 3. Run `pytest tests/ -v` to confirm all existing tests still pass after
    the constants update.
-4. Implement `fpi/nb03_ver_source_model_2026-04-12.py` with functions
-   in this strict order:
+4. Implement `src/fpi/nb03_ver_source_model_2026_04_12.py` (underscores in
+   date — required for Python importability) with functions in this strict order:
    `build_ver_profile` → `altitude_along_los` → `compute_los_geometry`
    → `integrate_los_emission` → `signal_photons_per_pixel`
    → `signal_to_I_line` → `compute_signal_budget`
@@ -847,6 +858,11 @@ soc_sewell/
 11. Run: `pytest tests/test_nb03_ver_source_model_2026-04-12.py -v`
     All 8 must pass.
 12. Run full suite: `pytest tests/ -v` — all existing tests still pass.
+    Note: the following 3 test files have pre-existing failures unrelated
+    to NB03 and should be excluded from regression assessment:
+      - `test_z04.py` (missing joblib)
+      - `test_s06_nb01_orbit_propagator.py` (missing module)
+      - `test_z02_synthetic_airglow_generator.py` (wrong script path)
 13. Commit in two steps:
     `feat(constants): add NB03 instrument constants (aperture, QE, gain, throughput)`
     `feat(nb03): implement VER source model and signal budget, 8/8 tests pass`
@@ -854,7 +870,7 @@ soc_sewell/
 Module docstring header:
 ```python
 """
-Module:      nb03_ver_source_model_2026-04-12.py
+Module:      nb03_ver_source_model_2026_04_12.py
 Spec:        docs/specs/S07b_nb03_ver_source_model_2026-04-12.md
 Author:      Claude Code
 Generated:   <today>
