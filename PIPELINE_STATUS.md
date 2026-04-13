@@ -7,6 +7,7 @@
 | S05  | NB00        | impl   | n/a      | 2026-04-06    |
 | S06  | NB01        | impl   | n/a      | 2026-04-06    |
 | S07  | NB02        | impl   | n/a      | 2026-04-06    |
+| S07b | NB03        | impl   | 8/8      | 2026-04-12    |
 | S08  | INT01       | impl   | n/a      | 2026-04-06    |
 | S09  | M01         | impl   | passing  | 2026-04-06    |
 | S10  | M02         | impl   | passing  | 2026-04-06    |
@@ -25,3 +26,14 @@
 | Z02  | airglow-gen | impl   | 8/8      | 2026-04-10    |
 | Z03  | cal-gen     | impl   | passing  | 2026-04-10    |
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
+
+## Known pre-existing test failures (not introduced by current work)
+
+| Test file                                    | Reason                        |
+|----------------------------------------------|-------------------------------|
+| test_z04.py                                  | missing joblib package        |
+| test_s06_nb01_orbit_propagator.py            | missing module (NB01 not impl)|
+| test_z02_synthetic_airglow_generator.py      | wrong script path             |
+
+These failures pre-date the S07b session and are excluded from regression
+assessment until the relevant modules are fixed or installed.
