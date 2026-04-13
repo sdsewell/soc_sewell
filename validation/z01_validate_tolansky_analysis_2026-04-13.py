@@ -29,6 +29,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import scipy.optimize as opt
+from datetime import datetime
 
 # ── Repo root on path ─────────────────────────────────────────────────────────
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -230,8 +231,19 @@ def figure_roi_inspection(cal_image: np.ndarray,
                           dark_image: np.ndarray,
                           cx_seed: float,
                           cy_seed: float,
-                          r_max: float = 110.0) -> None:
-    """Show a zoomed ROI around the fringe centre (Figure 2)."""
+                          r_max: float = 110.0,
+                          cal_path: pathlib.Path | None = None,
+                          dark_path: pathlib.Path | None = None,
+                          save_dir: pathlib.Path | None = None) -> tuple:
+    """Show a zoomed ROI around the fringe centre (Figure 2).
+
+    Additionally, save the calibration and dark ROIs as .npy arrays when
+    `save_dir` is provided (or use current working directory otherwise).
+
+    Returns
+    -------
+    (cal_roi, dark_roi) : tuple of np.ndarray
+    """
     half = int(r_max) + 20
     h, w = cal_image.shape
     x0 = max(0, int(cx_seed) - half); x1 = min(w, int(cx_seed) + half)
@@ -242,9 +254,10 @@ def figure_roi_inspection(cal_image: np.ndarray,
     vmax = float(np.percentile(cal_roi, 99.5))
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    for ax, img, title in zip(axes,
-                               [cal_roi, dark_roi],
-                               ["Calibration ROI (raw)", "Dark ROI (raw)"]):
+    cal_name = pathlib.Path(cal_path).name if cal_path is not None else ""
+    dark_name = pathlib.Path(dark_path).name if dark_path is not None else ""
+    titles = [f"Calibration ROI (raw)\n{cal_name}", f"Dark ROI (raw)\n{dark_name}"]
+    for ax, img, title in zip(axes, [cal_roi, dark_roi], titles):
         ax.imshow(img, cmap="gray", vmin=0, vmax=vmax, origin="upper")
         ax.set_title(title, fontsize=9)
         # Draw the seed cross
@@ -263,6 +276,63 @@ def figure_roi_inspection(cal_image: np.ndarray,
     )
     plt.tight_layout()
     plt.show()
+
+    # Save the displayed figure (PNG) into the parent folder of the
+    # calibration image (or CWD if none provided). Use the calibration
+    # image basename with `_roi_inspection.png` appended.
+    try:
+        if cal_path is not None:
+            fig_out_dir = pathlib.Path(cal_path).parent
+            fig_out_dir.mkdir(parents=True, exist_ok=True)
+            base = pathlib.Path(cal_path).name
+            if "." in base:
+                stem = base.rsplit(".", 1)[0]
+            else:
+                stem = base
+            png_path = fig_out_dir / f"{stem}_roi_inspection.png"
+        else:
+            png_path = pathlib.Path.cwd() / "roi_inspection.png"
+
+        fig.savefig(png_path, dpi=150)
+        print(f"  Saved ROI figure: {png_path}")
+    except Exception as exc:  # pragma: no cover - best-effort save
+        print(f"  Warning: failed to save ROI figure: {exc}")
+
+    # Save ROIs as .npy for downstream inspection/archival
+    try:
+        # Destination directory: explicit save_dir if given, otherwise use
+        # the parent folder of the calibration image if available, else CWD.
+        if save_dir is not None:
+            out_dir = pathlib.Path(save_dir)
+        elif cal_path is not None:
+            out_dir = pathlib.Path(cal_path).parent
+        else:
+            out_dir = pathlib.Path.cwd()
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        def _roi_name_from_image(p: pathlib.Path) -> pathlib.Path:
+            name = p.name
+            if "." in name:
+                base, ext = name.rsplit(".", 1)
+                return out_dir / f"{base}_roi.npy"
+            else:
+                return out_dir / f"{name}_roi.npy"
+
+        cal_fname = _roi_name_from_image(pathlib.Path(cal_path)) if cal_path is not None else (
+            out_dir / "cal_roi.npy"
+        )
+        dark_fname = _roi_name_from_image(pathlib.Path(dark_path)) if dark_path is not None else (
+            out_dir / "dark_roi.npy"
+        )
+
+        np.save(cal_fname, cal_roi.astype(np.float32))
+        np.save(dark_fname, dark_roi.astype(np.float32))
+        print(f"  Saved ROI arrays:\n    {cal_fname}\n    {dark_fname}")
+    except Exception as exc:  # pragma: no cover - best-effort save
+        print(f"  Warning: failed to save ROI arrays: {exc}")
+
+    return cal_roi, dark_roi
 
 
 # ── Stage E — Centre refinement ───────────────────────────────────────────────
@@ -1082,8 +1152,12 @@ def main():
 
     # ── Stage D — Figure 2 ────────────────────────────────────────────────
     print(f"\nStage D: ROI inspection (Figure 2)...")
-    figure_roi_inspection(load["cal_image"], load["dark_image"],
-                          cx_seed, cy_seed, r_max=r_max)
+    cal_roi, dark_roi = figure_roi_inspection(
+        load["cal_image"], load["dark_image"],
+        cx_seed, cy_seed, r_max=r_max,
+        cal_path=load["cal_path"],
+        dark_path=load["dark_path"],
+    )
 
     # ── Stage E — Centre refinement ───────────────────────────────────────
     cx_final, cy_final = refine_centre(
