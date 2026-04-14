@@ -42,28 +42,10 @@ interference order at the fringe centre for the neon primary line
 science Doppler shifts are subsequently measured. All other parameters
 define the instrument function that M06 uses to invert the airglow fringe.
 
-**What M05 is not.** M05 does not retrieve wind or temperature. It
-characterises the instrument. Its outputs are instrument parameters, not
-geophysical quantities.
 
 ---
 
 ## 2. The role of Tolansky priors
-
-### 2.1 Why the old approach was fragile
-
-Without Tolansky, M05 had to estimate the etalon gap `t` from a beat-period
-measurement on the fringe profile (noisy, indirect) and then confirm the FSR
-period with a brute-force scan over `t`. The FSR-period ambiguity is severe:
-a wrong-period `t` produces a wind bias of:
-
-```
-Δv_bias = c × FSR / λ₀ = c × λ₀/(2t) / λ₀ = c/(2t) ≈ 7.25 km/s
-```
-
-This ambiguity is what caused the FlatSat value `d = 20.670 mm` — 2068 FSR
-periods from the true gap of 20.008 mm. It is catastrophic and undetectable
-from χ² alone.
 
 ### 2.2 What Tolansky provides
 
@@ -138,7 +120,7 @@ For this reason, Stage 1 fits them together before R or σ are introduced.
 from src.constants import (
     NE_WAVELENGTH_1_M,    # 640.2248e-9 m — primary neon line
     NE_WAVELENGTH_2_M,    # 638.2991e-9 m — secondary neon line
-    NE_INTENSITY_2,       # 0.8 — secondary line relative intensity
+    NE_INTENSITY_2,       # 0.3 — secondary line relative intensity
     ETALON_GAP_M,         # 20.008e-3 m — ICOS measured gap (d prior)
     ETALON_R_INSTRUMENT,  # 0.53 — FlatSat effective reflectivity
     ALPHA_RAD_PX,         # 1.6e-4 rad/px — nominal magnification
