@@ -18,6 +18,7 @@ import json
 import math
 import os
 import pathlib
+import struct
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -229,35 +230,76 @@ def synthesise_image(params: SynthParams, derived: DerivedParams) -> np.ndarray:
 # Metadata helpers (S19 format)
 # ---------------------------------------------------------------------------
 
-def build_metadata_dict(image_type: str, exposure_ms: int = 120000) -> dict:
-    """Build S19-compliant metadata dict for a calibration or dark image."""
-    now = datetime.now(timezone.utc)
+def _set_f64(h: np.ndarray, w: int, value: float) -> None:
+    """Store float64 into h[w:w+4] in p01 LE-word-order encoding.
+
+    p01 decode:  unpack(">d", pack(">4H", h[w+3], h[w+2], h[w+1], h[w+0]))
+    So we reverse the big-endian word order when storing.
+    """
+    b = struct.pack(">d", value)
+    words = struct.unpack(">4H", b)   # [W3, W2, W1, W0] most→least significant
+    h[w + 0] = words[3]               # least significant word
+    h[w + 1] = words[2]
+    h[w + 2] = words[1]
+    h[w + 3] = words[0]               # most significant word
+
+
+def _set_u64(h: np.ndarray, w: int, value: int) -> None:
+    """Store uint64 into h[w:w+4] in p01 LE-word-order encoding.
+
+    p01 decode:  sum(h[w+i] << (16*i) for i in range(4))
+    """
+    for i in range(4):
+        h[w + i] = (value >> (16 * i)) & 0xFFFF
+
+
+def embed_s19_header(image: np.ndarray, image_type: str) -> None:
+    """Overwrite row 0 of image with a p01-compatible S19 binary header.
+
+    Encodes into native uint16.  The caller must write the file as big-endian
+    (image.astype('>u2').tofile(...)) so p01 can read it with dtype='>u2'.
+
+    img_type classification (mirrors p01.parse_header):
+      cal  — any lamp_ch_array word nonzero
+      dark — shutter closed (gpio_pwr_on[0]==1 and gpio_pwr_on[3]==1)
+    """
+    h = np.zeros(NCOLS, dtype=np.uint16)
+
+    # words 0-3: geometry + exposure
+    h[0] = NROWS           # rows = 260
+    h[1] = NCOLS           # cols = 276
+    h[2] = 12000           # exp_time: 120 s expressed in centiseconds
+    h[3] = 0               # exp_unit
+
+    # words 4-7: ccd_temp1 = 24.0 °C
+    _set_f64(h, 4, 24.0)
+
+    # words 8-11: lua_timestamp (Unix ms, used by p01 for utc_timestamp)
+    ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    _set_u64(h, 8, ts_ms)
+
+    # words 12-15: adcs_timestamp = 0 (zeros by default)
+
+    # words 16-83: spacecraft pos / vel / attitude = 0 (zeros by default)
+
+    # words 84-87: etalon_temps[0] = 24.0 °C
+    _set_f64(h, 84, 24.0)
+    # words 88-99: etalon_temps[1,2,3] = 0.0 (zeros by default)
+
     is_cal = image_type.lower().startswith("cal")
-    meta = {
-        "image_type":     image_type,
-        "n_rows":         NROWS,
-        "n_cols":         NCOLS,
-        "binning":        2,
-        "shutter_status": "Open" if is_cal else "Closed",
-        "cal_lamp_1":     "C1_On" if is_cal else "C1_Off",
-        "cal_lamp_2":     "C2_Off",
-        "cal_lamp_3":     "C3_Off",
-        "date_utc":       now.strftime("%Y%m%d"),
-        "time_utc":       now.strftime("%H%M%S"),
-        "exposure_ms":    exposure_ms,
-        "etalon_temp_1":  24.00,
-    }
-    return meta
 
+    # words 100-103: gpio_pwr_on
+    # dark: gpio_pwr_on[0]==1 and gpio_pwr_on[3]==1 → shutter closed
+    if not is_cal:
+        h[100] = 1   # gpio_pwr_on[0]
+        h[103] = 1   # gpio_pwr_on[3]
 
-def embed_metadata_rows(image: np.ndarray, meta: dict) -> None:
-    """Encode metadata as JSON bytes and write into the first N_META_ROWS rows."""
-    meta_json = json.dumps(meta, separators=(",", ":"))
-    meta_bytes = meta_json.encode("utf-8")
-    target = N_META_ROWS * NCOLS * 2
-    padded = meta_bytes.ljust(target, b"\x00")
-    arr = np.frombuffer(padded, dtype="<u2").reshape(N_META_ROWS, NCOLS)
-    image[0:N_META_ROWS, :] = arr
+    # words 104-109: lamp_ch_array
+    # cal: lamp_ch_array[0] nonzero → p01 sets img_type="cal"
+    if is_cal:
+        h[104] = 1   # lamp_ch_array[0]
+
+    image[0, :] = h
 
 
 # ---------------------------------------------------------------------------
@@ -559,9 +601,9 @@ def main(argv=None):
     dark_read   = rng.standard_normal(size=dark_float.shape) * SIGMA_READ
     image_dark  = np.clip(dark_counts + dark_read, 0, 16383).astype(np.uint16)
 
-    # Embed S19 metadata
-    embed_metadata_rows(image_cal, build_metadata_dict("Cal"))
-    embed_metadata_rows(image_dark, build_metadata_dict("Dark"))
+    # Embed S19 binary header in row 0 (p01-compatible)
+    embed_s19_header(image_cal, "Cal")
+    embed_s19_header(image_dark, "Dark")
 
     # Output paths
     default_out = pathlib.Path(os.environ.get(
@@ -579,8 +621,9 @@ def main(argv=None):
     path_cal  = out_dir / cal_name
     path_dark = out_dir / dark_name
 
-    image_cal.tofile(str(path_cal))
-    image_dark.tofile(str(path_dark))
+    # Write big-endian so p01 can read with dtype=">u2"
+    image_cal.astype(">u2").tofile(str(path_cal))
+    image_dark.astype(">u2").tofile(str(path_dark))
 
     truth_path = out_dir / f"{stem}_truth.json"
     write_truth_json(params, derived, seed, path_cal, path_dark, truth_path)
