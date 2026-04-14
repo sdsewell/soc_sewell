@@ -30,7 +30,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Allow running as a script from any working directory.
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# validation/ is one level below repo root, so parents[1] is correct here.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -48,11 +49,11 @@ SIGMA_READ    = 50.0          # ADU — CCD97 EM gain regime read noise
 PIX_M         = 32.0e-6       # m   — CCD97 16 µm native × 2×2 binning
 CX_DEFAULT    = 145         # px  — geometric centre, 276-col array
 CY_DEFAULT    = 145         # px  — geometric centre, 260-row active region
-R_MAX_PX      = 120.0         # px  — FlatSat/flight max usable radius
+R_MAX_PX      = 175        # px  — FlatSat/flight max usable radius
 R_BINS        = 2000          # radial bins (must be ≥ 2000)
 N_REF         = 1.0           # refractive index, air gap
 NROWS, NCOLS  = 260, 276      # WindCube Level-0 image dimensions
-N_META_ROWS   = 4             # S19 header rows
+N_META_ROWS   = 1             # S19 header rows
 LAM_640       = 640.2248e-9   # m — Ne primary line (Burns et al. 1950)
 LAM_638       = 638.2991e-9   # m — Ne secondary line (Burns et al. 1950)
 
@@ -505,11 +506,11 @@ def prompt_all_params() -> SynthParams:
 
     while True:
         print("\n\u2500\u2500 GROUP 1  ETALON GEOMETRY \u2500\u2500")
-        d_mm    = _validated_prompt("Etalon gap d",                  20.0006, "mm",  19.0,  21.0, 19.9,  20.1)
-        f_mm    = _validated_prompt("Imaging lens focal length f",  199.12, "mm", 100.0, 300.0, 180.0, 250.0)
+        d_mm    = _validated_prompt("Etalon gap d",                  20.0001 "mm",  19.0,  21.0, 19.9,  20.1)
+        f_mm    = _validated_prompt("Imaging lens focal length f",  200, "mm", 100.0, 300.0, 180.0, 250.0)
 
         print("\n\u2500\u2500 GROUP 2  REFLECTIVITY AND PSF \u2500\u2500")
-        R       = _validated_prompt("Plate reflectivity R",           0.53,  "",    0.01,  0.99,  0.3,   0.85)
+        R       = _validated_prompt("Plate reflectivity R",           0.50,  "",    0.01,  0.99,  0.3,   0.85)
         sigma0  = _validated_prompt("Average PSF width sigma_0",      0.5,   "px",  0.0,   5.0,   0.0,   2.0)
         sigma1  = _validated_prompt("PSF sine variation sigma_1",     0.1,   "px", -3.0,   3.0,  -1.0,   1.0)
         sigma2  = _validated_prompt("PSF cosine variation sigma_2",  -0.05,  "px", -3.0,   3.0,  -1.0,   1.0)
@@ -608,7 +609,7 @@ def main(argv=None):
     # Output paths
     default_out = pathlib.Path(os.environ.get(
         "Z03_OUTPUT_DIR",
-        str(pathlib.Path(__file__).resolve().parents[3] / "soc_synthesized_data"),
+        str(pathlib.Path(__file__).resolve().parents[3] / "GitHub/soc_synthesized_data"),
     ))
     out_dir = pathlib.Path(os.environ.get("Z03_OUTPUT_DIR", default_out))
     out_dir.mkdir(parents=True, exist_ok=True)

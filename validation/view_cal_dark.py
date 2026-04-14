@@ -132,7 +132,7 @@ plt.show()
 
 # ── ROI extraction ────────────────────────────────────────────────────────────
 CX, CY = 145, 145
-ROI_SIZE = 220
+ROI_SIZE = 224
 half = ROI_SIZE // 2
 
 r0, r1 = CY - half, CY + half
@@ -299,7 +299,7 @@ ax_prof.set_title(
     f"r_max={R_MAX_PX:.0f} px,  n_bins={N_BINS},  peaks={n_peaks}",
     fontsize=9,
 )
-ax_prof.set_ylim(2000, 12000)
+ax_prof.set_ylim(0, 16383)
 ax_prof.legend(fontsize=8)
 
 # ── Peak table ────────────────────────────────────────────────────────────────
@@ -555,7 +555,7 @@ nd_body = (
     f"      (1/{LA_NM} − 1/{LB_NM}) nm⁻¹)\n"
     f"    = {N_delta}"
 )
-y_after_yellow = _two_part_box(ax4, 0.03, 0.97,
+y_after_yellow = _two_part_box(ax4, 0.03, 0.90,
                                nd_heading, nd_body, n_body_lines=4,
                                fc="#FFF8E7", ec="#C8A000",
                                heading_fc="#FFE680")
