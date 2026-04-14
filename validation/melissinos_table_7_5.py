@@ -2,9 +2,22 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
 import numpy as np
+import os
+import pandas as pd
 
-# 1. Load the data
-df = pd.read_csv('melissinos_table_7_5_simple.csv')
+# Get the directory where the script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+print(f"Checking in: {script_dir}")
+print(f"Files found: {os.listdir(script_dir)}")
+
+# Build the full path to the CSV
+csv_path = os.path.join(script_dir, 'melissinos_table_7_5.csv')
+
+# Load the data
+df = pd.read_csv(csv_path) 
+
+
 
 # Column 0 is Ring Index and column 1 is radial position (mm^2)
 x = df.iloc[:, 1]
@@ -23,8 +36,12 @@ plt.scatter(x, y, color='royalblue', label='Data Points', alpha=0.7)
 line = res.slope * x + res.intercept
 plt.plot(x, line, color='firebrick', label=f'Fit: y = {res.slope:.2f}x + {res.intercept:.2f}')
 
+# --- SET AXIS LIMITS HERE ---
+plt.xlim(left=0)             # Starts X-axis at 0, lets the right side auto-scale
+plt.ylim(0, 12)              # Sets Y-axis strictly from 0 to 12
+
 # 4. Add labels and legend
-plt.title('Linear Regression Analysis', fontsize=14)
+plt.title('Melissinos Figure 7.28 From Table 7.5Linear Regression Analysis', fontsize=14)
 plt.xlabel(df.columns[0])
 plt.ylabel(df.columns[1])
 plt.grid(True, linestyle='--', alpha=0.6)
