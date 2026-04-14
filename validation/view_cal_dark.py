@@ -7,6 +7,8 @@ Run from the validation/ subfolder:
 
 import sys
 import pathlib
+import tkinter as tk
+from tkinter import filedialog
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.table as mtable
@@ -24,12 +26,28 @@ from src.fpi.m03_annular_reduction_2026_04_06 import (  # noqa: E402
     annular_reduce,
 )
 
-# ── File paths ────────────────────────────────────────────────────────────────
-DATA_DIR = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\soc_sample_data\2026_03_20")
-FILES = [
-    DATA_DIR / "1_cal_120sexp_swapped.bin",
-    DATA_DIR / "1_dark_120sexp_swapped.bin",
-]
+# ── File selection via dialog ─────────────────────────────────────────────────
+_root = tk.Tk()
+_root.withdraw()   # hide the empty root window
+
+_BIN_FILTER = [("Binary images", "*.bin"), ("All files", "*.*")]
+
+cal_path = filedialog.askopenfilename(
+    title="Select calibration image (cal *_swapped.bin)",
+    filetypes=_BIN_FILTER,
+)
+if not cal_path:
+    sys.exit("No calibration file selected — exiting.")
+
+dark_path = filedialog.askopenfilename(
+    title="Select dark image (dark *_swapped.bin)",
+    filetypes=_BIN_FILTER,
+    initialdir=str(pathlib.Path(cal_path).parent),
+)
+if not dark_path:
+    sys.exit("No dark file selected — exiting.")
+
+FILES = [pathlib.Path(cal_path), pathlib.Path(dark_path)]
 
 # ── Metadata fields to display (scalar only) ─────────────────────────────────
 FIELDS = [
@@ -447,9 +465,34 @@ ax4.plot(r2_ext, sl_638 * r2_ext + ep_638, color="#4472C4",
 
 ax4.set_xlabel("r²_fit  [px²]", fontsize=11)
 ax4.set_ylabel("Ring Order  P", fontsize=11)
-ax4.set_title("Determination of Fractonal Fringe Orders and Estimate of Etalon Gap 'd'", fontsize=11)
-ax4.legend(fontsize=9, loc="upper left", bbox_to_anchor=(0.0, 1.0))
+ax4.set_title(
+    "Determination of Fractonal Fringe Orders and Estimate of Etalon Gap 'd'",
+    fontsize=11, pad=22,
+)
+ax4.text(0.5, 1.002,
+         f"cal: {FILES[0].name}   |   dark: {FILES[1].name}",
+         transform=ax4.transAxes, fontsize=8.5,
+         ha="center", va="bottom", color="#555555",
+         clip_on=False)
+ax4.legend(fontsize=9, loc="lower right", bbox_to_anchor=(1.0, 0.16))
 ax4.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+
+# ── Lower-left: calibration image metadata ───────────────────────────────────
+cal_meta   = metas[0]
+exp_s      = cal_meta.exp_time / 100.0        # centiseconds → seconds
+et         = cal_meta.etalon_temps            # list of 4 floats
+et_str     = "[" + ", ".join(f"{v:.2f}" for v in et) + "]"
+
+meta_annot = (
+    f"Exposure: {int(round(exp_s))} s   |   "
+    f"CCD Temp: {cal_meta.ccd_temp1:.2f} °C   |   "
+    f"Etalon Temps: {et_str} °C"
+)
+ax4.text(0.5, 0.97, meta_annot,
+         transform=ax4.transAxes, fontsize=8.5,
+         va="top", ha="center", family="monospace",
+         bbox=dict(boxstyle="round,pad=0.45", fc="#F5FFF5", ec="#3A7D44",
+                   alpha=0.95, lw=0.8))
 
 # ── Lower-right: ε values only ───────────────────────────────────────────────
 eps_annot = (
@@ -480,7 +523,7 @@ def _two_part_box(ax, x, y_top, heading, body, n_body_lines,
         heading_fc = fc
     # Count heading lines to estimate its height
     n_head_lines = heading.count("\n") + 1
-    head_h = n_head_lines * LINE_H + 0.025  # add bbox padding
+    head_h = n_head_lines * LINE_H + 0.017  # add bbox padding
 
     # Bold heading
     ax.text(x, y_top, heading,
@@ -512,7 +555,7 @@ nd_body = (
     f"      (1/{LA_NM} − 1/{LB_NM}) nm⁻¹)\n"
     f"    = {N_delta}"
 )
-y_after_yellow = _two_part_box(ax4, 0.03, 0.82,
+y_after_yellow = _two_part_box(ax4, 0.03, 0.97,
                                nd_heading, nd_body, n_body_lines=4,
                                fc="#FFF8E7", ec="#C8A000",
                                heading_fc="#FFE680")
