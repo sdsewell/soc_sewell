@@ -28,6 +28,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Allow running as a script from any working directory.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from src.fpi.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     airy_modified,
@@ -40,9 +45,9 @@ from src.fpi.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
 
 SIGMA_READ    = 50.0          # ADU — CCD97 EM gain regime read noise
 PIX_M         = 32.0e-6       # m   — CCD97 16 µm native × 2×2 binning
-CX_DEFAULT    = 137.5         # px  — geometric centre, 276-col array
-CY_DEFAULT    = 129.5         # px  — geometric centre, 260-row active region
-R_MAX_PX      = 110.0         # px  — FlatSat/flight max usable radius
+CX_DEFAULT    = 145         # px  — geometric centre, 276-col array
+CY_DEFAULT    = 145         # px  — geometric centre, 260-row active region
+R_MAX_PX      = 120.0         # px  — FlatSat/flight max usable radius
 R_BINS        = 2000          # radial bins (must be ≥ 2000)
 N_REF         = 1.0           # refractive index, air gap
 NROWS, NCOLS  = 260, 276      # WindCube Level-0 image dimensions
@@ -324,11 +329,14 @@ def make_diagnostic_figure(
     out_dir: pathlib.Path,
     stem: str,
 ) -> pathlib.Path:
-    """Save a 2-panel diagnostic figure: calibration image (left), dark image (right)."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    ax0, ax1 = axes
+    """Save a 2×2 diagnostic figure: images (top row), histograms (bottom row)."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    ax_cal, ax_dark, ax_hcal, ax_hdark = (
+        axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]
+    )
 
-    im0 = ax0.imshow(cal_img, cmap="gray", vmin=0, vmax=16383)
+    # --- calibration image (fixed 14-bit scale) ---
+    im0 = ax_cal.imshow(cal_img, cmap="gray", vmin=0, vmax=16383)
     title_line1 = (
         f"d={params.d_mm} mm   f={params.f_mm} mm   "
         f"R={params.R}   SNR={params.snr_peak}"
@@ -341,16 +349,36 @@ def make_diagnostic_figure(
         f"Ne: 640.2248 nm (\u00d71.0)   "
         f"638.2991 nm (\u00d7{params.rel_638})"
     )
-    ax0.set_title(f"{title_line1}\n{title_line2}\n{title_line3}", fontsize=8)
-    fig.colorbar(im0, ax=ax0, fraction=0.046, pad=0.04)
+    ax_cal.set_title(f"{title_line1}\n{title_line2}\n{title_line3}", fontsize=8)
+    fig.colorbar(im0, ax=ax_cal, fraction=0.046, pad=0.04)
 
-    im1 = ax1.imshow(dark_img, cmap="gray", vmin=0, vmax=16383)
-    ax1.set_title(
+    # Exclude S19 metadata rows from dark scaling — header bytes packed as
+    # uint16 can exceed 16383 and would blow out autoscale.
+    dark_pixels = dark_img[N_META_ROWS:, :]
+    dark_max = int(dark_pixels.max())
+
+    # --- dark image (autoscale 0 → max pixel value, metadata rows excluded) ---
+    im1 = ax_dark.imshow(dark_img, cmap="gray", vmin=0, vmax=dark_max)
+    ax_dark.set_title(
         f"Dark image \u2014 B={params.B_dc} ADU, "
         f"\u03c3_read={SIGMA_READ} ADU",
         fontsize=9,
     )
-    fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+    fig.colorbar(im1, ax=ax_dark, fraction=0.046, pad=0.04)
+
+    # --- calibration histogram (fixed 14-bit x-range) ---
+    ax_hcal.hist(cal_img.ravel(), bins=256, range=(0, 16383), color="C0", linewidth=0)
+    ax_hcal.set_xlim(0, 16383)
+    ax_hcal.set_xlabel("ADU")
+    ax_hcal.set_ylabel("Pixel count")
+    ax_hcal.set_title("Calibration histogram")
+
+    # --- dark histogram (0 → max pixel value, metadata rows excluded) ---
+    ax_hdark.hist(dark_pixels.ravel(), bins=128, range=(0, dark_max), color="C1", linewidth=0)
+    ax_hdark.set_xlim(0, dark_max)
+    ax_hdark.set_xlabel("ADU")
+    ax_hdark.set_ylabel("Pixel count")
+    ax_hdark.set_title("Dark histogram")
 
     fig.suptitle(f"Z03 diagnostic \u2014 {stem}")
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -435,8 +463,8 @@ def prompt_all_params() -> SynthParams:
 
     while True:
         print("\n\u2500\u2500 GROUP 1  ETALON GEOMETRY \u2500\u2500")
-        d_mm    = _validated_prompt("Etalon gap d",                  20.106, "mm",  15.0,  25.0, 19.0,  21.5)
-        f_mm    = _validated_prompt("Imaging lens focal length f",  199.12, "mm", 100.0, 300.0, 180.0, 220.0)
+        d_mm    = _validated_prompt("Etalon gap d",                  20.0006, "mm",  19.0,  21.0, 19.9,  20.1)
+        f_mm    = _validated_prompt("Imaging lens focal length f",  199.12, "mm", 100.0, 300.0, 180.0, 250.0)
 
         print("\n\u2500\u2500 GROUP 2  REFLECTIVITY AND PSF \u2500\u2500")
         R       = _validated_prompt("Plate reflectivity R",           0.53,  "",    0.01,  0.99,  0.3,   0.85)
@@ -448,10 +476,10 @@ def prompt_all_params() -> SynthParams:
         snr_peak = _validated_prompt("Peak SNR",                     50.0,  "",    1.0,  500.0, 10.0, 200.0)
         I1       = _validated_prompt("Linear vignetting coeff I_1",  -0.1,  "",   -0.9,   0.9,  -0.5,  0.5)
         I2       = _validated_prompt("Quadratic vignetting coeff I_2", 0.005, "",  -0.9,  0.9,  -0.5,  0.5)
-        B_dc     = _validated_prompt("Bias pedestal B",              300.0, "ADU", 0.0, 5000.0, 100.0, 1000.0)
+        B_dc     = _validated_prompt("Bias pedestal B",              6500.0, "ADU", 0.0, 10000.0, 100.0, 8000.0)
 
         print("\n\u2500\u2500 GROUP 4  SOURCE (not an inversion free parameter) \u2500\u2500")
-        rel_638  = _validated_prompt("Relative intensity 638 nm / 640 nm", 0.8, "", 0.0, 2.0, 0.3, 1.5)
+        rel_638  = _validated_prompt("Relative intensity 638 nm / 640 nm", 0.3, "", 0.0, 2.0, 0.1, 1.0)
 
         # Summary table
         print("\n\u2500\u2500 PARAMETER SUMMARY \u2500\u2500")
@@ -569,6 +597,7 @@ def main(argv=None):
     print("  ", truth_path)
     if diag_path:
         print("  ", diag_path)
+        os.startfile(str(diag_path))
     print("Done.")
 
 
