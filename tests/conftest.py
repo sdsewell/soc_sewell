@@ -9,7 +9,6 @@ import numpy as np
 from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams, NE_WAVELENGTH_1_M
 from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
 from src.fpi.m03_annular_reduction_2026_04_06 import annular_reduce
-from src.fpi.tolansky_2026_04_05 import TwoLineResult
 from src.fpi.m05_calibration_inversion_2026_04_06 import (
     fit_calibration_fringe,
     FitConfig,
