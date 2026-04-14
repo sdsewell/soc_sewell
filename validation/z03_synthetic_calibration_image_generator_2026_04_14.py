@@ -506,7 +506,7 @@ def prompt_all_params() -> SynthParams:
 
     while True:
         print("\n\u2500\u2500 GROUP 1  ETALON GEOMETRY \u2500\u2500")
-        d_mm    = _validated_prompt("Etalon gap d",                  20.0001 "mm",  19.0,  21.0, 19.9,  20.1)
+        d_mm    = _validated_prompt("Etalon gap d",                  20.0001,"mm",  19.0,  21.0, 19.9,  20.1)
         f_mm    = _validated_prompt("Imaging lens focal length f",  200, "mm", 100.0, 300.0, 180.0, 250.0)
 
         print("\n\u2500\u2500 GROUP 2  REFLECTIVITY AND PSF \u2500\u2500")
