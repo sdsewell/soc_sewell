@@ -10,7 +10,7 @@ import netCDF4 as nc
 import numpy as np
 import pytest
 
-from windcube.m08_l2_writer import create_l2_file, write_l2_file
+from src.netCDF.m08_l2_writer import create_l2_file, write_l2_file
 
 # ---------------------------------------------------------------------------
 # Synthetic data fixture
@@ -280,7 +280,7 @@ def test_12_fill_values_correct(tmp_path):
     """
     Float32 NaN fill is masked correctly; orbit_number fill is -2147483647.
     """
-    from windcube.m08_l2_writer import FILL_I32
+    from src.netCDF.m08_l2_writer import FILL_I32
 
     p = str(tmp_path / "fill_test.nc")
     N3 = 5
