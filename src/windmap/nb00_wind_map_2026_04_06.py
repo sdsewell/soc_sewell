@@ -11,6 +11,10 @@ Depends on:  src.constants
 
 from __future__ import annotations
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
