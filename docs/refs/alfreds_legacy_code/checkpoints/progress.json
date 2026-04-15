@@ -1,0 +1,34 @@
+{
+  "pipeline": "windcube-fpi",
+  "last_updated": "2026-03-28",
+  "stages": {
+    "M01_airy_forward_model": {
+      "status": "complete",
+      "notes": "InstrumentParams, airy_modified, airy_ideal implemented and validated"
+    },
+    "M02_calibration_synthesis": {
+      "status": "complete",
+      "notes": "synthesise_calibration_image; R_bins default set to 2000 to avoid inverse-crime artifacts"
+    },
+    "M03_annular_reduction": {
+      "status": "complete",
+      "notes": "reduce_calibration_frame, reduce_science_frame; n_subpixels default changed 8->1 to match M05 forward model discretisation"
+    },
+    "M04_airglow_synthesis": {
+      "status": "complete",
+      "notes": "synthesise_airglow_image; thermally-broadened OI 630nm line, instrument matrix A (R_bins x L_synth), Poisson noise. Confirmed functional: 256x256 image in 1.4s."
+    },
+    "M05_calibration_inversion": {
+      "status": "complete",
+      "notes": "fit_calibration_fringe; 6-stage TRF inversion; 8/9 tests pass, T9 skipped pending FlatSat data file. chi2_noisy=1.52, chi2_noiseless=5.4 (SEM floor). t recovered to ~233 pm on noiseless synthetic data."
+    },
+    "INT02_fpi_instrument_integration": {
+      "status": "complete",
+      "notes": "M01-M05 integration verified. V1-V5 all PASS. Visual check of 2D overlay confirmed ring alignment. chi2_reduced=1.52, t_error=202pm, wind_bias=3.03 m/s (<4.9 m/s half-budget). 5 plots saved."
+    },
+    "M06_science_inversion": {
+      "status": "pending",
+      "notes": ""
+    }
+  }
+}
