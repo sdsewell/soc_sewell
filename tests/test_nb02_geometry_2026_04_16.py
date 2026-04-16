@@ -1,31 +1,31 @@
 """
 Tests for NB02 geometry pipeline.
-Spec: specs/S07_nb02_geometry_2026-04-05.md
+Spec: NB02_geometry_2026-04-16.md
 """
 
 import numpy as np
 import pytest
 from astropy.time import Time
 
-from src.geometry.nb02a_boresight_2026_04_06 import (
+from src.geometry.nb02a_boresight_2026_04_16 import (
     compute_synthetic_quaternion,
     compute_los_eci,
 )
-from src.geometry.nb02b_tangent_point_2026_04_06 import compute_tangent_point
-from src.geometry.nb02c_los_projection_2026_04_06 import (
+from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
+from src.geometry.nb02c_los_projection_2026_04_16 import (
     enu_unit_vectors_eci,
     earth_rotation_velocity_eci,
     compute_v_rel,
 )
-from src.geometry.nb02d_l1c_calibrator_2026_04_06 import (
+from src.geometry.nb02d_l1c_calibrator_2026_04_16 import (
     compose_v_rel,
     remove_spacecraft_velocity,
 )
 from src.windmap.nb00_wind_map_2026_04_06 import UniformWindMap
 
 # Standard test geometry: equatorial crossing at Y-axis, sun-synchronous velocity
-_POS = np.array([0.0, 6.896e6, 0.0])       # shape (3,), m
-_VEL = np.array([977.2, 0.0, 7534.5])       # shape (3,), m/s
+_POS   = np.array([0.0, 6.896e6, 0.0])
+_VEL   = np.array([977.2, 0.0, 7534.5])
 _EPOCH = Time("2027-01-01T00:00:00", scale="utc")
 
 
@@ -95,13 +95,17 @@ def test_tangent_point_altitude():
 
 
 # ---------------------------------------------------------------------------
-# T6 — Tangent point leads spacecraft (RAM-FACE geometry)
+# T6 — Tangent point leads spacecraft (−X_BRF geometry)
 # ---------------------------------------------------------------------------
 
 def test_tangent_point_leads_spacecraft():
     """
     Along-track tangent point must be AHEAD of spacecraft, not behind.
     The along-track offset must be > 500 km forward.
+
+    Geometry: -X_BRF boresight points forward (velocity direction) in
+    along_track THRF configuration, depressed 15.73°. The tangent point
+    is ~923 km ahead (SI-UCAR-WC-RP-004 §2.4.2.2).
     """
     los, _ = compute_los_eci(_POS, _VEL, "along_track")
     tp = compute_tangent_point(_POS, los, _EPOCH)
@@ -110,7 +114,7 @@ def test_tangent_point_leads_spacecraft():
     forward_offset_m = np.dot(tp_pos - _POS, v_hat)
     assert forward_offset_m > 500e3, \
         (f"Tangent point {forward_offset_m / 1e3:.0f} km from sc; "
-         f"expected > 500 km FORWARD (RAM-face aperture)")
+         f"expected > 500 km FORWARD (-X_BRF boresight)")
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +149,8 @@ def test_vsc_los_ratio():
     """
     Along-track V_sc_LOS must be > 10× cross-track V_sc_LOS.
     Verifies that the look modes are correctly implemented.
+    In along_track mode the -X_BRF boresight is nearly aligned with
+    the velocity vector, maximising the spacecraft Doppler contribution.
     """
     wind_map = UniformWindMap(v_zonal_ms=0.0, v_merid_ms=0.0)
 
@@ -189,13 +195,11 @@ def test_earth_rotation_velocity():
     Earth rotation velocity at the equator must be ~465 m/s eastward.
     At the pole it must be near zero.
     """
-    # Equatorial tangent point — ECEF x-axis (lon=0, lat=0, alt=250 km)
     tp_equator_eci = np.array([6.621e6, 0.0, 0.0])
     v_eq = earth_rotation_velocity_eci(tp_equator_eci)
     assert 400 < np.linalg.norm(v_eq) < 530, \
         f"Earth rotation at equator {np.linalg.norm(v_eq):.0f} m/s; expected ~465"
 
-    # Polar tangent point
     tp_pole_eci = np.array([0.0, 0.0, 6.621e6])
     v_pole = earth_rotation_velocity_eci(tp_pole_eci)
     assert np.linalg.norm(v_pole) < 10, \
