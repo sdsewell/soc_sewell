@@ -8,7 +8,7 @@
 | S06  | NB01        | impl   | n/a      | 2026-04-06    |
 | S07  | NB02        | impl   | n/a      | 2026-04-06    |
 | S07b | NB03        | impl   | 8/8      | 2026-04-12    |
-| S08  | INT01       | impl   | n/a      | 2026-04-06    |
+| S08  | INT01       | impl   | 8/8      | 2026-04-16    |
 | S09  | M01         | impl   | passing  | 2026-04-06    |
 | S10  | M02         | impl   | passing  | 2026-04-06    |
 | S11  | M04         | impl   | passing  | 2026-04-06    |

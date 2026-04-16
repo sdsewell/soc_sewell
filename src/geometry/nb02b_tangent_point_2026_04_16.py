@@ -77,45 +77,53 @@ def compute_tangent_point(
     """
     t_epoch = epoch if isinstance(epoch, Time) else Time(epoch, scale="utc")
 
-    h_m   = h_target_km * 1e3
-    a_eff = WGS84_A_M + h_m
-    b_eff = WGS84_B_M + h_m
-
     px, py, pz = pos_eci
     lx, ly, lz = los_eci
 
-    a2 = a_eff ** 2
-    b2 = b_eff ** 2
+    def _intersect(h_km: float):
+        """Find near-side ray-ellipsoid intersection for given inflation height."""
+        h_m_loc = h_km * 1e3
+        a_eff = WGS84_A_M + h_m_loc
+        b_eff = WGS84_B_M + h_m_loc
+        a2 = a_eff ** 2
+        b2 = b_eff ** 2
+        A_coef = (lx**2 + ly**2) / a2 + lz**2 / b2
+        B_coef = 2.0 * ((px * lx + py * ly) / a2 + pz * lz / b2)
+        C_coef = (px**2 + py**2) / a2 + pz**2 / b2 - 1.0
+        disc = B_coef**2 - 4.0 * A_coef * C_coef
+        if disc < -1e-10:
+            raise ValueError(
+                f"Ray does not intersect the inflated WGS84 ellipsoid at "
+                f"h_target = {h_km:.1f} km. "
+                f"Check that the LOS points toward Earth and the spacecraft "
+                f"altitude is greater than h_target."
+            )
+        disc = max(disc, 0.0)
+        sq = np.sqrt(disc)
+        t1 = (-B_coef - sq) / (2.0 * A_coef)
+        t2 = (-B_coef + sq) / (2.0 * A_coef)
+        cands = [t for t in (t1, t2) if t > 0.0]
+        if not cands:
+            raise ValueError(
+                f"Both ray-ellipsoid roots non-positive (t1={t1:.1f}, t2={t2:.1f})."
+            )
+        return min(cands)
 
-    A_coef = (lx**2 + ly**2) / a2 + lz**2 / b2
-    B_coef = 2.0 * ((px * lx + py * ly) / a2 + pz * lz / b2)
-    C_coef = (px**2 + py**2) / a2 + pz**2 / b2 - 1.0
-
-    discriminant = B_coef**2 - 4.0 * A_coef * C_coef
-    if discriminant < 0.0:
-        raise ValueError(
-            f"Ray does not intersect the inflated WGS84 ellipsoid at "
-            f"h_target = {h_target_km} km. "
-            f"Check that the LOS points toward Earth and the spacecraft "
-            f"altitude is greater than h_target."
-        )
-
-    sqrt_disc = np.sqrt(discriminant)
-    t1 = (-B_coef - sqrt_disc) / (2.0 * A_coef)
-    t2 = (-B_coef + sqrt_disc) / (2.0 * A_coef)
-
-    candidates = [t for t in (t1, t2) if t > 0.0]
-    if not candidates:
-        raise ValueError(
-            f"Both ray-ellipsoid intersection roots are non-positive "
-            f"(t1={t1:.1f}, t2={t2:.1f}). "
-            f"The spacecraft may be below the target altitude or the LOS "
-            f"points away from Earth."
-        )
-    t_near = min(candidates)
-
-    tp_eci = pos_eci + t_near * los_eci
-    lat_deg, lon_deg, alt_km = _eci_to_geodetic(tp_eci, t_epoch)
+    # Iterative refinement: the inflated-ellipsoid approximation can give
+    # tp_alt_km several km above h_target_km at high latitudes. Correct by
+    # adjusting the effective inflation height until the geodetic altitude
+    # converges to h_target_km within 0.5 km (3 iterations are sufficient).
+    h_eff = h_target_km
+    tp_eci = None
+    lat_deg = lon_deg = alt_km = None
+    for _ in range(3):
+        t_near = _intersect(h_eff)
+        tp_eci = pos_eci + t_near * los_eci
+        lat_deg, lon_deg, alt_km = _eci_to_geodetic(tp_eci, t_epoch)
+        error_km = h_target_km - alt_km     # positive if TP is too high
+        if abs(error_km) < 0.5:
+            break
+        h_eff += error_km                   # adjust inflation to compensate
 
     return {
         "tp_eci":     tp_eci,

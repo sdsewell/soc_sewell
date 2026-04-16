@@ -1,0 +1,13 @@
+{
+  "INT01_geometry_pipeline": {
+    "status": "complete",
+    "checks_passed": 8,
+    "duration_days": 1.0,
+    "n_orbits": 16,
+    "n_epochs": 8641,
+    "n_metadata": 8641,
+    "V6_bias_zonal": -3.480209318008654e-15,
+    "V6_bias_merid": -4.3502616475108174e-16,
+    "notes": "V1\u2013V8 all PASS. Bias zonal=-0.000 m/s, merid=-0.000 m/s. Duration 1.0 day, 16 orbits, 8641 synthetic ImageMetadata records."
+  }
+}

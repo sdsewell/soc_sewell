@@ -23,6 +23,8 @@ if str(_project_root) not in sys.path:
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from src.constants import WGS84_A_M, WGS84_B_M
+
 # ---------------------------------------------------------------------------
 # BORESIGHT DIRECTION NOTE (SI-UCAR-WC-RP-004 §2.4.2.1)
 # The FPI payload boresight is the -X_BRF axis. The body-frame boresight
@@ -163,12 +165,42 @@ def compute_synthetic_quaternion(
             f"look_mode must be 'along_track' or 'cross_track', got '{look_mode}'"
         )
 
-    # Use actual spacecraft radius to compute depression angle accurately
-    _R_E_KM = 6371.0
-    sc_alt_km = np.linalg.norm(pos_eci) / 1e3 - _R_E_KM
-    dep_rad = np.radians(_compute_depression_angle(sc_alt_km, h_target_km))
+    # Iterate to find the depression angle that targets h_target_km geodetic altitude.
+    # The tangent point can be at a significantly different geocentric latitude than
+    # the spacecraft (up to ~16° for the 510 km / 250 km geometry), so using the
+    # SC latitude to set R_tp causes a systematic tp_alt error of up to ~6 km.
+    # Each iteration: compute boresight from current dep_rad, find the geometric
+    # tangent point (closest-approach point along LOS), update R_tp at that latitude.
+    # Converges in 3–4 iterations to < 0.1 km geodetic altitude error.
+    sc_r_m = np.linalg.norm(pos_eci)
+    a_m = float(WGS84_A_M)
+    b_m = float(WGS84_B_M)
+    h_eff_m = h_target_km * 1e3
 
-    x_brf, y_brf, z_brf = _brf_axes_eci(pos_eci, vel_eci, look_mode, dep_rad)
+    def _wgs84_r(lat_gc: float) -> float:
+        return a_m * b_m / np.sqrt(
+            (b_m * np.cos(lat_gc)) ** 2 + (a_m * np.sin(lat_gc)) ** 2
+        )
+
+    # Seed with SC geocentric latitude; iterate toward TP latitude
+    lat_gc_seed = float(np.arcsin(pos_eci[2] / sc_r_m))
+    R_tp = _wgs84_r(lat_gc_seed) + h_eff_m
+
+    x_brf = y_brf = z_brf = None
+    for _ in range(5):
+        dep_rad = float(np.arccos(np.clip(R_tp / sc_r_m, -1.0, 1.0)))
+        x_brf, y_brf, z_brf = _brf_axes_eci(pos_eci, vel_eci, look_mode, dep_rad)
+        los_approx = -x_brf  # boresight = -X_BRF (unit vector)
+        t_min = -np.dot(pos_eci, los_approx)  # closest-approach parameter
+        if t_min <= 0.0:
+            break  # boresight doesn't point toward Earth
+        tp_approx = pos_eci + t_min * los_approx
+        lat_gc_tp = float(np.arcsin(tp_approx[2] / np.linalg.norm(tp_approx)))
+        R_tp_new = _wgs84_r(lat_gc_tp) + h_eff_m
+        if abs(R_tp_new - R_tp) < 1.0:  # converged to 1 m
+            R_tp = R_tp_new
+            break
+        R_tp = R_tp_new
 
     # Rotation matrix: columns are ECI coords of BRF +X, +Y, +Z axes
     # R_mat @ e_brf = e_eci  (BRF → ECI active rotation)

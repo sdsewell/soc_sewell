@@ -1,0 +1,81 @@
+{
+  "rows": 256,
+  "cols": 256,
+  "exp_time": 500,
+  "exp_unit": 1,
+  "binning": 2,
+  "img_type": "science",
+  "lua_timestamp": 1798761600000,
+  "adcs_timestamp": 1798761600000,
+  "utc_timestamp": "2027-01-01T00:00:00+00:00",
+  "spacecraft_latitude": 1.146232105445608,
+  "spacecraft_longitude": 2.494036571624016,
+  "spacecraft_altitude": 521381.2746443626,
+  "pos_eci_hat": [
+    -1278186.7956648376,
+    -2538106.6583781596,
+    6267633.654956414
+  ],
+  "vel_eci_hat": [
+    -5092.585242107203,
+    -4805.273355635145,
+    -2978.1487772543674
+  ],
+  "attitude_quaternion": [
+    0.8720480788335633,
+    0.3511184942890894,
+    0.2840162422714456,
+    -0.18863383921465887
+  ],
+  "pointing_error": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+  ],
+  "obs_mode": "along_track",
+  "ccd_temp1": -18.0,
+  "etalon_temps": [
+    -5.0,
+    -5.0,
+    -5.0,
+    -5.0
+  ],
+  "shutter_status": "open",
+  "gpio_pwr_on": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "lamp_ch_array": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "lamp1_status": "off",
+  "lamp2_status": "off",
+  "lamp3_status": "off",
+  "orbit_number": 1,
+  "frame_sequence": 0,
+  "orbit_parity": "along_track",
+  "adcs_quality_flag": 0,
+  "dark_subtracted": false,
+  "dark_n_frames": 0,
+  "dark_lua_timestamp": null,
+  "dark_etalon_temp_mean": null,
+  "is_synthetic": true,
+  "truth_v_los": -68.88233971206459,
+  "truth_v_zonal": 100.0,
+  "truth_v_meridional": 50.0,
+  "tangent_lat": 50.22974674231291,
+  "tangent_lon": 135.29899487081585,
+  "tangent_alt_km": 249.9677341096527,
+  "etalon_gap_mm": 20.008000000000003,
+  "noise_seed": 0,
+  "etalon_gap_corrected_mm": null,
+  "grafana_record_id": null
+}
