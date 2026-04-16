@@ -1,12 +1,12 @@
-# S06 — NB01 Orbit Propagator
+# NB01 Orbit Propagator
 
 **Spec ID:** S06
-**Spec file:** `specs/S06_nb01_orbit_propagator_2026-04-16.md`
+**Spec file:** `specs/NB01_orbit_propagator_2026-04-16.md`
 **Project:** WindCube FPI Science Operations Center Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
 **Status:** Authoritative
 **Depends on:** S01, S02, S03, S04
-**Used by:** S07 (NB02 geometry), S08 (INT01 integration notebook), S16 (INT02), S17 (INT03)
+**Used by:** NB02 (geometry), INT01 (Integrated Testing), S16 (INT02), S17 (INT03)
 **Last updated:** 2026-04-16
 **Created/Modified by:** Claude AI
 
