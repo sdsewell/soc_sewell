@@ -1,16 +1,16 @@
-# S08 — INT01 Geometry Pipeline Integration Notebook Specification
+# INT01 Geometry Pipeline Integration Notebook Specification
 
-**Spec ID:** S08
-**Spec file:** `docs/specs/S08_int01_geometry_notebook_2026-04-16.md`
+**Spec ID:** INT01
+**Spec file:** `docs/specs/INT01_geometry_notebook_2026-04-16.md`
 **Project:** WindCube FPI Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
 **Status:** ✓ Complete — all 7 geometry checks pass; adds synthetic metadata (V8, new)
 **Depends on:**
   - S01, S02, S03, S04 — conventions and constants
-  - S05 (NB00 `2026-04-06`) — truth wind map
-  - S06 (NB01 `2026-04-16`) — orbit propagator; `propagate_orbit(t_start, duration_s, dt_s)`
-  - S07 (NB02 `2026-04-16`) — geometry pipeline; `nb02a/b/c/d_*_2026_04_16.py`
-  - S19 (P01 `2026-04-06`) — `ImageMetadata`, `build_synthetic_metadata()`
+  - NB00 `2026-04-06`) — truth wind map
+  - NB01 `2026-04-16`) — orbit propagator; `propagate_orbit(t_start, duration_s, dt_s)`
+  - NB02 `2026-04-16`) — geometry pipeline; `nb02a/b/c/d_*_2026_04_16.py`
+  - P01 `2026-04-06`) — `ImageMetadata`, `build_synthetic_metadata()`
 **Used by:** S09–S11 (Tier 2 specs must not be written until INT01 is complete)
 **References:**
   - Harding et al. (2014) Applied Optics 53(4) — science context
@@ -18,7 +18,7 @@
   - WindCube STM v1 — V6/V7 pass criteria link to SG1/SG2 requirements
 **Last updated:** 2026-04-16
 
-> **Note:** This spec supersedes `S08_int01_geometry_notebook_2026-04-05.md`.
+> **Note:** This spec supersedes `INT01_geometry_notebook_2026-04-05.md`.
 > The 2026-04-05 version is retired. All content is fully integrated here.
 
 > **Changes from 2026-04-05:**
