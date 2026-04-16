@@ -9,6 +9,14 @@ Last tested: YYYY-MM-DD  (8/8 tests pass)
 Depends on:  src.constants
 """
 
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path when run directly from any working directory
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import numpy as np
 import pandas as pd
 from sgp4.api import Satrec, WGS84, jday
