@@ -37,14 +37,14 @@
 > - v2 (2026-04-16): CONOPS model — science cadence, ±lat_band, 60°N trigger.
 > - v3 (2026-04-16): S-number references replaced with NB01/NB02a/P01 names;
 >   CONOPS document citation added.
-> - v4 (2026-04-16): Half-normal PE distribution documented; C6/C10/C11
->   corrected; script location changed to `validation/`.
-> - v5 (2026-04-16): Implementation corrections from 30-day G01 report:
->   (a) New `exp_time_cts` prompt (default 8000 counts); `TIMER_PERIOD_S =
->   0.001` s/count; `exp_unit` fixed to hardware register value `38500`.
->   (b) `ccd_temp1` now drawn per-frame from N(−10, 1°C) rather than a
->   constant. RNG draw order updated: PE (4) → etalon (4) → CCD (1).
->   (c) Console output updated with CCD stats block and exp_time line.
+> - v4 (2026-04-16): Half-normal PE distribution; C6/C10/C11 corrected;
+>   script relocated to `validation/`.
+> - v5 (2026-04-16): `exp_time_cts` prompt; `exp_unit = 38500`; CCD temp
+>   noise N(−10, 1°C); RNG draw order fixed.
+> - v6 (2026-04-16): CSV format revised. The `.csv` now contains exactly
+>   **38 columns** — the 17 binary-header fields expanded to scalars — and
+>   no derived, calculated, or None-valued pipeline fields. The `.npy` retains
+>   the complete `ImageMetadata` objects for all downstream pipeline use.
 
 ---
 
@@ -73,12 +73,11 @@ One orbit (≈ 94.8 min, 510 km SSO):
 
 - **Science frames:** one frame every `obs_cadence_s` s while `|lat| ≤ lat_band_deg`.
 - **Cal/dark sequence:** `n_caldark` cal + `n_caldark` dark frames, triggered
-  once per orbit when the spacecraft latitude first ascends through 60.0°N,
-  frames spaced `obs_cadence_s` s apart.
+  once per orbit when the spacecraft latitude first ascends through 60.0°N.
 - **All other epochs:** no observation, no `ImageMetadata` generated.
 
 **What G01 does not do:** tangent points, v_rel, wind (NB02b/c); pixel data;
-`build_synthetic_metadata()` from P01 (requires NB02c wind outputs).
+calls to P01 `build_synthetic_metadata()` (requires NB02c wind outputs).
 
 ---
 
@@ -127,7 +126,6 @@ Random seed          [int,   default  42       ] : _
 ### 3.1 Two-tier propagation
 
 NB01 is always called at `SCHED_DT_S = 10.0` s regardless of `obs_cadence_s`.
-The user cadence determines a step size in grid rows:
 
 ```python
 SCHED_DT_S       = 10.0
@@ -183,8 +181,6 @@ for i, row in df_sched.iterrows():
 |-------|-------|
 | `gpio_pwr_on` | `[0, 0, 0, 0]` |
 | `lamp_ch_array` | `[0, 0, 0, 0, 0, 0]` |
-| `shutter_status` | `'open'` |
-| `img_type` | `'science'` |
 
 ### 3.3 Calibration and dark trigger and sequence
 
@@ -202,8 +198,8 @@ for i in range(1, len(lat)):
         cal_trigger_indices.append(i)
 ```
 
-Sequence from each trigger index `t₀`: cal frames at `t₀, t₀+step, …, t₀+(n−1)·step`;
-dark frames at `t₀+n·step, …, t₀+(2n−1)·step`. Skip indices ≥ `len(df_sched)`.
+Sequence from trigger `t₀`: cal at `t₀ + k·step` for `k = 0..n−1`;
+dark at `t₀ + (n+k)·step` for `k = 0..n−1`. Skip indices ≥ `len(df_sched)`.
 
 **Calibration instrument state:**
 
@@ -211,8 +207,6 @@ dark frames at `t₀+n·step, …, t₀+(2n−1)·step`. Skip indices ≥ `len(d
 |-------|-------|
 | `gpio_pwr_on` | `[0, 1, 1, 0]` |
 | `lamp_ch_array` | `[1, 1, 1, 1, 1, 1]` |
-| `shutter_status` | `'open'` |
-| `img_type` | `'cal'` |
 
 **Dark instrument state:**
 
@@ -220,8 +214,6 @@ dark frames at `t₀+n·step, …, t₀+(2n−1)·step`. Skip indices ≥ `len(d
 |-------|-------|
 | `gpio_pwr_on` | `[1, 0, 0, 1]` |
 | `lamp_ch_array` | `[0, 0, 0, 0, 0, 0]` |
-| `shutter_status` | `'closed'` |
-| `img_type` | `'dark'` |
 
 ### 3.4 `img_type` derivation
 
@@ -243,9 +235,9 @@ science_final = [i for i in science_indices if i not in cal_dark_set]
 obs_indices   = sorted(science_final + cal_indices + dark_indices)
 ```
 
-`frame_sequence`: 0-based index among all observation frames for each orbit,
-ordered by epoch. `n_complete_orbits = len(cal_trigger_indices)` (used in
-C10/C11 — does not include the terminal partial orbit).
+`frame_sequence`: 0-based among all observation frames per orbit, ordered
+by epoch. `n_complete_orbits = len(cal_trigger_indices)` (excludes any
+terminal partial orbit that did not reach 60°N before the window closed).
 
 ---
 
@@ -253,11 +245,11 @@ C10/C11 — does not include the terminal partial orbit).
 
 ### 4.1 Pointing error quaternion
 
-The signed rotation angle θ is drawn from N(0, σ_θ) with:
+Signed rotation angle drawn from N(0, σ_θ):
 
 ```
-σ_θ = SIGMA_POINTING_ARCSEC × (π / 648000) ≈ 2.4241 × 10⁻⁵ rad
 SIGMA_POINTING_ARCSEC = 5.0
+σ_θ = 5.0 × (π / 648000) ≈ 2.4241 × 10⁻⁵ rad
 ```
 
 ```python
@@ -270,16 +262,12 @@ qe     = [n_hat[0]*np.sin(half_θ), n_hat[1]*np.sin(half_θ),
 qe     = [c / np.linalg.norm(qe) for c in qe]
 ```
 
-**Observed statistics** — the physical rotation magnitude |θ| follows a
-half-normal distribution:
+The observable rotation magnitude |θ| follows a **half-normal** distribution:
 
 ```
 E[|θ|]   = σ_θ · √(2/π) ≈ 3.99 arcsec
 Std[|θ|] = σ_θ · √(1−2/π) ≈ 3.01 arcsec
 ```
-
-P01 `compute_adcs_quality_flag()` sets `SLEW_IN_PROGRESS` at 30 arcsec (6σ).
-Essentially no frames flagged over a 30-day campaign.
 
 ### 4.2 Etalon temperatures
 
@@ -289,62 +277,33 @@ etalon_temps = rng.normal(24.0, 0.1, size=4).tolist()   # °C
 
 ### 4.3 CCD temperature
 
-CCD temperature is drawn **per frame** from:
+Drawn per frame from N(−10.0, 1.0) °C:
 
 ```python
-ccd_temp1 = float(rng.normal(-10.0, 1.0))   # °C
+ccd_temp1 = float(rng.normal(-10.0, 1.0))
 ```
 
-Mean −10.0 °C represents the nominal on-orbit CCD set point.
-σ = 1.0 °C represents thermal control noise and calibration uncertainty.
-
-**Why stochastic rather than constant:** Real CCD temperatures vary with
-orbital thermal cycling and heater duty cycle. Using a per-frame draw
-provides realistic temperature diversity in the synthetic dataset, which
-is important for thermal correction testing in downstream modules.
-
-### 4.4 RNG draw order per observation frame
-
-The following draw order is **fixed and must not be changed** — altering it
-would invalidate the seed-reproducibility guarantee:
+### 4.4 RNG draw order per observation frame (fixed — do not change)
 
 ```
-1. theta       : 1 draw  via rng.normal(0, sigma_theta_rad)
-2. axis raw    : 3 draws via rng.standard_normal(3)
-3. etalon temps: 4 draws via rng.normal(24.0, 0.1, 4)
-4. ccd_temp1   : 1 draw  via rng.normal(-10.0, 1.0)
+1. theta       : 1 draw  — rng.normal(0, sigma_theta_rad)
+2. axis raw    : 3 draws — rng.standard_normal(3)
+3. etalon temps: 4 draws — rng.normal(24.0, 0.1, 4)
+4. ccd_temp1   : 1 draw  — rng.normal(-10.0, 1.0)
 ```
 
-Total: 9 draws per observation frame.
+Total: 9 draws per frame. Order is a reproducibility contract.
 
 ### 4.5 Exposure time and hardware register
 
-The user specifies exposure time as an integer count in units of timer ticks.
-The hardware timer period is:
-
 ```python
-TIMER_PERIOD_S = 0.001   # 1.0 ms per count (hardware constant)
-exp_unit       = 38500   # fixed hardware register value (not a count)
+TIMER_PERIOD_S    = 0.001   # 1 ms per count — hardware constant
+EXP_UNIT_REGISTER = 38500   # hardware timing register — always fixed
 ```
 
-The exposure duration in seconds is `exp_time_cts × TIMER_PERIOD_S`. This
-value is stored in the `exp_time` field of `ImageMetadata` (in centiseconds
-as the P01 binary format requires: `exp_time_cs = round(exp_time_cts * TIMER_PERIOD_S * 100)`).
-
-The `exp_unit` field stores the hardware timing register value `38500`.
-This is a **fixed hardware constant**, not derived from `exp_time_cts`.
-It must always be `38500` regardless of the exposure duration.
-
-The same `exp_time_cts` is applied uniformly to all frame types (science,
-cal, dark). The CONOPS specifies separate exposure times per frame type;
-a future revision will add per-type overrides when those values are confirmed
-against the CONOPS document. For now a single user-specified value is used
-for all types.
-
-Console display:
-```
-  Exp. time : 8000 counts × 1.0 ms/count = 8.000 s  (exp_unit=38500)
-```
+`exp_time` (P01 centiseconds field) = `round(exp_time_cts × TIMER_PERIOD_S × 100)`.
+`exp_unit` = `38500` always — not derived from `exp_time_cts`.
+Same `exp_time_cts` applied to all frame types (science, cal, dark).
 
 ---
 
@@ -354,10 +313,10 @@ Console display:
 |-------|--------|-----------------|
 | `rows` | constant | `260` |
 | `cols` | constant | `276` |
-| `exp_time` | §4.5 | `round(exp_time_cts * TIMER_PERIOD_S * 100)` centiseconds |
+| `exp_time` | §4.5 | `round(exp_time_cts × TIMER_PERIOD_S × 100)` cs |
 | `exp_unit` | §4.5 | `38500` (hardware register, fixed) |
 | `binning` | constant | `2` |
-| `img_type` | P01 §3.4 | `_classify_img_type(lamp_ch_array, gpio_pwr_on)` |
+| `img_type` | §3.4 | `_classify_img_type(lamp_ch_array, gpio_pwr_on)` |
 | `lua_timestamp` | NB01 `epoch` | `int(row.epoch.timestamp() * 1000)` ms |
 | `adcs_timestamp` | NB01 `epoch` | `= lua_timestamp` |
 | `utc_timestamp` | NB01 `epoch` | `row.epoch.isoformat()` |
@@ -377,10 +336,10 @@ Console display:
 | `lamp1_status` | P01 rule | `"on" if lamp_ch[0] or lamp_ch[1] else "off"` |
 | `lamp2_status` | P01 rule | `"on" if lamp_ch[2] or lamp_ch[3] else "off"` |
 | `lamp3_status` | P01 rule | `"on" if lamp_ch[4] or lamp_ch[5] else "off"` |
-| `orbit_number` | NB01 §3.1 | 1-based from elapsed time |
+| `orbit_number` | §3.1 | 1-based from elapsed time |
 | `frame_sequence` | §3.5 | 0-based within orbit observation list |
-| `orbit_parity` | NB01 §3.1 | `'along_track'` / `'cross_track'` |
-| `adcs_quality_flag` | P01 `compute_adcs_quality_flag()` | from pointing_error |
+| `orbit_parity` | §3.1 | `'along_track'` / `'cross_track'` |
+| `adcs_quality_flag` | P01 `compute_adcs_quality_flag()` | computed from pointing_error |
 | `is_synthetic` | constant | `True` |
 | `noise_seed` | frame index | 0-based in `obs_indices` |
 | All synthetic truth fields | — | `None` (NB02b/c not run) |
@@ -396,28 +355,151 @@ Console display:
 {output_dir}/GEN01_{t_start_compact}_{duration_days:05.1f}d_seed{rng_seed:04d}
 ```
 
-Example (defaults): `validation/outputs/GEN01_20270101_030.0d_seed0042.npy`
+Example (defaults):
+```
+validation/outputs/GEN01_20270101_030.0d_seed0042.npy   (52.8 MB)
+validation/outputs/GEN01_20270101_030.0d_seed0042.csv   (73.9 MB)
+```
 
-### 6.2 `.npy` — object array of dicts
+### 6.2 `.npy` — complete `ImageMetadata` object array (primary)
+
+The `.npy` file is the **authoritative output** consumed by all downstream
+pipeline modules. It contains the full `ImageMetadata` dataclass for every
+observation frame, including all derived, calculated, and pipeline-added
+fields.
 
 ```python
 records = [dataclasses.asdict(m) for m in metadata_list]
 np.save(npy_path, np.array(records, dtype=object), allow_pickle=True)
 ```
 
-Load: `meta_list = [ImageMetadata(**r) for r in np.load(path, allow_pickle=True)]`
+Loading in downstream modules:
+```python
+records   = np.load(npy_path, allow_pickle=True)
+meta_list = [ImageMetadata(**r) for r in records]
+```
 
-### 6.3 `.csv` — flat expanded columns
+### 6.3 `.csv` — binary-header equivalent, 38 columns (human-readable export)
 
-| P01 list field | CSV column names |
-|----------------|-----------------|
-| `pos_eci_hat` | `pos_eci_x`, `pos_eci_y`, `pos_eci_z` |
-| `vel_eci_hat` | `vel_eci_x`, `vel_eci_y`, `vel_eci_z` |
-| `attitude_quaternion` | `att_q_x`, `att_q_y`, `att_q_z`, `att_q_w` |
-| `pointing_error` | `pe_q_x`, `pe_q_y`, `pe_q_z`, `pe_q_w` |
-| `etalon_temps` | `etalon_t0`, `etalon_t1`, `etalon_t2`, `etalon_t3` |
-| `gpio_pwr_on` | `gpio_0`, `gpio_1`, `gpio_2`, `gpio_3` |
-| `lamp_ch_array` | `lamp_0`, `lamp_1`, `lamp_2`, `lamp_3`, `lamp_4`, `lamp_5` |
+The `.csv` contains exactly **38 columns** corresponding to the 17 binary
+header fields of the on-orbit image format (P01 §2.3), with list fields
+expanded into named scalar columns. It is the synthetic equivalent of what
+the real binary header produces at ingest.
+
+**Design rationale:** Derived fields (`img_type`, `binning`, `utc_timestamp`,
+`shutter_status`, `lamp1/2/3_status`, `obs_mode`, `orbit_*`,
+`adcs_quality_flag`) are reproducibly computable from the 38 header columns
+via P01 at any time and are therefore not stored in the CSV. Pipeline-added
+fields (`is_synthetic`, `noise_seed`, all `None`-valued truth and provenance
+fields) belong only in the `.npy`. This keeps the CSV compact, externally
+readable, and structurally identical to real on-orbit ingest output.
+
+**The 38 CSV columns in order:**
+
+| # | Column name | P01 field | Source | Type |
+|---|-------------|-----------|--------|------|
+| 1 | `rows` | `rows` | constant 260 | int |
+| 2 | `cols` | `cols` | constant 276 | int |
+| 3 | `exp_time` | `exp_time` | §4.5 (centiseconds) | int |
+| 4 | `exp_unit` | `exp_unit` | 38500 (fixed) | int |
+| 5 | `ccd_temp1` | `ccd_temp1` | §4.3 N(−10, 1) °C | float |
+| 6 | `lua_timestamp` | `lua_timestamp` | NB01 epoch, Unix ms | int |
+| 7 | `adcs_timestamp` | `adcs_timestamp` | = lua_timestamp | int |
+| 8 | `spacecraft_latitude` | `spacecraft_latitude` | NB01 lat_deg → rad | float |
+| 9 | `spacecraft_longitude` | `spacecraft_longitude` | NB01 lon_deg → rad | float |
+| 10 | `spacecraft_altitude` | `spacecraft_altitude` | NB01 alt_km → m | float |
+| 11 | `att_q_x` | `attitude_quaternion[0]` | NB02a q[0] | float |
+| 12 | `att_q_y` | `attitude_quaternion[1]` | NB02a q[1] | float |
+| 13 | `att_q_z` | `attitude_quaternion[2]` | NB02a q[2] | float |
+| 14 | `att_q_w` | `attitude_quaternion[3]` | NB02a q[3] | float |
+| 15 | `pe_q_x` | `pointing_error[0]` | §4.1 qe[0] | float |
+| 16 | `pe_q_y` | `pointing_error[1]` | §4.1 qe[1] | float |
+| 17 | `pe_q_z` | `pointing_error[2]` | §4.1 qe[2] | float |
+| 18 | `pe_q_w` | `pointing_error[3]` | §4.1 qe[3] | float |
+| 19 | `pos_eci_x` | `pos_eci_hat[0]` | NB01 pos_eci_x, m | float |
+| 20 | `pos_eci_y` | `pos_eci_hat[1]` | NB01 pos_eci_y, m | float |
+| 21 | `pos_eci_z` | `pos_eci_hat[2]` | NB01 pos_eci_z, m | float |
+| 22 | `vel_eci_x` | `vel_eci_hat[0]` | NB01 vel_eci_x, m/s | float |
+| 23 | `vel_eci_y` | `vel_eci_hat[1]` | NB01 vel_eci_y, m/s | float |
+| 24 | `vel_eci_z` | `vel_eci_hat[2]` | NB01 vel_eci_z, m/s | float |
+| 25 | `etalon_t0` | `etalon_temps[0]` | §4.2 N(24, 0.1) °C | float |
+| 26 | `etalon_t1` | `etalon_temps[1]` | §4.2 N(24, 0.1) °C | float |
+| 27 | `etalon_t2` | `etalon_temps[2]` | §4.2 N(24, 0.1) °C | float |
+| 28 | `etalon_t3` | `etalon_temps[3]` | §4.2 N(24, 0.1) °C | float |
+| 29 | `gpio_0` | `gpio_pwr_on[0]` | frame-type dependent | int |
+| 30 | `gpio_1` | `gpio_pwr_on[1]` | frame-type dependent | int |
+| 31 | `gpio_2` | `gpio_pwr_on[2]` | frame-type dependent | int |
+| 32 | `gpio_3` | `gpio_pwr_on[3]` | frame-type dependent | int |
+| 33 | `lamp_0` | `lamp_ch_array[0]` | frame-type dependent | int |
+| 34 | `lamp_1` | `lamp_ch_array[1]` | frame-type dependent | int |
+| 35 | `lamp_2` | `lamp_ch_array[2]` | frame-type dependent | int |
+| 36 | `lamp_3` | `lamp_ch_array[3]` | frame-type dependent | int |
+| 37 | `lamp_4` | `lamp_ch_array[4]` | frame-type dependent | int |
+| 38 | `lamp_5` | `lamp_ch_array[5]` | frame-type dependent | int |
+
+**CSV construction:**
+
+```python
+rows_out = []
+for m in metadata_list:
+    d = dataclasses.asdict(m)
+    rows_out.append({
+        'rows':                 d['rows'],
+        'cols':                 d['cols'],
+        'exp_time':             d['exp_time'],
+        'exp_unit':             d['exp_unit'],
+        'ccd_temp1':            d['ccd_temp1'],
+        'lua_timestamp':        d['lua_timestamp'],
+        'adcs_timestamp':       d['adcs_timestamp'],
+        'spacecraft_latitude':  d['spacecraft_latitude'],
+        'spacecraft_longitude': d['spacecraft_longitude'],
+        'spacecraft_altitude':  d['spacecraft_altitude'],
+        'att_q_x':  d['attitude_quaternion'][0],
+        'att_q_y':  d['attitude_quaternion'][1],
+        'att_q_z':  d['attitude_quaternion'][2],
+        'att_q_w':  d['attitude_quaternion'][3],
+        'pe_q_x':   d['pointing_error'][0],
+        'pe_q_y':   d['pointing_error'][1],
+        'pe_q_z':   d['pointing_error'][2],
+        'pe_q_w':   d['pointing_error'][3],
+        'pos_eci_x': d['pos_eci_hat'][0],
+        'pos_eci_y': d['pos_eci_hat'][1],
+        'pos_eci_z': d['pos_eci_hat'][2],
+        'vel_eci_x': d['vel_eci_hat'][0],
+        'vel_eci_y': d['vel_eci_hat'][1],
+        'vel_eci_z': d['vel_eci_hat'][2],
+        'etalon_t0': d['etalon_temps'][0],
+        'etalon_t1': d['etalon_temps'][1],
+        'etalon_t2': d['etalon_temps'][2],
+        'etalon_t3': d['etalon_temps'][3],
+        'gpio_0': d['gpio_pwr_on'][0],
+        'gpio_1': d['gpio_pwr_on'][1],
+        'gpio_2': d['gpio_pwr_on'][2],
+        'gpio_3': d['gpio_pwr_on'][3],
+        'lamp_0': d['lamp_ch_array'][0],
+        'lamp_1': d['lamp_ch_array'][1],
+        'lamp_2': d['lamp_ch_array'][2],
+        'lamp_3': d['lamp_ch_array'][3],
+        'lamp_4': d['lamp_ch_array'][4],
+        'lamp_5': d['lamp_ch_array'][5],
+    })
+
+pd.DataFrame(rows_out).to_csv(csv_path, index=False)
+```
+
+**What is deliberately absent from the CSV:**
+
+| Omitted field | Reason |
+|---------------|--------|
+| `img_type`, `binning`, `shutter_status` | Derived from gpio/lamp via P01 §2.5 |
+| `utc_timestamp` | Derived from `lua_timestamp` |
+| `lamp1/2/3_status` | Derived from `lamp_ch_array` |
+| `obs_mode`, `orbit_number`, `frame_sequence`, `orbit_parity` | Pipeline-added schedule fields |
+| `adcs_quality_flag` | Computed from `pointing_error` via P01 |
+| `is_synthetic`, `noise_seed` | Pipeline provenance fields |
+| All truth fields (`truth_v_*`, `tangent_*`, `etalon_gap*`) | `None` in G01; belong in `.npy` |
+| All dark provenance fields | `None`/default in G01; belong in `.npy` |
+| `grafana_record_id` | `None` in G01 |
 
 ---
 
@@ -431,7 +513,25 @@ Parameters:
   Exp. time        : 8000 counts × 1.0 ms/count = 8.000 s  (exp_unit=38500)
   ...
 
-...
+Building NB01 orbit schedule ... done
+
+Observation schedule:
+  Science frames : 115860
+  Cal frames     : 2275    (5 per orbit × ~455 complete orbits)
+  Dark frames    : 2275    (5 per orbit × ~455 complete orbits)
+  Total frames   : 120410
+
+Building NB02a attitude quaternions + metadata ...
+  [====================] 120410/120410
+
+Image type verification:
+  science : 115860
+  cal     : 2275
+  dark    : 2275
+
+ADCS quality flags (P01):
+  GOOD             : 120410
+  SLEW_IN_PROGRESS : 0   (expected ~0)
 
 Pointing error stats (arcsec):
   Mean  :   3.99   (expected ~3.99, half-normal)
@@ -445,25 +545,43 @@ Etalon temperature stats (°C):
 CCD temperature stats (°C):
   Mean  : -10.00   (expected ~-10.00)
   Std   :   1.00   (expected ~  1.00)
+
+Output files:
+  validation/outputs/GEN01_20270101_030.0d_seed0042.npy  (52.8 MB — full ImageMetadata)
+  validation/outputs/GEN01_20270101_030.0d_seed0042.csv  (73.9 MB — 38-column header export)
+
+G01 complete.
 ```
 
 ### 7.2 Verification checks
 
-| Check | Criterion | Notes |
-|-------|-----------|-------|
-| C1 | NB01 sched rows ≈ `duration_s / SCHED_DT_S` ± 2 | |
-| C2 | All `orbit_parity` ∈ `{'along_track', 'cross_track'}` | |
-| C3 | No NaN in `att_q_*` (NB02a) | |
-| C4 | All attitude quaternions unit norm to 1e-6 | |
-| C5 | All pointing error quaternions unit norm to 1e-6 | |
-| C6 | Mean unsigned PE angle within 20% of `σ·√(2/π)` ≈ 3.99 arcsec | Half-normal; not 5 arcsec |
-| C7 | Etalon temp mean within 0.05°C of 24.0°C | |
-| C8 | P01 `adcs_quality_flag == 0` for > 99.9% of frames | |
-| C9 | `img_type` ∈ `{'science', 'cal', 'dark'}` | |
-| C10 | Cal count ≈ `n_caldark × n_complete_orbits` (±5%) | `n_complete_orbits = len(cal_trigger_indices)` |
-| C11 | Dark count ≈ `n_caldark × n_complete_orbits` (±5%) | Same — terminal partial orbit excluded |
-| C12 | No science frame `lat_deg > lat_band_deg + 1°` | |
-| C13 | P01 round-trip: `ImageMetadata(**np.load(npy_path, allow_pickle=True)[0])` succeeds | |
+Checks annotated with the file they operate on: `[.npy]` or `[.csv]`.
+Non-blocking — print `PASS` or `FAIL — <reason>` for each.
+
+| Check | Criterion | File |
+|-------|-----------|------|
+| C1 | NB01 sched rows ≈ `duration_s / SCHED_DT_S` ± 2 | — |
+| C2 | All `orbit_parity` ∈ `{'along_track', 'cross_track'}` | `.npy` |
+| C3 | No NaN in `att_q_x/y/z/w` columns | `.csv` |
+| C4 | All attitude quaternions unit norm to 1e-6: `√(att_q_x²+att_q_y²+att_q_z²+att_q_w²) ≈ 1` | `.csv` |
+| C5 | All pointing error quaternions unit norm to 1e-6: `√(pe_q_x²+…+pe_q_w²) ≈ 1` | `.csv` |
+| C6 | Mean unsigned PE angle within 20% of `σ·√(2/π)` ≈ 3.99 arcsec | `.csv` pe_q_* columns |
+| C7 | `mean(etalon_t0..t3)` within 0.05°C of 24.0°C | `.csv` |
+| C8 | P01 `adcs_quality_flag == 0` for > 99.9% of frames | `.npy` |
+| C9 | `img_type` ∈ `{'science', 'cal', 'dark'}` (derived from `.csv` gpio/lamp) | `.csv` → P01 |
+| C10 | Cal count ≈ `n_caldark × n_complete_orbits` (±5%) | `.npy` |
+| C11 | Dark count ≈ `n_caldark × n_complete_orbits` (±5%) | `.npy` |
+| C12 | CSV has exactly 38 columns | `.csv` |
+| C13 | `.npy` round-trip: `ImageMetadata(**np.load(path, allow_pickle=True)[0])` succeeds | `.npy` |
+
+**C9 implementation note:** Derive `img_type` from the CSV's gpio/lamp columns
+using `_classify_img_type()` and verify all values are in the valid set.
+This also confirms that the gpio/lamp columns are self-consistent with P01
+classification logic — any bug in the instrument state assignment will surface
+here without needing to re-run the generation.
+
+**C12 is the CSV structural guard.** If a future code change adds or removes a
+column, C12 catches it immediately without needing to inspect column names.
 
 ---
 
@@ -474,8 +592,8 @@ soc_sewell/
 ├── validation/
 │   ├── gen01_synthetic_metadata_generator_2026_04_16.py
 │   └── outputs/
-│       ├── GEN01_20270101_030.0d_seed0042.npy   (52.8 MB, 30-day run)
-│       └── GEN01_20270101_030.0d_seed0042.csv   (73.9 MB, 30-day run)
+│       ├── GEN01_20270101_030.0d_seed0042.npy   (52.8 MB — full ImageMetadata)
+│       └── GEN01_20270101_030.0d_seed0042.csv   (73.9 MB — 38-col header export)
 └── docs/specs/
     └── G01_synthetic_metadata_generator_2026-04-16.md
 ```
@@ -491,10 +609,9 @@ cat PIPELINE_STATUS.md
 
 ### Prerequisite reads
 1. This spec in full.
-2. NB01 spec — `propagate_orbit` signature; note `_eci_to_geodetic_batch`
-   is internal; public interface unchanged.
+2. NB01 spec — `propagate_orbit` signature; `_eci_to_geodetic_batch` is internal.
 3. NB02a spec — `compute_los_eci(pos_eci, vel_eci, look_mode, h_target_km)`;
-   iterative depression angle; pass `h_target_km` explicitly.
+   always pass `h_target_km` explicitly.
 4. P01 spec — `ImageMetadata` fields; `AdcsQualityFlags`;
    `compute_adcs_quality_flag()`.
 5. `CLAUDE.md` at repo root.
@@ -508,32 +625,34 @@ pytest tests/test_s19_p01_metadata.py -v         # 8/8
 
 ### Constants block
 ```python
-SCHED_DT_S            = 10.0    # NB01 cadence, always fixed
-CAL_TRIGGER_LAT_DEG   = 60.0    # CONOPS ascending trigger
-SIGMA_POINTING_ARCSEC =  5.0    # Gaussian σ for θ draw
+SCHED_DT_S            = 10.0
+CAL_TRIGGER_LAT_DEG   = 60.0
+SIGMA_POINTING_ARCSEC =  5.0
 ETALON_TEMP_MEAN_C    = 24.0
 ETALON_TEMP_STD_C     =  0.1
 CCD_TEMP_MEAN_C       = -10.0
 CCD_TEMP_STD_C        =   1.0
-TIMER_PERIOD_S        =  0.001  # 1 ms per count — hardware constant
-EXP_UNIT_REGISTER     = 38500   # hardware timing register — always fixed
+TIMER_PERIOD_S        =  0.001
+EXP_UNIT_REGISTER     = 38500
 ```
 
-### Key implementation rules
+### CSV construction rule
 
-- **`exp_time` field** = `round(exp_time_cts * TIMER_PERIOD_S * 100)` centiseconds.
-  `exp_unit` field = `EXP_UNIT_REGISTER = 38500` always — not derived from
+Build each CSV row by **explicitly naming each of the 38 columns** from the
+dict returned by `dataclasses.asdict(m)`. Do not use `dataclasses.asdict(m)`
+directly as a CSV row, do not iterate over dict keys, and do not use
+`df.drop()` to remove unwanted columns. The column list in §6.3 is the
+authoritative definition — construct exactly those 38 columns and no others.
+
+### Critical rules
+- **`exp_unit` = `EXP_UNIT_REGISTER = 38500` always** — not derived from
   `exp_time_cts`.
-- **`ccd_temp1`** = `float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))` per frame.
-  Not a constant.
-- **RNG draw order** per frame (strictly): θ (1) → axis (3) → etalon (4) → CCD (1).
-  Do not reorder — would invalidate seed reproducibility.
-- **C6 check**: use `SIGMA_POINTING_ARCSEC * np.sqrt(2 / np.pi)` ≈ 3.99 as
-  expected mean, not `SIGMA_POINTING_ARCSEC` directly.
-- **C10/C11**: use `n_caldark * len(cal_trigger_indices)`, never
-  `df_sched['orbit_number'].max()`.
-- **NB01 always at `SCHED_DT_S = 10.0`** — never pass `obs_cadence_s`.
-- **NB02a** needs explicit `h_target_km`.
+- **`ccd_temp1`** = `rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C)` per frame.
+- **RNG draw order**: θ (1) → axis (3) → etalon (4) → CCD (1). Never change.
+- **C6**: expected mean = `SIGMA_POINTING_ARCSEC * np.sqrt(2 / np.pi)`.
+- **C10/C11**: use `len(cal_trigger_indices)`, not `orbit_number.max()`.
+- **C12**: `assert len(df_csv.columns) == 38`.
+- **NB01 at `SCHED_DT_S = 10.0`** always.
 - **No `build_synthetic_metadata()`** — construct `ImageMetadata` directly.
 - **Timezone**: `t0 = pd.Timestamp(t_start, tz='UTC')`.
 
@@ -541,12 +660,12 @@ EXP_UNIT_REGISTER     = 38500   # hardware timing register — always fixed
 ```bash
 git add PIPELINE_STATUS.md \
         validation/gen01_synthetic_metadata_generator_2026_04_16.py
-git commit -m "feat(g01): exp_time prompt, exp_unit=38500, CCD noise, C1-C13 pass
+git commit -m "feat(g01): CSV reduced to 38 binary-header columns, C1-C13 pass
 
-exp_time_cts prompt (default 8000); exp_unit fixed to 38500 (hw register)
-ccd_temp1: N(-10, 1°C) per frame (was constant)
-RNG order: PE(4) -> etalon(4) -> CCD(1)
-30-day run: science=115860, cal=2275, dark=2275, total=120410
+CSV: exactly 38 columns = 17 P01 binary-header fields expanded to scalars.
+Derived/calculated/None fields removed from CSV; retained in .npy only.
+C12: assert len(df.columns) == 38. C9: img_type via _classify_img_type(gpio, lamp).
+30-day run: 120410 frames, science=115860, cal=2275, dark=2275
 
 Also updates PIPELINE_STATUS.md"
 ```

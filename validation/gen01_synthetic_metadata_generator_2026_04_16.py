@@ -12,6 +12,8 @@ Usage:     python validation/gen01_synthetic_metadata_generator_2026_04_16.py
 import sys
 import pathlib
 import dataclasses
+import tkinter as tk
+from tkinter import filedialog
 
 _project_root = pathlib.Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
@@ -45,7 +47,7 @@ TIMER_PERIOD_S        = 0.001  # seconds per count when exp_unit = 38500
 
 
 # ---------------------------------------------------------------------------
-# Helper: interactive prompt
+# Helper: interactive text prompt
 # ---------------------------------------------------------------------------
 
 def _prompt(msg: str, default, cast, lo=None, hi=None):
@@ -66,6 +68,26 @@ def _prompt(msg: str, default, cast, lo=None, hi=None):
             print(f"  Value {val} above maximum {hi}. Try again.")
             continue
         return val
+
+
+# ---------------------------------------------------------------------------
+# Helper: Windows folder-picker dialog
+# ---------------------------------------------------------------------------
+
+def _pick_folder(title: str, default: str) -> str:
+    """
+    Open a native Windows folder-browser dialog.
+    Returns the selected path, or default if the user cancels.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    folder = filedialog.askdirectory(
+        title=title,
+        initialdir=default,
+    )
+    root.destroy()
+    return folder if folder else default
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +237,18 @@ def main():
     h_target_km   = _prompt(
         "Tangent height       [km,    default 250       ] : ",
         250.0, float, 100.0, 400.0)
-    output_dir    = _prompt(
-        "Output directory     [       default validation/outputs/] : ",
-        "validation/outputs/", str)
     rng_seed      = _prompt(
         "Random seed          [int,   default  42       ] : ",
         42, int, 0, None)
+
+    # Folder picker dialog for output directory
+    _default_out = str(pathlib.Path.home() / "WindCube" / "G01_outputs")
+    print("\nSelect output folder (dialog opening — check taskbar if not visible)...")
+    output_dir = _pick_folder(
+        title="Select output folder for G01 files",
+        default=_default_out,
+    )
+    print(f"  Output directory : {output_dir}")
 
     # Constraint warnings
     if lat_band_deg >= CAL_TRIGGER_LAT_DEG:
@@ -438,8 +466,8 @@ def main():
         pe_angles.append(angle_as)
     pe_arr = np.array(pe_angles)
     # For unsigned rotation angle drawn from |N(0,σ)|: mean = σ√(2/π), std = σ√(1−2/π)
-    pe_expected_mean = SIGMA_POINTING_ARCSEC * np.sqrt(2.0 / np.pi)   # ≈ 3.99
-    pe_expected_std  = SIGMA_POINTING_ARCSEC * np.sqrt(1 - 2.0 / np.pi)  # ≈ 3.01
+    pe_expected_mean = SIGMA_POINTING_ARCSEC * np.sqrt(2.0 / np.pi)
+    pe_expected_std  = SIGMA_POINTING_ARCSEC * np.sqrt(1 - 2.0 / np.pi)
     print(f"\nPointing error stats (arcsec):")
     print(f"  Mean  : {pe_arr.mean():6.2f}   (expected ~{pe_expected_mean:.2f}, half-normal)")
     print(f"  Std   : {pe_arr.std():6.2f}   (expected ~{pe_expected_std:.2f}, half-normal)")
@@ -471,27 +499,64 @@ def main():
     records = [dataclasses.asdict(m) for m in metadata_list]
     np.save(str(npy_path), np.array(records, dtype=object), allow_pickle=True)
 
-    # CSV: expand list-valued columns (§6.3)
-    LIST_EXPAND = {
-        "pos_eci_hat":          ["pos_eci_x", "pos_eci_y", "pos_eci_z"],
-        "vel_eci_hat":          ["vel_eci_x", "vel_eci_y", "vel_eci_z"],
-        "attitude_quaternion":  ["att_q_x", "att_q_y", "att_q_z", "att_q_w"],
-        "pointing_error":       ["pe_q_x", "pe_q_y", "pe_q_z", "pe_q_w"],
-        "etalon_temps":         ["etalon_t0", "etalon_t1", "etalon_t2", "etalon_t3"],
-        "gpio_pwr_on":          ["gpio_0", "gpio_1", "gpio_2", "gpio_3"],
-        "lamp_ch_array":        ["lamp_0", "lamp_1", "lamp_2", "lamp_3", "lamp_4", "lamp_5"],
-    }
-
+    # CSV: only the 17 fields physically embedded in the binary header (pixels 0-109).
+    # Calculated/derived fields (img_type, binning, utc_timestamp, shutter_status,
+    # lamp_status, obs_mode, orbit_*, adcs_quality_flag, dark/truth/tangent fields,
+    # etc.) are omitted — they are not stored in hardware and can be re-derived.
+    # List-valued fields are expanded to named scalar columns.
     rows_csv = []
     for r in records:
-        row_csv = {}
-        for k, v in r.items():
-            if k in LIST_EXPAND:
-                for col, val in zip(LIST_EXPAND[k], v):
-                    row_csv[col] = val
-            else:
-                row_csv[k] = v
-        rows_csv.append(row_csv)
+        rows_csv.append({
+            # ── pixels 0-3: geometry / timing scalars ──────────────────────
+            "rows":                  r["rows"],
+            "cols":                  r["cols"],
+            "exp_time":              r["exp_time"],
+            "exp_unit":              r["exp_unit"],
+            # ── pixels 4-7: CCD temperature ────────────────────────────────
+            "ccd_temp1":             r["ccd_temp1"],
+            # ── pixels 8-15: timestamps ─────────────────────────────────────
+            "lua_timestamp":         r["lua_timestamp"],
+            "adcs_timestamp":        r["adcs_timestamp"],
+            # ── pixels 16-27: spacecraft geodetic state ─────────────────────
+            "spacecraft_latitude":   r["spacecraft_latitude"],
+            "spacecraft_longitude":  r["spacecraft_longitude"],
+            "spacecraft_altitude":   r["spacecraft_altitude"],
+            # ── pixels 28-43: attitude quaternion [x, y, z, w] ─────────────
+            "att_q_x":  r["attitude_quaternion"][0],
+            "att_q_y":  r["attitude_quaternion"][1],
+            "att_q_z":  r["attitude_quaternion"][2],
+            "att_q_w":  r["attitude_quaternion"][3],
+            # ── pixels 44-59: pointing error quaternion [x, y, z, w] ────────
+            "pe_q_x":   r["pointing_error"][0],
+            "pe_q_y":   r["pointing_error"][1],
+            "pe_q_z":   r["pointing_error"][2],
+            "pe_q_w":   r["pointing_error"][3],
+            # ── pixels 60-71: ECI position [x, y, z] m ──────────────────────
+            "pos_eci_x": r["pos_eci_hat"][0],
+            "pos_eci_y": r["pos_eci_hat"][1],
+            "pos_eci_z": r["pos_eci_hat"][2],
+            # ── pixels 72-83: ECI velocity [vx, vy, vz] m/s ─────────────────
+            "vel_eci_x": r["vel_eci_hat"][0],
+            "vel_eci_y": r["vel_eci_hat"][1],
+            "vel_eci_z": r["vel_eci_hat"][2],
+            # ── pixels 84-99: etalon temperatures [T0-T3] °C ────────────────
+            "etalon_t0": r["etalon_temps"][0],
+            "etalon_t1": r["etalon_temps"][1],
+            "etalon_t2": r["etalon_temps"][2],
+            "etalon_t3": r["etalon_temps"][3],
+            # ── pixels 100-103: GPIO power register ──────────────────────────
+            "gpio_0": r["gpio_pwr_on"][0],
+            "gpio_1": r["gpio_pwr_on"][1],
+            "gpio_2": r["gpio_pwr_on"][2],
+            "gpio_3": r["gpio_pwr_on"][3],
+            # ── pixels 104-109: lamp channel states ──────────────────────────
+            "lamp_0": r["lamp_ch_array"][0],
+            "lamp_1": r["lamp_ch_array"][1],
+            "lamp_2": r["lamp_ch_array"][2],
+            "lamp_3": r["lamp_ch_array"][3],
+            "lamp_4": r["lamp_ch_array"][4],
+            "lamp_5": r["lamp_ch_array"][5],
+        })
 
     pd.DataFrame(rows_csv).to_csv(str(csv_path), index=False)
 
@@ -578,7 +643,7 @@ def main():
 
     sci_grid_idx = [obs_indices[i] for i, ft in enumerate(frame_types) if ft == "science"]
     if sci_grid_idx:
-        sci_lats   = df_sched.loc[sci_grid_idx, "lat_deg"].abs().values
+        sci_lats    = df_sched.loc[sci_grid_idx, "lat_deg"].abs().values
         max_sci_lat = float(sci_lats.max())
         c12 = _chk("C12 No science frame lat > band+1°",
                    max_sci_lat <= lat_band_deg + 1.0,
