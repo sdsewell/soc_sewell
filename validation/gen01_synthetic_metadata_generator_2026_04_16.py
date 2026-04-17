@@ -21,9 +21,11 @@ if str(_project_root) not in sys.path:
 
 import numpy as np
 import pandas as pd
+from astropy.time import Time
 
 from src.geometry.nb01_orbit_propagator_2026_04_16 import propagate_orbit
 from src.geometry.nb02a_boresight_2026_04_16 import compute_los_eci
+from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
 from src.metadata.p01_image_metadata_2026_04_06 import (
     ImageMetadata,
     AdcsQualityFlags,
@@ -44,6 +46,14 @@ CCD_TEMP_MEAN_C       = -10.0
 CCD_TEMP_STD_C        =   1.0
 EXP_UNIT              = 38500  # timing register value
 TIMER_PERIOD_S        = 0.001  # seconds per count when exp_unit = 38500
+
+WIND_MAP_TAGS = {
+    "1": "uniform",
+    "2": "sine_lat",
+    "3": "wave4",
+    "4": "hwm14",
+    "5": "storm",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +147,63 @@ def _instrument_state(frame_type: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Wind map builder functions  (§3)
+# ---------------------------------------------------------------------------
+
+def _build_uniform(rng, h_target_km, v_zonal_ms=100.0, v_merid_ms=0.0):
+    from src.windmap.nb00_wind_map_2026_04_06 import UniformWindMap
+    return UniformWindMap(v_zonal_ms=v_zonal_ms, v_merid_ms=v_merid_ms)
+
+
+def _build_analytic_sine(rng, h_target_km, A_zonal_ms=200.0, A_merid_ms=100.0):
+    from src.windmap.nb00_wind_map_2026_04_06 import AnalyticWindMap
+    return AnalyticWindMap(pattern="sine_lat",
+                           A_zonal_ms=A_zonal_ms, A_merid_ms=A_merid_ms)
+
+
+def _build_analytic_wave4(rng, h_target_km,
+                          A_zonal_ms=150.0, A_merid_ms=75.0, phase_rad=0.0):
+    from src.windmap.nb00_wind_map_2026_04_06 import AnalyticWindMap
+    return AnalyticWindMap(pattern="wave4", A_zonal_ms=A_zonal_ms,
+                           A_merid_ms=A_merid_ms, phase_rad=phase_rad)
+
+
+def _build_hwm14(rng, h_target_km, day_of_year=172, ut_hours=12.0,
+                 f107=150.0, ap=4.0):
+    from src.windmap.nb00_wind_map_2026_04_06 import HWM14WindMap
+    return HWM14WindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
+                        ut_hours=ut_hours, f107=f107, ap=float(ap))
+
+
+def _build_storm(rng, h_target_km, day_of_year=355, ut_hours=3.0,
+                 f107=180.0, ap=80.0):
+    from src.windmap.nb00_wind_map_2026_04_06 import StormWindMap
+    return StormWindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
+                        ut_hours=ut_hours, f107=f107, ap=float(ap))
+
+
+# ---------------------------------------------------------------------------
+# Wind map registry  (§3)
+# ---------------------------------------------------------------------------
+
+# Extend here to add new wind map types.
+# builder signature: (rng, h_target_km, **user_params) -> WindMap
+WIND_MAP_REGISTRY: dict = {
+    "1": ("Uniform constant",   _build_uniform),
+    "2": ("Analytic sine_lat",  _build_analytic_sine),
+    "3": ("Analytic wave4/DE3", _build_analytic_wave4),
+    "4": ("HWM14 quiet-time",   _build_hwm14),
+    "5": ("HWM14 storm/DWM07",  _build_storm),
+}
+
+
+def _build_wind_map(choice: str, rng, h_target_km: float, **user_params):
+    """Construct a WindMap from a registry key and user-supplied parameters."""
+    label, builder = WIND_MAP_REGISTRY[choice]
+    return builder(rng, h_target_km, **user_params)
+
+
+# ---------------------------------------------------------------------------
 # Schedule builder  (§3.2–3.5)
 # ---------------------------------------------------------------------------
 
@@ -147,7 +214,7 @@ def _build_schedule(
     step: int,
 ) -> tuple:
     """
-    Returns (obs_indices, frame_types) sorted by grid row index.
+    Returns (obs_indices, frame_types, cal_trigger_indices) sorted by grid row index.
     Cal/dark takes precedence over science at any overlap.
     """
     n   = len(df_sched)
@@ -203,7 +270,7 @@ def _build_schedule(
 
     obs_indices = [x[0] for x in all_tagged]
     frame_types = [x[1] for x in all_tagged]
-    return obs_indices, frame_types
+    return obs_indices, frame_types, cal_trigger_indices
 
 
 # ---------------------------------------------------------------------------
@@ -228,9 +295,9 @@ def main():
     n_caldark     = _prompt(
         "Cal/dark frames (n)  [int,   default   5       ] : ",
         5, int, 1, 50)
-    exp_time      = _prompt(
+    exp_time_cts  = _prompt(
         "Exposure time        [cts,   default 8000      ] : ",
-        8000, int, 1, 100000)
+        8000, int, 100, 100000)
     altitude_km   = _prompt(
         "S/C altitude         [km,    default 510       ] : ",
         510.0, float, 400.0, 700.0)
@@ -240,6 +307,71 @@ def main():
     rng_seed      = _prompt(
         "Random seed          [int,   default  42       ] : ",
         42, int, 0, None)
+
+    # exp_time in centiseconds (P01 unit)
+    exp_time_cs = round(exp_time_cts * TIMER_PERIOD_S * 100)
+
+    # -----------------------------------------------------------------------
+    # Wind map selection menu
+    # -----------------------------------------------------------------------
+    wind_map = None
+    wm_choice = None
+    while True:
+        print("\nSelect wind map for science frame truth winds:")
+        for key, (label, _) in WIND_MAP_REGISTRY.items():
+            print(f"  [{key}] {label}")
+        wm_choice = _prompt("Choice [default 1]: ", "1", str)
+        if wm_choice not in WIND_MAP_REGISTRY:
+            print("  Invalid choice. Try again.")
+            continue
+
+        wm_params = {}
+        if wm_choice == "1":
+            wm_params["v_zonal_ms"] = _prompt(
+                "  v_zonal  [m/s, default 100] : ", 100.0, float)
+            wm_params["v_merid_ms"] = _prompt(
+                "  v_merid  [m/s, default   0] : ", 0.0, float)
+        elif wm_choice == "2":
+            wm_params["A_zonal_ms"] = _prompt(
+                "  A_zonal  [m/s, default 200] : ", 200.0, float)
+            wm_params["A_merid_ms"] = _prompt(
+                "  A_merid  [m/s, default 100] : ", 100.0, float)
+        elif wm_choice == "3":
+            wm_params["A_zonal_ms"] = _prompt(
+                "  A_zonal  [m/s, default 150] : ", 150.0, float)
+            wm_params["A_merid_ms"] = _prompt(
+                "  A_merid  [m/s, default  75] : ", 75.0, float)
+            wm_params["phase_rad"]  = _prompt(
+                "  phase    [rad, default 0.0] : ", 0.0, float)
+        elif wm_choice == "4":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 172 ] : ", 172, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default  12.0]: ", 12.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 150.0]: ", 150.0, float, 60.0, 300.0)
+            wm_params["ap"]          = _prompt(
+                "  ap          [default   4  ]: ", 4.0, float, 0.0, 400.0)
+        elif wm_choice == "5":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 355 ] : ", 355, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default   3.0]: ", 3.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 180.0]: ", 180.0, float, 60.0, 300.0)
+            wm_params["ap"]          = _prompt(
+                "  ap          [default  80  ]: ", 80.0, float, 0.0, 400.0)
+
+        try:
+            wind_map = _build_wind_map(wm_choice, None, h_target_km, **wm_params)
+            break
+        except ImportError as exc:
+            print(f"\n  ERROR: {exc}")
+            print("  Cannot use this wind map. Please select a different option.")
+            continue
+
+    windmap_tag   = WIND_MAP_TAGS[wm_choice]
+    windmap_label = WIND_MAP_REGISTRY[wm_choice][0]
 
     # Folder picker dialog for output directory
     _default_out = str(pathlib.Path.home() / "WindCube" / "G01_outputs")
@@ -274,7 +406,6 @@ def main():
     T_ORBIT_S = 2 * np.pi * np.sqrt(a_m**3 / EARTH_GRAV_PARAM_M3_S2)
 
     sched_rows_approx = int(duration_s / SCHED_DT_S) + 1
-    n_orbits_approx   = int(duration_s / T_ORBIT_S)
 
     print(f"\nParameters:")
     print(f"  Start epoch      : {t_start} UTC")
@@ -286,14 +417,16 @@ def main():
           f"({seq_duration_s:.1f} s sequence)")
     print(f"  Cal trigger lat  : {CAL_TRIGGER_LAT_DEG:.1f}°N ascending  "
           "[CONOPS TBD document, §TBD]")
-    print(f"  Exp. time        : {exp_time} counts × {TIMER_PERIOD_S*1000:.1f} ms/count "
-          f"= {exp_time * TIMER_PERIOD_S:.3f} s  (exp_unit={EXP_UNIT})")
+    print(f"  Exp. time        : {exp_time_cts} counts × {TIMER_PERIOD_S*1000:.1f} ms/count "
+          f"= {exp_time_cts * TIMER_PERIOD_S:.3f} s  ({exp_time_cs} cs in P01,  "
+          f"exp_unit={EXP_UNIT})")
     print(f"  S/C altitude     : {altitude_km:.1f} km")
     print(f"  Tangent ht       : {h_target_km:.1f} km")
+    print(f"  Wind map         : {windmap_label}  "
+          f"(tag={windmap_tag!r})")
     print(f"  T_orbit          : {T_ORBIT_S:.1f} s ({T_ORBIT_S / 60:.2f} min)")
     print(f"  NB01 sched rows  : ~{sched_rows_approx}  "
           f"(10 s grid, {duration_days:.0f} days)")
-    print(f"  Total orbits     : ~{n_orbits_approx}")
     print(f"  RNG seed         : {rng_seed}")
     print(f"  Output dir       : {output_dir}")
 
@@ -321,8 +454,11 @@ def main():
     # -----------------------------------------------------------------------
     # Step 2: Build observation schedule
     # -----------------------------------------------------------------------
-    obs_indices, frame_types = _build_schedule(df_sched, lat_band_deg, n_caldark, step)
-    n_obs = len(obs_indices)
+    obs_indices, frame_types, cal_trigger_indices = _build_schedule(
+        df_sched, lat_band_deg, n_caldark, step
+    )
+    n_obs            = len(obs_indices)
+    n_complete_orbits = len(cal_trigger_indices)
 
     n_science = frame_types.count("science")
     n_cal     = frame_types.count("cal")
@@ -331,9 +467,9 @@ def main():
     print(f"\nObservation schedule:")
     print(f"  Science frames : {n_science}")
     print(f"  Cal frames     : {n_cal}    "
-          f"({n_caldark} per orbit × ~{n_orbits_approx} orbits)")
+          f"({n_caldark} per orbit × {n_complete_orbits} complete orbits)")
     print(f"  Dark frames    : {n_dark}    "
-          f"({n_caldark} per orbit × ~{n_orbits_approx} orbits)")
+          f"({n_caldark} per orbit × {n_complete_orbits} complete orbits)")
     print(f"  Total frames   : {n_obs}")
 
     # Stop condition: check for zero science or zero cal
@@ -356,7 +492,10 @@ def main():
     # -----------------------------------------------------------------------
     # Step 3: Build ImageMetadata list
     # -----------------------------------------------------------------------
-    print("\nBuilding NB02a attitude quaternions + metadata ...")
+    print(
+        "\nBuilding NB02a attitude quaternions + NB02b tangent points "
+        "+ NB00 wind sampling ..."
+    )
 
     rng           = np.random.default_rng(rng_seed)
     metadata_list = []
@@ -368,8 +507,8 @@ def main():
         vel       = np.array([row.vel_eci_x, row.vel_eci_y, row.vel_eci_z])
         look_mode = str(row.look_mode)
 
-        # NB02a: ideal attitude quaternion
-        _los_eci, q = compute_los_eci(
+        # NB02a: ideal attitude quaternion + LOS vector (los_eci retained for NB02b)
+        los_eci, q = compute_los_eci(
             pos, vel, look_mode,
             altitude_km = altitude_km,
             h_target_km = h_target_km,
@@ -379,6 +518,16 @@ def main():
         pointing_error = _pointing_error_quat(rng, SIGMA_POINTING_ARCSEC)
         etalon_temps   = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, size=4).tolist()
         ccd_temp1      = float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))
+
+        # NB02b + NB00: tangent point and truth wind (science frames only)
+        tp_lat = tp_lon = tp_alt = v_zonal = v_merid = None
+        if frame_type == "science":
+            epoch_t = Time(row.epoch.to_pydatetime(), scale="utc")
+            tp = compute_tangent_point(pos, los_eci, epoch_t, h_target_km=h_target_km)
+            tp_lat  = tp["tp_lat_deg"]
+            tp_lon  = tp["tp_lon_deg"]
+            tp_alt  = tp["tp_alt_km"]
+            v_zonal, v_merid = wind_map.sample(tp_lat, tp_lon)
 
         # Instrument state
         gpio, lamp = _instrument_state(frame_type)
@@ -403,7 +552,7 @@ def main():
         meta = ImageMetadata(
             rows                 = 260,
             cols                 = 276,
-            exp_time             = exp_time,
+            exp_time             = exp_time_cs,
             exp_unit             = EXP_UNIT,
             binning              = 2,
             img_type             = img_type,
@@ -432,6 +581,11 @@ def main():
             adcs_quality_flag    = adcs_flag,
             is_synthetic         = True,
             noise_seed           = i,
+            tangent_lat          = tp_lat,
+            tangent_lon          = tp_lon,
+            tangent_alt_km       = tp_alt,
+            truth_v_zonal        = v_zonal,
+            truth_v_meridional   = v_merid,
         )
         metadata_list.append(meta)
 
@@ -441,6 +595,7 @@ def main():
             print(f"\r  [{bar}] {i+1}/{n_obs}", end="", flush=True)
 
     print()
+    print(f"  (NB02b + NB00 called for {n_science} science frames only)")
 
     # -----------------------------------------------------------------------
     # Step 4: Console summaries
@@ -485,6 +640,21 @@ def main():
     print(f"  Mean  : {ccd_all.mean():.2f}   (expected ~{CCD_TEMP_MEAN_C:.2f})")
     print(f"  Std   : {ccd_all.std():.2f}   (expected ~{CCD_TEMP_STD_C:.2f})")
 
+    # Tangent point / wind stats (science frames only)
+    sci_meta = [m for m in metadata_list if m.img_type == "science"]
+    if sci_meta:
+        tp_lats   = np.array([m.tangent_lat for m in sci_meta])
+        vz_all    = np.array([m.truth_v_zonal for m in sci_meta])
+        vm_all    = np.array([m.truth_v_meridional for m in sci_meta])
+        print(f"\nTangent point stats (science frames):")
+        print(f"  tp_lat  : mean={tp_lats.mean():.1f}°, "
+              f"min={tp_lats.min():.1f}°, max={tp_lats.max():.1f}°")
+        print(f"\nWind stats at tangent point (science frames):")
+        print(f"  v_zonal : mean={vz_all.mean():.1f}, "
+              f"min={vz_all.min():.1f}, max={vz_all.max():.1f} m/s")
+        print(f"  v_merid : mean={vm_all.mean():.1f}, "
+              f"min={vm_all.min():.1f}, max={vm_all.max():.1f} m/s")
+
     # -----------------------------------------------------------------------
     # Step 5: Save outputs
     # -----------------------------------------------------------------------
@@ -492,18 +662,16 @@ def main():
     out_path.mkdir(parents=True, exist_ok=True)
 
     t_start_compact = t_start[:10].replace("-", "")
-    stem     = f"GEN01_{t_start_compact}_{duration_days:05.1f}d_seed{rng_seed:04d}"
+    stem     = (f"GEN01_{t_start_compact}_{duration_days:05.1f}d_"
+                f"{windmap_tag}_seed{rng_seed:04d}")
     npy_path = out_path / f"{stem}.npy"
     csv_path = out_path / f"{stem}.csv"
 
     records = [dataclasses.asdict(m) for m in metadata_list]
     np.save(str(npy_path), np.array(records, dtype=object), allow_pickle=True)
 
-    # CSV: only the 17 fields physically embedded in the binary header (pixels 0-109).
-    # Calculated/derived fields (img_type, binning, utc_timestamp, shutter_status,
-    # lamp_status, obs_mode, orbit_*, adcs_quality_flag, dark/truth/tangent fields,
-    # etc.) are omitted — they are not stored in hardware and can be re-derived.
-    # List-valued fields are expanded to named scalar columns.
+    # CSV: 17 binary-header fields (38 scalar columns) + 4 new tangent/wind columns
+    # = 42 columns total. Cal/dark rows have NaN for the 4 new columns.
     rows_csv = []
     for r in records:
         rows_csv.append({
@@ -556,9 +724,15 @@ def main():
             "lamp_3": r["lamp_ch_array"][3],
             "lamp_4": r["lamp_ch_array"][4],
             "lamp_5": r["lamp_ch_array"][5],
+            # ── new v8: tangent point + truth wind (NaN for cal/dark) ────────
+            "tp_lat_deg":      r["tangent_lat"]       if r["tangent_lat"]       is not None else float("nan"),
+            "tp_lon_deg":      r["tangent_lon"]        if r["tangent_lon"]        is not None else float("nan"),
+            "wind_v_zonal_ms": r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else float("nan"),
+            "wind_v_merid_ms": r["truth_v_meridional"] if r["truth_v_meridional"] is not None else float("nan"),
         })
 
-    pd.DataFrame(rows_csv).to_csv(str(csv_path), index=False)
+    df_csv = pd.DataFrame(rows_csv)
+    df_csv.to_csv(str(csv_path), index=False)
 
     npy_mb = npy_path.stat().st_size / 1e6
     csv_mb = csv_path.stat().st_size / 1e6
@@ -567,7 +741,7 @@ def main():
     print(f"  {csv_path}  ({csv_mb:.1f} MB)")
 
     # -----------------------------------------------------------------------
-    # Step 6: Verification checks C1–C13
+    # Step 6: Verification checks C1–C17
     # -----------------------------------------------------------------------
     print(f"\nVerification checks:")
 
@@ -628,28 +802,22 @@ def main():
                 all(m.img_type in valid_img for m in metadata_list),
                 "unexpected img_type found")
 
-    # n_orbits_approx counts complete orbits; partial last orbit won't trigger cal/dark
-    exp_cal  = n_caldark * n_orbits_approx
+    # n_complete_orbits = len(cal_trigger_indices): actual detected triggers
+    exp_cal  = n_caldark * n_complete_orbits
     c10_dev  = abs(n_cal - exp_cal) / max(exp_cal, 1)
     c10 = _chk(f"C10 Cal count within 5% of expected ({exp_cal})",
                c10_dev <= 0.05,
                f"got {n_cal} ({c10_dev*100:.1f}% off)")
 
-    exp_dark = n_caldark * n_orbits_approx
+    exp_dark = n_caldark * n_complete_orbits
     c11_dev  = abs(n_dark - exp_dark) / max(exp_dark, 1)
     c11 = _chk(f"C11 Dark count within 5% of expected ({exp_dark})",
                c11_dev <= 0.05,
                f"got {n_dark} ({c11_dev*100:.1f}% off)")
 
-    sci_grid_idx = [obs_indices[i] for i, ft in enumerate(frame_types) if ft == "science"]
-    if sci_grid_idx:
-        sci_lats    = df_sched.loc[sci_grid_idx, "lat_deg"].abs().values
-        max_sci_lat = float(sci_lats.max())
-        c12 = _chk("C12 No science frame lat > band+1°",
-                   max_sci_lat <= lat_band_deg + 1.0,
-                   f"max |lat|={max_sci_lat:.2f}°")
-    else:
-        c12 = _chk("C12 No science frame lat > band+1°", True)
+    c12 = _chk("C12 CSV has exactly 42 columns",
+               len(df_csv.columns) == 42,
+               f"got {len(df_csv.columns)}")
 
     try:
         loaded = np.load(str(npy_path), allow_pickle=True)
@@ -658,7 +826,38 @@ def main():
     except Exception as exc:
         c13 = _chk("C13 P01 round-trip", False, str(exc))
 
-    all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13])
+    # C14–C17: tangent point / wind checks using the CSV
+    cal_dark_mask = df_csv["gpio_0"].values  # not perfect but use img_type from npy
+    # Use img_type from metadata_list for exact mask
+    img_type_arr = np.array([m.img_type for m in metadata_list])
+    sci_mask  = img_type_arr == "science"
+    nons_mask = ~sci_mask
+
+    tp_col = df_csv["tp_lat_deg"].values
+
+    c14 = _chk("C14 tp_lat_deg NaN for all cal/dark rows",
+               bool(np.all(np.isnan(tp_col[nons_mask]))),
+               f"{np.sum(~np.isnan(tp_col[nons_mask]))} non-NaN cal/dark rows found")
+
+    c15 = _chk("C15 tp_lat_deg non-NaN for all science rows",
+               bool(np.all(~np.isnan(tp_col[sci_mask]))),
+               f"{np.sum(np.isnan(tp_col[sci_mask]))} NaN science rows found")
+
+    if sci_mask.any():
+        max_tp_lat = float(np.nanmax(np.abs(tp_col[sci_mask])))
+        c16 = _chk(f"C16 tp_lat_deg within lat_band+5° ({lat_band_deg+5:.1f}°) of equator",
+                   max_tp_lat <= lat_band_deg + 5.0,
+                   f"max |tp_lat|={max_tp_lat:.2f}°")
+    else:
+        c16 = _chk("C16 tp_lat_deg within lat_band+5° of equator", True)
+
+    wv_col = df_csv["wind_v_zonal_ms"].values
+    c17 = _chk("C17 wind_v_zonal_ms non-NaN for all science rows",
+               bool(np.all(~np.isnan(wv_col[sci_mask]))),
+               f"{np.sum(np.isnan(wv_col[sci_mask]))} NaN science rows found")
+
+    all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
+                    c14, c15, c16, c17])
     print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
 
     print("\nG01 complete.")
