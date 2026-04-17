@@ -38,7 +38,10 @@ CAL_TRIGGER_LAT_DEG   = 60.0   # CONOPS ascending trigger — see spec header
 SIGMA_POINTING_ARCSEC =  5.0
 ETALON_TEMP_MEAN_C    = 24.0
 ETALON_TEMP_STD_C     =  0.1
-CCD_TEMP_C            = -18.0
+CCD_TEMP_MEAN_C       = -10.0
+CCD_TEMP_STD_C        =   1.0
+EXP_UNIT              = 38500  # timing register value
+TIMER_PERIOD_S        = 0.001  # seconds per count when exp_unit = 38500
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +103,13 @@ def _classify_img_type(lamp_ch_array: list, gpio_pwr_on: list) -> str:
 # ---------------------------------------------------------------------------
 
 def _instrument_state(frame_type: str) -> tuple:
-    """Returns (gpio_pwr_on, lamp_ch_array, exp_time_cs)."""
+    """Returns (gpio_pwr_on, lamp_ch_array)."""
     if frame_type == "science":
-        return [0, 0, 0, 0], [0, 0, 0, 0, 0, 0], 500
+        return [0, 0, 0, 0], [0, 0, 0, 0, 0, 0]
     elif frame_type == "cal":
-        return [0, 1, 1, 0], [1, 1, 1, 1, 1, 1], 120
+        return [0, 1, 1, 0], [1, 1, 1, 1, 1, 1]
     elif frame_type == "dark":
-        return [1, 0, 0, 1], [0, 0, 0, 0, 0, 0], 500
+        return [1, 0, 0, 1], [0, 0, 0, 0, 0, 0]
     else:
         raise ValueError(f"Unknown frame_type: {frame_type!r}")
 
@@ -203,6 +206,9 @@ def main():
     n_caldark     = _prompt(
         "Cal/dark frames (n)  [int,   default   5       ] : ",
         5, int, 1, 50)
+    exp_time      = _prompt(
+        "Exposure time        [cts,   default 8000      ] : ",
+        8000, int, 1, 100000)
     altitude_km   = _prompt(
         "S/C altitude         [km,    default 510       ] : ",
         510.0, float, 400.0, 700.0)
@@ -252,6 +258,8 @@ def main():
           f"({seq_duration_s:.1f} s sequence)")
     print(f"  Cal trigger lat  : {CAL_TRIGGER_LAT_DEG:.1f}°N ascending  "
           "[CONOPS TBD document, §TBD]")
+    print(f"  Exp. time        : {exp_time} counts × {TIMER_PERIOD_S*1000:.1f} ms/count "
+          f"= {exp_time * TIMER_PERIOD_S:.3f} s  (exp_unit={EXP_UNIT})")
     print(f"  S/C altitude     : {altitude_km:.1f} km")
     print(f"  Tangent ht       : {h_target_km:.1f} km")
     print(f"  T_orbit          : {T_ORBIT_S:.1f} s ({T_ORBIT_S / 60:.2f} min)")
@@ -339,12 +347,13 @@ def main():
             h_target_km = h_target_km,
         )
 
-        # RNG draw order (fixed per spec §4): PE first (4 draws), etalon second (4 draws)
+        # RNG draw order: PE (4 draws), etalon temps (4 draws), CCD temp (1 draw)
         pointing_error = _pointing_error_quat(rng, SIGMA_POINTING_ARCSEC)
         etalon_temps   = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, size=4).tolist()
+        ccd_temp1      = float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))
 
         # Instrument state
-        gpio, lamp, exp_time = _instrument_state(frame_type)
+        gpio, lamp = _instrument_state(frame_type)
 
         # Derived fields
         img_type       = _classify_img_type(lamp, gpio)
@@ -367,7 +376,7 @@ def main():
             rows                 = 260,
             cols                 = 276,
             exp_time             = exp_time,
-            exp_unit             = 1,
+            exp_unit             = EXP_UNIT,
             binning              = 2,
             img_type             = img_type,
             lua_timestamp        = lua_ts,
@@ -381,7 +390,7 @@ def main():
             attitude_quaternion  = q.tolist(),
             pointing_error       = pointing_error,
             obs_mode             = look_mode,
-            ccd_temp1            = CCD_TEMP_C,
+            ccd_temp1            = ccd_temp1,
             etalon_temps         = etalon_temps,
             shutter_status       = shutter_status,
             gpio_pwr_on          = gpio,
@@ -439,8 +448,14 @@ def main():
     # Etalon temperature stats
     et_all = np.array([m.etalon_temps for m in metadata_list]).flatten()
     print(f"\nEtalon temperature stats (°C):")
-    print(f"  Mean  : {et_all.mean():.2f}   (expected ~24.00)")
-    print(f"  Std   : {et_all.std():.2f}   (expected ~ 0.10)")
+    print(f"  Mean  : {et_all.mean():.2f}   (expected ~{ETALON_TEMP_MEAN_C:.2f})")
+    print(f"  Std   : {et_all.std():.2f}   (expected ~{ETALON_TEMP_STD_C:.2f})")
+
+    # CCD temperature stats
+    ccd_all = np.array([m.ccd_temp1 for m in metadata_list])
+    print(f"\nCCD temperature stats (°C):")
+    print(f"  Mean  : {ccd_all.mean():.2f}   (expected ~{CCD_TEMP_MEAN_C:.2f})")
+    print(f"  Std   : {ccd_all.std():.2f}   (expected ~{CCD_TEMP_STD_C:.2f})")
 
     # -----------------------------------------------------------------------
     # Step 5: Save outputs
