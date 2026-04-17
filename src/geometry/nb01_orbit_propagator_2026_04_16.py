@@ -119,7 +119,7 @@ def _build_satrec(
 
 def _eci_to_geodetic(pos_eci_m: np.ndarray, epoch) -> tuple[float, float, float]:
     """
-    Convert ECI position vector to WGS84 geodetic coordinates.
+    Convert ECI position vector to WGS84 geodetic coordinates (single epoch).
 
     Parameters
     ----------
@@ -147,6 +147,41 @@ def _eci_to_geodetic(pos_eci_m: np.ndarray, epoch) -> tuple[float, float, float]
         float(loc.lat.deg),
         float(loc.lon.deg),
         float(loc.height.to(u.km).value),
+    )
+
+
+def _eci_to_geodetic_batch(
+    pos_eci_m: np.ndarray,
+    epochs,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Vectorised batch conversion of ECI positions to WGS84 geodetic coordinates.
+
+    Processes all epochs in a single astropy call, which is ~100× faster than
+    calling _eci_to_geodetic once per epoch.
+
+    Parameters
+    ----------
+    pos_eci_m : np.ndarray, shape (N, 3)
+        ECI J2000 position vectors, metres.
+    epochs : sequence of pandas Timestamps (UTC-aware)
+        Corresponding UTC epochs, length N.
+
+    Returns
+    -------
+    (lats_deg, lons_deg, alts_km) : three np.ndarray, each shape (N,)
+    """
+    t_astropy = Time([ep.to_pydatetime() for ep in epochs], scale="utc")
+    xs = pos_eci_m[:, 0] * u.m
+    ys = pos_eci_m[:, 1] * u.m
+    zs = pos_eci_m[:, 2] * u.m
+    gcrs = GCRS(CartesianRepresentation(xs, ys, zs), obstime=t_astropy)
+    itrs = gcrs.transform_to(ITRS(obstime=t_astropy))
+    loc  = itrs.earth_location
+    return (
+        loc.lat.deg,
+        loc.lon.deg,
+        loc.height.to(u.km).value,
     )
 
 
@@ -212,7 +247,9 @@ def propagate_orbit(
         epochs[0].to_pydatetime(), altitude_km, inclination_deg, raan_deg, bstar
     )
 
-    data = []
+    # --- Pass 1: SGP4 propagation (fast; no coordinate transforms) ---
+    pos_list = []
+    vel_list = []
     for epoch in epochs:
         jd, fr = jday(
             epoch.year, epoch.month, epoch.day,
@@ -222,29 +259,35 @@ def propagate_orbit(
         e, pos_km, vel_km_s = satrec.sgp4(jd, fr)
         assert e == 0, f"SGP4 error code {e}"
 
-        pos_m = np.array(pos_km) * 1e3    # km → m
-        vel_m_s = np.array(vel_km_s) * 1e3  # km/s → m/s
+        pos_m   = np.array(pos_km)   * 1e3   # km → m
+        vel_m_s = np.array(vel_km_s) * 1e3   # km/s → m/s
 
         # Defensive check: catch the km/m unit trap
         assert np.linalg.norm(pos_m) > 1e6, (
             f"pos_eci looks like km not metres: |r| = {np.linalg.norm(pos_m):.1f}"
         )
 
-        lat_deg, lon_deg, alt_km_val = _eci_to_geodetic(pos_m, epoch)
-        speed_ms = float(np.linalg.norm(vel_m_s))
+        pos_list.append(pos_m)
+        vel_list.append(vel_m_s)
 
-        data.append([
-            epoch,
-            pos_m[0], pos_m[1], pos_m[2],
-            vel_m_s[0], vel_m_s[1], vel_m_s[2],
-            lat_deg, lon_deg, alt_km_val, speed_ms,
-        ])
+    pos_arr = np.array(pos_list)   # shape (N, 3), metres
+    vel_arr = np.array(vel_list)   # shape (N, 3), m/s
 
-    df = pd.DataFrame(data, columns=[
-        "epoch",
-        "pos_eci_x", "pos_eci_y", "pos_eci_z",
-        "vel_eci_x", "vel_eci_y", "vel_eci_z",
-        "lat_deg", "lon_deg", "alt_km", "speed_ms",
-    ])
+    # --- Pass 2: vectorised ECI → WGS84 geodetic (single astropy batch call) ---
+    lats_deg, lons_deg, alts_km = _eci_to_geodetic_batch(pos_arr, epochs)
+
+    df = pd.DataFrame({
+        "epoch":     epochs,
+        "pos_eci_x": pos_arr[:, 0],
+        "pos_eci_y": pos_arr[:, 1],
+        "pos_eci_z": pos_arr[:, 2],
+        "vel_eci_x": vel_arr[:, 0],
+        "vel_eci_y": vel_arr[:, 1],
+        "vel_eci_z": vel_arr[:, 2],
+        "lat_deg":   lats_deg,
+        "lon_deg":   lons_deg,
+        "alt_km":    alts_km,
+        "speed_ms":  np.linalg.norm(vel_arr, axis=1),
+    })
     df.index = np.arange(len(df))
     return df
