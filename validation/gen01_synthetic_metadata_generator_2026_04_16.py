@@ -9,6 +9,7 @@ CONOPS:    [TBD — insert document ID and version when known]
 Usage:     python validation/gen01_synthetic_metadata_generator_2026_04_16.py
 """
 
+import struct
 import sys
 import pathlib
 import dataclasses
@@ -26,6 +27,7 @@ from astropy.time import Time
 from src.geometry.nb01_orbit_propagator_2026_04_16 import propagate_orbit
 from src.geometry.nb02a_boresight_2026_04_16 import compute_los_eci
 from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
+from src.geometry.nb02c_los_projection_2026_04_16 import compute_v_rel
 from src.metadata.p01_image_metadata_2026_04_06 import (
     ImageMetadata,
     AdcsQualityFlags,
@@ -34,7 +36,7 @@ from src.metadata.p01_image_metadata_2026_04_06 import (
 from src.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — scheduling / instrument
 # ---------------------------------------------------------------------------
 
 SCHED_DT_S            = 10.0   # NB01 propagation cadence — always fixed
@@ -54,6 +56,45 @@ WIND_MAP_TAGS = {
     "4": "hwm14",
     "5": "storm",
 }
+
+# ---------------------------------------------------------------------------
+# Constants — FPI optical model (§7.1)
+# ---------------------------------------------------------------------------
+
+LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm source wavelength, m
+LAMBDA_NE1_M     = 640.2248e-9    # Neon strong line (Burns et al. 1950)
+LAMBDA_NE2_M     = 638.2991e-9    # Neon weak line  (Burns et al. 1950)
+ETALON_GAP_M     = 20.106e-3      # Tolansky-recovered gap (S03)
+FOCAL_LENGTH_M   = 0.19912        # Imaging lens focal length, m
+PLATE_SCALE_RPX  = 1.6071e-4      # rad/px (2×2 binned, Tolansky)
+R_REFL           = 0.53           # Effective reflectivity (FlatSat)
+N_GAP            = 1.0            # Refractive index of etalon gap (air)
+C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
+
+FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 9.6 for R=0.53
+
+# CCD / pixel layout
+NX_PIX           = 256
+NY_PIX           = 256
+N_ROWS_BIN       = 259
+N_COLS_BIN       = 276
+ROW_OFFSET_PIX   = 1
+COL_OFFSET_PIX   = 10
+BIAS_ADU         = 100
+ADU_MAX          = 16383
+
+# Signal levels
+SCI_PEAK_ADU     = 5000
+SCI_READ_NOISE   = 5.0
+CAL_PEAK_ADU     = 12000
+CAL_NE_RATIO     = 3.0
+CAL_READ_NOISE   = 5.0
+
+# Dark model
+DARK_REF_ADU_S   = 0.05
+T_REF_DARK_C     = -20.0
+T_DOUBLE_C       = 6.5
+DARK_READ_NOISE  = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +227,6 @@ def _build_storm(rng, h_target_km, day_of_year=355, ut_hours=3.0,
 # Wind map registry  (§3)
 # ---------------------------------------------------------------------------
 
-# Extend here to add new wind map types.
-# builder signature: (rng, h_target_km, **user_params) -> WindMap
 WIND_MAP_REGISTRY: dict = {
     "1": ("Uniform constant",   _build_uniform),
     "2": ("Analytic sine_lat",  _build_analytic_sine),
@@ -220,7 +259,6 @@ def _build_schedule(
     n   = len(df_sched)
     lat = df_sched["lat_deg"].values
 
-    # Science indices (§3.2): one per step from each band-entry point
     science_indices = []
     in_band         = False
     band_entry_i    = None
@@ -236,7 +274,6 @@ def _build_schedule(
             in_band      = False
             band_entry_i = None
 
-    # Cal/dark trigger detection (§3.3): ascending crossing of 60°N
     cal_trigger_indices = []
     for i in range(1, n):
         if (lat[i]     >  CAL_TRIGGER_LAT_DEG
@@ -244,7 +281,6 @@ def _build_schedule(
                 and lat[i]     >  lat[i - 1]):
             cal_trigger_indices.append(i)
 
-    # Build cal and dark index lists from each trigger
     cal_indices  = []
     dark_indices = []
     for t0 in cal_trigger_indices:
@@ -257,7 +293,6 @@ def _build_schedule(
             if idx < n:
                 dark_indices.append(idx)
 
-    # Cal/dark takes precedence over science
     cal_dark_set  = set(cal_indices) | set(dark_indices)
     science_final = [i for i in science_indices if i not in cal_dark_set]
 
@@ -271,6 +306,201 @@ def _build_schedule(
     obs_indices = [x[0] for x in all_tagged]
     frame_types = [x[1] for x in all_tagged]
     return obs_indices, frame_types, cal_trigger_indices
+
+
+# ---------------------------------------------------------------------------
+# Binary header encoder helpers (§7.2)
+# ---------------------------------------------------------------------------
+
+def _encode_u64(val: int) -> list:
+    """uint64 → 4 BE uint16 words in LE word order (LSW first)."""
+    return [(val >> (16 * i)) & 0xFFFF for i in range(4)]
+
+
+def _encode_f64(val: float) -> list:
+    """float64 → 4 BE uint16 words in LE word order (LSW first)."""
+    b     = struct.pack(">d", val)
+    words = struct.unpack(">4H", b)        # [MSW, w1, w2, LSW]
+    return list(reversed(words))           # [LSW, w2, w1, MSW]
+
+
+def _encode_header(meta: ImageMetadata) -> np.ndarray:
+    """
+    Encode ImageMetadata into the 276-word binary header row.
+
+    Quaternion convention: pipeline [x,y,z,w] → binary [w,x,y,z].
+    Applied to both attitude_quaternion and pointing_error (words 28–59).
+    """
+    h = np.zeros(276, dtype=">u2")
+
+    h[0] = meta.rows
+    h[1] = meta.cols
+    h[2] = meta.exp_time
+    h[3] = meta.exp_unit
+
+    for i, w in enumerate(_encode_f64(meta.ccd_temp1)):
+        h[4 + i] = w
+
+    for i, w in enumerate(_encode_u64(meta.lua_timestamp)):
+        h[8 + i] = w
+
+    for i, w in enumerate(_encode_u64(meta.adcs_timestamp)):
+        h[12 + i] = w
+
+    for j, val in enumerate([meta.spacecraft_latitude,
+                              meta.spacecraft_longitude,
+                              meta.spacecraft_altitude]):
+        for i, w in enumerate(_encode_f64(val)):
+            h[16 + j * 4 + i] = w
+
+    # Pipeline [x,y,z,w] → binary [w,x,y,z]
+    q = meta.attitude_quaternion
+    q_bin = [q[3], q[0], q[1], q[2]]
+    for j, val in enumerate(q_bin):
+        for i, w in enumerate(_encode_f64(val)):
+            h[28 + j * 4 + i] = w
+
+    qe = meta.pointing_error
+    qe_bin = [qe[3], qe[0], qe[1], qe[2]]
+    for j, val in enumerate(qe_bin):
+        for i, w in enumerate(_encode_f64(val)):
+            h[44 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.pos_eci_hat):
+        for i, w in enumerate(_encode_f64(val)):
+            h[60 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.vel_eci_hat):
+        for i, w in enumerate(_encode_f64(val)):
+            h[72 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.etalon_temps):
+        for i, w in enumerate(_encode_f64(val)):
+            h[84 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.gpio_pwr_on):
+        h[100 + j] = int(val) & 0xFF
+
+    for j, val in enumerate(meta.lamp_ch_array):
+        h[104 + j] = int(val) & 0xFF
+
+    return h
+
+
+# ---------------------------------------------------------------------------
+# Pixel image generators (§7.3)
+# ---------------------------------------------------------------------------
+
+def _generate_science_pixels(v_rel_ms: float, rng) -> np.ndarray:
+    """Generate OI 630 nm Airy fringe image with Doppler shift v_rel_ms."""
+    lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
+
+    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
+    x = np.arange(NX_PIX) - cx
+    y = np.arange(NY_PIX) - cy
+    XX, YY = np.meshgrid(x, y)
+    r_px = np.sqrt(XX**2 + YY**2)
+
+    theta = r_px * PLATE_SCALE_RPX
+    delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
+    I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
+
+    signal = SCI_PEAK_ADU * I_airy
+    photon = rng.poisson(np.clip(signal, 0, None))
+    read   = rng.normal(0.0, SCI_READ_NOISE, size=signal.shape)
+    image  = np.round(photon + read + BIAS_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_cal_pixels(rng) -> np.ndarray:
+    """Generate two-line neon calibration fringe image."""
+    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
+    x = np.arange(NX_PIX) - cx
+    y = np.arange(NY_PIX) - cy
+    XX, YY = np.meshgrid(x, y)
+    r_px   = np.sqrt(XX**2 + YY**2)
+    theta  = r_px * PLATE_SCALE_RPX
+
+    def _airy(lam):
+        delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lam
+        return 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
+
+    I_cal = (CAL_NE_RATIO * _airy(LAMBDA_NE1_M) + _airy(LAMBDA_NE2_M)) \
+            / (CAL_NE_RATIO + 1.0)
+
+    signal = CAL_PEAK_ADU * I_cal
+    photon = rng.poisson(np.clip(signal, 0, None))
+    read   = rng.normal(0.0, CAL_READ_NOISE, size=signal.shape)
+    image  = np.round(photon + read + BIAS_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng) -> np.ndarray:
+    """Generate dark frame based on CCD temperature and exposure time."""
+    dark_rate  = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
+    mean_dark  = max(dark_rate * exp_time_s, 0.0)
+    dark_arr   = rng.poisson(mean_dark, size=(NY_PIX, NX_PIX)).astype(float)
+    read       = rng.normal(0.0, DARK_READ_NOISE, size=(NY_PIX, NX_PIX))
+    image      = np.round(dark_arr + read + BIAS_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
+                     exp_time_cts: int, rng) -> np.ndarray:
+    """Dispatch to the appropriate pixel generator. Pixel draws always after 9 metadata draws."""
+    exp_time_s = exp_time_cts * TIMER_PERIOD_S
+    if frame_type == "science":
+        return _generate_science_pixels(v_rel_ms, rng)
+    elif frame_type == "cal":
+        return _generate_cal_pixels(rng)
+    elif frame_type == "dark":
+        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng)
+    else:
+        raise ValueError(f"Unknown frame_type: {frame_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Binary file writer (§7.4)
+# ---------------------------------------------------------------------------
+
+def _write_bin_file(meta: ImageMetadata,
+                    pixels_256: np.ndarray,
+                    path: pathlib.Path) -> None:
+    """
+    Write a WindCube FPI binary image file.
+
+    Layout: row 0 = 276-word header; rows 1–259 = 259×276 pixel data.
+    Total = 260 × 276 × 2 = 143,520 bytes.
+    The 256×256 science region is embedded at rows [1:257], cols [10:266].
+    """
+    header      = _encode_header(meta)
+    pixel_array = np.full((N_ROWS_BIN, N_COLS_BIN), BIAS_ADU, dtype=np.uint16)
+    pixel_array[ROW_OFFSET_PIX : ROW_OFFSET_PIX + NY_PIX,
+                COL_OFFSET_PIX : COL_OFFSET_PIX + NX_PIX] = pixels_256
+
+    full_array = np.vstack([
+        header.reshape(1, N_COLS_BIN),
+        pixel_array.astype(">u2"),
+    ]).astype(">u2")
+
+    assert full_array.shape  == (260, 276),  f"Unexpected shape: {full_array.shape}"
+    assert full_array.nbytes == 143_520,     f"Unexpected size: {full_array.nbytes}"
+    path.write_bytes(full_array.tobytes())
+
+
+# ---------------------------------------------------------------------------
+# Binary filename convention (§7.5)
+# ---------------------------------------------------------------------------
+
+def _bin_filename(meta: ImageMetadata) -> str:
+    """
+    Return the binary filename for this frame.
+    Format: YYYYMMDDThhmmssZ_{img_type}.bin  (colons excluded for Windows)
+    """
+    from datetime import datetime, timezone
+    dt     = datetime.fromtimestamp(meta.lua_timestamp / 1000.0, tz=timezone.utc)
+    ts_str = dt.strftime("%Y%m%dT%H%M%SZ")
+    return f"{ts_str}_{meta.img_type}.bin"
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +538,6 @@ def main():
         "Random seed          [int,   default  42       ] : ",
         42, int, 0, None)
 
-    # exp_time in centiseconds (P01 unit)
     exp_time_cs = round(exp_time_cts * TIMER_PERIOD_S * 100)
 
     # -----------------------------------------------------------------------
@@ -373,7 +602,6 @@ def main():
     windmap_tag   = WIND_MAP_TAGS[wm_choice]
     windmap_label = WIND_MAP_REGISTRY[wm_choice][0]
 
-    # Folder picker dialog for output directory
     _default_out = str(pathlib.Path.home() / "WindCube" / "G01_outputs")
     print("\nSelect output folder (dialog opening — check taskbar if not visible)...")
     output_dir = _pick_folder(
@@ -382,7 +610,6 @@ def main():
     )
     print(f"  Output directory : {output_dir}")
 
-    # Constraint warnings
     if lat_band_deg >= CAL_TRIGGER_LAT_DEG:
         print(
             f"\n  WARNING: science band (±{lat_band_deg}°) overlaps the "
@@ -397,7 +624,6 @@ def main():
             "the orbit's descending high-latitude arc."
         )
 
-    # Derived parameters
     step           = max(1, round(obs_cadence_s / SCHED_DT_S))
     actual_cadence = step * SCHED_DT_S
     duration_s     = duration_days * 86400.0
@@ -457,7 +683,7 @@ def main():
     obs_indices, frame_types, cal_trigger_indices = _build_schedule(
         df_sched, lat_band_deg, n_caldark, step
     )
-    n_obs            = len(obs_indices)
+    n_obs             = len(obs_indices)
     n_complete_orbits = len(cal_trigger_indices)
 
     n_science = frame_types.count("science")
@@ -472,7 +698,6 @@ def main():
           f"({n_caldark} per orbit × {n_complete_orbits} complete orbits)")
     print(f"  Total frames   : {n_obs}")
 
-    # Stop condition: check for zero science or zero cal
     if n_science == 0:
         print("\nFATAL: zero science frames produced. Check lat_band_deg and schedule.")
         return
@@ -480,7 +705,6 @@ def main():
         print("\nFATAL: zero cal frames produced. Check CAL_TRIGGER_LAT_DEG and orbit propagation.")
         return
 
-    # frame_sequence: 0-based within each orbit's observation list
     orbit_counter   = {}
     frame_sequences = []
     for idx in obs_indices:
@@ -490,15 +714,16 @@ def main():
         orbit_counter[orb] = cnt + 1
 
     # -----------------------------------------------------------------------
-    # Step 3: Build ImageMetadata list
+    # Step 3: Build ImageMetadata list + binary image files
     # -----------------------------------------------------------------------
-    print(
-        "\nBuilding NB02a attitude quaternions + NB02b tangent points "
-        "+ NB00 wind sampling ..."
-    )
+    print("\nBuilding NB02a + NB02b + NB02c + image synthesis ...")
 
-    rng           = np.random.default_rng(rng_seed)
-    metadata_list = []
+    rng      = np.random.default_rng(rng_seed)
+    bin_dir  = pathlib.Path(output_dir) / "bin_frames"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata_list  = []
+    vrel_list      = []   # CSV-only LOS velocity components per frame
 
     for i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
         row = df_sched.loc[idx]
@@ -507,27 +732,41 @@ def main():
         vel       = np.array([row.vel_eci_x, row.vel_eci_y, row.vel_eci_z])
         look_mode = str(row.look_mode)
 
-        # NB02a: ideal attitude quaternion + LOS vector (los_eci retained for NB02b)
+        # NB02a: attitude quaternion + LOS vector (los_eci retained for NB02b/c)
         los_eci, q = compute_los_eci(
             pos, vel, look_mode,
             altitude_km = altitude_km,
             h_target_km = h_target_km,
         )
 
-        # RNG draw order: PE (4 draws), etalon temps (4 draws), CCD temp (1 draw)
+        # RNG draw order: PE (4 draws), etalon temps (4 draws), CCD temp (1 draw) = 9 total
         pointing_error = _pointing_error_quat(rng, SIGMA_POINTING_ARCSEC)
         etalon_temps   = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, size=4).tolist()
         ccd_temp1      = float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))
 
-        # NB02b + NB00: tangent point and truth wind (science frames only)
-        tp_lat = tp_lon = tp_alt = v_zonal = v_merid = None
+        # NB02b + NB02c: tangent point + full LOS decomposition (science frames only)
+        tp_lat = tp_lon = tp_alt = None
+        v_zonal = v_merid = None
+        v_wind_LOS = v_earth_LOS = V_sc_LOS = v_rel_val = None
+
         if frame_type == "science":
             epoch_t = Time(row.epoch.to_pydatetime(), scale="utc")
             tp = compute_tangent_point(pos, los_eci, epoch_t, h_target_km=h_target_km)
-            tp_lat  = tp["tp_lat_deg"]
-            tp_lon  = tp["tp_lon_deg"]
-            tp_alt  = tp["tp_alt_km"]
-            v_zonal, v_merid = wind_map.sample(tp_lat, tp_lon)
+            tp_lat = tp["tp_lat_deg"]
+            tp_lon = tp["tp_lon_deg"]
+            tp_alt = tp["tp_alt_km"]
+
+            vr = compute_v_rel(
+                wind_map,
+                tp_lat, tp_lon, tp["tp_eci"],
+                vel, los_eci, epoch_t,
+            )
+            v_wind_LOS  = vr["v_wind_LOS"]
+            v_earth_LOS = vr["v_earth_LOS"]
+            V_sc_LOS    = vr["V_sc_LOS"]
+            v_rel_val   = vr["v_rel"]
+            v_zonal     = vr["v_zonal_ms"]
+            v_merid     = vr["v_merid_ms"]
 
         # Instrument state
         gpio, lamp = _instrument_state(frame_type)
@@ -586,8 +825,21 @@ def main():
             tangent_alt_km       = tp_alt,
             truth_v_zonal        = v_zonal,
             truth_v_meridional   = v_merid,
+            truth_v_los          = v_wind_LOS,   # populated for science frames (v9)
         )
         metadata_list.append(meta)
+
+        vrel_list.append({
+            "v_wind_los_ms":  v_wind_LOS  if frame_type == "science" else float("nan"),
+            "v_earth_los_ms": v_earth_LOS if frame_type == "science" else float("nan"),
+            "v_sc_los_ms":    V_sc_LOS    if frame_type == "science" else float("nan"),
+            "v_rel_ms":       v_rel_val   if frame_type == "science" else float("nan"),
+        })
+
+        # Binary image synthesis — pixel draws follow the 9 metadata draws
+        pixels_256 = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
+                                      exp_time_cts, rng)
+        _write_bin_file(meta, pixels_256, bin_dir / _bin_filename(meta))
 
         if i % max(1, n_obs // 100) == 0 or i == n_obs - 1:
             pct = 100 * (i + 1) / n_obs
@@ -595,7 +847,10 @@ def main():
             print(f"\r  [{bar}] {i+1}/{n_obs}", end="", flush=True)
 
     print()
-    print(f"  (NB02b + NB00 called for {n_science} science frames only)")
+    bin_gb = len(metadata_list) * 143_520 / 1e9
+    print(f"  NB02b+NB02c called for {n_science} science frames.")
+    print(f"  .bin files written to: {bin_dir}  "
+          f"({len(metadata_list)} files, ~{bin_gb:.1f} GB)")
 
     # -----------------------------------------------------------------------
     # Step 4: Console summaries
@@ -612,7 +867,6 @@ def main():
     print(f"  GOOD             : {n_good}")
     print(f"  SLEW_IN_PROGRESS : {n_slew}   (expected ~0)")
 
-    # Pointing error angle stats
     pe_angles = []
     for m in metadata_list:
         qe       = m.pointing_error
@@ -620,7 +874,6 @@ def main():
         angle_as = 2.0 * np.degrees(np.arcsin(vn)) * 3600.0
         pe_angles.append(angle_as)
     pe_arr = np.array(pe_angles)
-    # For unsigned rotation angle drawn from |N(0,σ)|: mean = σ√(2/π), std = σ√(1−2/π)
     pe_expected_mean = SIGMA_POINTING_ARCSEC * np.sqrt(2.0 / np.pi)
     pe_expected_std  = SIGMA_POINTING_ARCSEC * np.sqrt(1 - 2.0 / np.pi)
     print(f"\nPointing error stats (arcsec):")
@@ -628,24 +881,24 @@ def main():
     print(f"  Std   : {pe_arr.std():6.2f}   (expected ~{pe_expected_std:.2f}, half-normal)")
     print(f"  Max   : {pe_arr.max():6.1f}")
 
-    # Etalon temperature stats
     et_all = np.array([m.etalon_temps for m in metadata_list]).flatten()
     print(f"\nEtalon temperature stats (°C):")
     print(f"  Mean  : {et_all.mean():.2f}   (expected ~{ETALON_TEMP_MEAN_C:.2f})")
     print(f"  Std   : {et_all.std():.2f}   (expected ~{ETALON_TEMP_STD_C:.2f})")
 
-    # CCD temperature stats
     ccd_all = np.array([m.ccd_temp1 for m in metadata_list])
     print(f"\nCCD temperature stats (°C):")
     print(f"  Mean  : {ccd_all.mean():.2f}   (expected ~{CCD_TEMP_MEAN_C:.2f})")
     print(f"  Std   : {ccd_all.std():.2f}   (expected ~{CCD_TEMP_STD_C:.2f})")
 
-    # Tangent point / wind stats (science frames only)
     sci_meta = [m for m in metadata_list if m.img_type == "science"]
     if sci_meta:
         tp_lats   = np.array([m.tangent_lat for m in sci_meta])
         vz_all    = np.array([m.truth_v_zonal for m in sci_meta])
         vm_all    = np.array([m.truth_v_meridional for m in sci_meta])
+        vlos_all  = np.array([m.truth_v_los for m in sci_meta])
+        vrel_sci  = np.array([d["v_rel_ms"] for d in vrel_list
+                               if not np.isnan(d["v_rel_ms"])])
         print(f"\nTangent point stats (science frames):")
         print(f"  tp_lat  : mean={tp_lats.mean():.1f}°, "
               f"min={tp_lats.min():.1f}°, max={tp_lats.max():.1f}°")
@@ -654,6 +907,13 @@ def main():
               f"min={vz_all.min():.1f}, max={vz_all.max():.1f} m/s")
         print(f"  v_merid : mean={vm_all.mean():.1f}, "
               f"min={vm_all.min():.1f}, max={vm_all.max():.1f} m/s")
+        print(f"\nv_rel stats for science frames (m/s):")
+        print(f"  Mean  : {vrel_sci.mean():8.1f}   (dominated by V_sc_LOS)")
+        print(f"  Std   : {vrel_sci.std():8.1f}")
+        print(f"  Min   : {vrel_sci.min():8.1f}   Max: {vrel_sci.max():.1f}")
+        print(f"\nv_wind_LOS stats (m/s):")
+        print(f"  Mean  : {vlos_all.mean():8.1f}   (truth wind projected onto LOS)")
+        print(f"  Std   : {vlos_all.std():8.1f}")
 
     # -----------------------------------------------------------------------
     # Step 5: Save outputs
@@ -670,65 +930,57 @@ def main():
     records = [dataclasses.asdict(m) for m in metadata_list]
     np.save(str(npy_path), np.array(records, dtype=object), allow_pickle=True)
 
-    # CSV: 17 binary-header fields (38 scalar columns) + 4 new tangent/wind columns
-    # = 42 columns total. Cal/dark rows have NaN for the 4 new columns.
+    # CSV: 42 columns from v8 + 4 new LOS velocity columns = 46 total
     rows_csv = []
-    for r in records:
+    for r, vd in zip(records, vrel_list):
         rows_csv.append({
-            # ── pixels 0-3: geometry / timing scalars ──────────────────────
             "rows":                  r["rows"],
             "cols":                  r["cols"],
             "exp_time":              r["exp_time"],
             "exp_unit":              r["exp_unit"],
-            # ── pixels 4-7: CCD temperature ────────────────────────────────
             "ccd_temp1":             r["ccd_temp1"],
-            # ── pixels 8-15: timestamps ─────────────────────────────────────
             "lua_timestamp":         r["lua_timestamp"],
             "adcs_timestamp":        r["adcs_timestamp"],
-            # ── pixels 16-27: spacecraft geodetic state ─────────────────────
             "spacecraft_latitude":   r["spacecraft_latitude"],
             "spacecraft_longitude":  r["spacecraft_longitude"],
             "spacecraft_altitude":   r["spacecraft_altitude"],
-            # ── pixels 28-43: attitude quaternion [x, y, z, w] ─────────────
             "att_q_x":  r["attitude_quaternion"][0],
             "att_q_y":  r["attitude_quaternion"][1],
             "att_q_z":  r["attitude_quaternion"][2],
             "att_q_w":  r["attitude_quaternion"][3],
-            # ── pixels 44-59: pointing error quaternion [x, y, z, w] ────────
             "pe_q_x":   r["pointing_error"][0],
             "pe_q_y":   r["pointing_error"][1],
             "pe_q_z":   r["pointing_error"][2],
             "pe_q_w":   r["pointing_error"][3],
-            # ── pixels 60-71: ECI position [x, y, z] m ──────────────────────
             "pos_eci_x": r["pos_eci_hat"][0],
             "pos_eci_y": r["pos_eci_hat"][1],
             "pos_eci_z": r["pos_eci_hat"][2],
-            # ── pixels 72-83: ECI velocity [vx, vy, vz] m/s ─────────────────
             "vel_eci_x": r["vel_eci_hat"][0],
             "vel_eci_y": r["vel_eci_hat"][1],
             "vel_eci_z": r["vel_eci_hat"][2],
-            # ── pixels 84-99: etalon temperatures [T0-T3] °C ────────────────
             "etalon_t0": r["etalon_temps"][0],
             "etalon_t1": r["etalon_temps"][1],
             "etalon_t2": r["etalon_temps"][2],
             "etalon_t3": r["etalon_temps"][3],
-            # ── pixels 100-103: GPIO power register ──────────────────────────
             "gpio_0": r["gpio_pwr_on"][0],
             "gpio_1": r["gpio_pwr_on"][1],
             "gpio_2": r["gpio_pwr_on"][2],
             "gpio_3": r["gpio_pwr_on"][3],
-            # ── pixels 104-109: lamp channel states ──────────────────────────
             "lamp_0": r["lamp_ch_array"][0],
             "lamp_1": r["lamp_ch_array"][1],
             "lamp_2": r["lamp_ch_array"][2],
             "lamp_3": r["lamp_ch_array"][3],
             "lamp_4": r["lamp_ch_array"][4],
             "lamp_5": r["lamp_ch_array"][5],
-            # ── new v8: tangent point + truth wind (NaN for cal/dark) ────────
             "tp_lat_deg":      r["tangent_lat"]       if r["tangent_lat"]       is not None else float("nan"),
             "tp_lon_deg":      r["tangent_lon"]        if r["tangent_lon"]        is not None else float("nan"),
             "wind_v_zonal_ms": r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else float("nan"),
             "wind_v_merid_ms": r["truth_v_meridional"] if r["truth_v_meridional"] is not None else float("nan"),
+            # v9: LOS velocity decomposition (columns 43–46)
+            "v_wind_los_ms":  vd["v_wind_los_ms"],
+            "v_earth_los_ms": vd["v_earth_los_ms"],
+            "v_sc_los_ms":    vd["v_sc_los_ms"],
+            "v_rel_ms":       vd["v_rel_ms"],
         })
 
     df_csv = pd.DataFrame(rows_csv)
@@ -741,7 +993,7 @@ def main():
     print(f"  {csv_path}  ({csv_mb:.1f} MB)")
 
     # -----------------------------------------------------------------------
-    # Step 6: Verification checks C1–C17
+    # Step 6: Verification checks C1–C21
     # -----------------------------------------------------------------------
     print(f"\nVerification checks:")
 
@@ -766,7 +1018,7 @@ def main():
                 not np.any(np.isnan(att_q)),
                 "NaN found in attitude quaternions")
 
-    att_norms = np.linalg.norm(att_q, axis=1)
+    att_norms   = np.linalg.norm(att_q, axis=1)
     max_att_dev = float(np.max(np.abs(att_norms - 1.0)))
     c4  = _chk("C4  att_q unit norm",
                 max_att_dev < 1e-6,
@@ -779,7 +1031,6 @@ def main():
                 max_pe_dev < 1e-6,
                 f"max deviation {max_pe_dev:.2e}")
 
-    # Rotation angle magnitude follows half-normal: std = σ·√(1−2/π) ≈ 3.01 arcsec
     pe_expected_std_v = SIGMA_POINTING_ARCSEC * np.sqrt(1.0 - 2.0 / np.pi)
     pe_std_dev = float(abs(pe_arr.std() - pe_expected_std_v) / pe_expected_std_v)
     c6  = _chk("C6  PE std within 20% of expected half-normal",
@@ -802,7 +1053,6 @@ def main():
                 all(m.img_type in valid_img for m in metadata_list),
                 "unexpected img_type found")
 
-    # n_complete_orbits = len(cal_trigger_indices): actual detected triggers
     exp_cal  = n_caldark * n_complete_orbits
     c10_dev  = abs(n_cal - exp_cal) / max(exp_cal, 1)
     c10 = _chk(f"C10 Cal count within 5% of expected ({exp_cal})",
@@ -815,8 +1065,8 @@ def main():
                c11_dev <= 0.05,
                f"got {n_dark} ({c11_dev*100:.1f}% off)")
 
-    c12 = _chk("C12 CSV has exactly 42 columns",
-               len(df_csv.columns) == 42,
+    c12 = _chk("C12 CSV has exactly 46 columns",
+               len(df_csv.columns) == 46,
                f"got {len(df_csv.columns)}")
 
     try:
@@ -826,12 +1076,9 @@ def main():
     except Exception as exc:
         c13 = _chk("C13 P01 round-trip", False, str(exc))
 
-    # C14–C17: tangent point / wind checks using the CSV
-    cal_dark_mask = df_csv["gpio_0"].values  # not perfect but use img_type from npy
-    # Use img_type from metadata_list for exact mask
     img_type_arr = np.array([m.img_type for m in metadata_list])
-    sci_mask  = img_type_arr == "science"
-    nons_mask = ~sci_mask
+    sci_mask     = img_type_arr == "science"
+    nons_mask    = ~sci_mask
 
     tp_col = df_csv["tp_lat_deg"].values
 
@@ -856,8 +1103,41 @@ def main():
                bool(np.all(~np.isnan(wv_col[sci_mask]))),
                f"{np.sum(np.isnan(wv_col[sci_mask]))} NaN science rows found")
 
+    vrel_col = df_csv["v_rel_ms"].values
+    c18 = _chk("C18 v_rel_ms non-NaN for all science rows",
+               bool(np.all(~np.isnan(vrel_col[sci_mask]))),
+               f"{np.sum(np.isnan(vrel_col[sci_mask]))} NaN science rows found")
+
+    c19 = _chk("C19 v_rel_ms NaN for all cal/dark rows",
+               bool(np.all(np.isnan(vrel_col[nons_mask]))),
+               f"{np.sum(~np.isnan(vrel_col[nons_mask]))} non-NaN cal/dark rows found")
+
+    bin_files = list(bin_dir.glob("*.bin"))
+    sizes_ok  = all(f.stat().st_size == 143_520 for f in bin_files)
+    count_ok  = len(bin_files) == len(metadata_list)
+    c20 = _chk("C20 All .bin files exist and are 143520 bytes",
+               sizes_ok and count_ok,
+               f"count={len(bin_files)} (expected {len(metadata_list)}), "
+               f"all_correct_size={sizes_ok}")
+
+    try:
+        first_sci_bin = next(f for f in sorted(bin_dir.glob("*.bin"))
+                             if "science" in f.name)
+        raw = np.frombuffer(first_sci_bin.read_bytes(), dtype=">u2")
+        hdr = raw[:276]
+        from src.metadata.p01_image_metadata_2026_04_06 import parse_header
+        d = parse_header(hdr)
+        sci_csv = df_csv[df_csv["img_type_derived"] == "science"].iloc[0] \
+            if "img_type_derived" in df_csv.columns \
+            else df_csv[img_type_arr == "science"].iloc[0]
+        c21 = _chk("C21 Header round-trip lua_timestamp matches CSV",
+                   d["lua_timestamp"] == int(sci_csv["lua_timestamp"]),
+                   f"header={d['lua_timestamp']}, csv={int(sci_csv['lua_timestamp'])}")
+    except Exception as exc:
+        c21 = _chk("C21 Header round-trip lua_timestamp matches CSV", False, str(exc))
+
     all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
-                    c14, c15, c16, c17])
+                    c14, c15, c16, c17, c18, c19, c20, c21])
     print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
 
     print("\nG01 complete.")
