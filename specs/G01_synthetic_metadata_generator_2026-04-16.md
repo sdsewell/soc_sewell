@@ -4,7 +4,7 @@
 **Spec file:** `docs/specs/G01_synthetic_metadata_generator_2026-04-16.md`
 **Project:** WindCube FPI Science Operations Center Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
-**Status:** Draft — awaiting v9 implementation (C18–C21 new; binary synthesis added)
+**Status:** ✓ Complete — all 21 checks pass; binary synthesis confirmed
 **Depends on:**
   - NB00 (`nb00_wind_map_2026_04_06.py`) — `WindMap`, `UniformWindMap`,
     `AnalyticWindMap`, `HWM14WindMap`, `StormWindMap`
@@ -13,42 +13,55 @@
   - NB02b (`nb02b_tangent_point_2026_04_16.py`) — `compute_tangent_point(pos_eci, los_eci, epoch, h_target_km)`
   - NB02c (`nb02c_los_projection_2026_04_16.py`) — `compute_v_rel(wind_map, tp_lat_deg, tp_lon_deg, tp_eci, vel_eci, los_eci, epoch)`
   - P01 (`p01_image_metadata_2026_04_06.py`) — `ImageMetadata`, `AdcsQualityFlags`,
-    `compute_adcs_quality_flag()`
+    `compute_adcs_quality_flag()`, `parse_header()` (used in C21 round-trip check)
   - `src/constants.py` — `WGS84_A_M`, `EARTH_GRAV_PARAM_M3_S2`
   - `tkinter` (stdlib) — native folder-browser dialog
 **Used by:**
-  - Z02 (synthetic airglow image generator) — may now be superseded by G01 for
-    simple uniform/analytic wind maps; Z02 remains authoritative for HWM14/storm
-  - Z03 (synthetic neon calibration image generator) — now inline in G01
+  - Z02 (synthetic airglow image generator)
+  - Z03 (synthetic neon calibration image generator)
+  - Future dark frame synthesis
 **References:**
   - **WindCube Mission CONOPS Document**
     Document ID: `[TBD — insert document number, e.g. WC-OPS-XXXX]`
     Issue/version: `[TBD — insert version, e.g. Issue 1.0, 2025-MM-DD]`
-    Sections referenced: observation schedule, science band, calibration cadence,
-    dark frame strategy, exposure time budget
+    Sections referenced: observation schedule, science band definition,
+    calibration cadence, dark frame strategy, exposure time budget
+    *(When this CONOPS document is updated, review §3.2–3.3 and §4.5 against
+    the new schedule and update the version citation before re-implementing.)*
   - SI-UCAR-WC-RP-004 Issue 1.0 — AOCS Design Report (BRF/THRF/SIRF frames)
   - Drob et al. (2015), doi:10.1002/2014EA000089 — HWM14 empirical model
   - Burns, Adams & Longwell (1950) IAU neon spectroscopic standards — λ₁, λ₂
 **Last updated:** 2026-04-16
 
-> **CONOPS version note:** §3 observation schedule parameters and §5 exposure
-> time defaults are CONOPS-driven. Any CONOPS update requires a dated revision
-> of this spec before Claude Code is re-run.
+> **CONOPS version note:** §4.2–4.3 observation schedule parameters and §7.1
+> exposure time defaults are CONOPS-driven. Any CONOPS update requires a dated
+> revision of this spec before Claude Code is re-run.
 
 > **Revision history:**
-> - v1–v6 (2026-04-16): See previous revision notes.
-> - v7 (2026-04-16): `tkinter` folder-browser dialog; `_pick_folder()`.
+> - v1 (2026-04-16): Initial — latitude-threshold state, one record per epoch.
+> - v2 (2026-04-16): CONOPS model — science cadence, ±lat_band, 60°N trigger.
+> - v3 (2026-04-16): S-number references replaced with NB01/NB02a/P01 names;
+>   CONOPS document citation added.
+> - v4 (2026-04-16): Half-normal PE distribution; C6/C10/C11 corrected;
+>   script relocated to `validation/`.
+> - v5 (2026-04-16): `exp_time_cts` prompt; `exp_unit = 38500`; CCD temp
+>   noise N(−10, 1°C); RNG draw order established.
+> - v6 (2026-04-16): CSV reduced to 38 binary-header columns; `.npy` retains
+>   full `ImageMetadata`; C12 column-count guard added.
+> - v7 (2026-04-16): `tkinter` folder-browser dialog; `_pick_folder()`;
+>   default path `C:\Users\sewell\WindCube\G01_outputs`.
 > - v8 (2026-04-16): NB02b tangent point + NB00 wind sampling for science
->   frames. Wind map registry. CSV 42 columns. C12 updated; C14–C17 added.
-> - v9 (2026-04-16): **NB02c LOS velocity decomposition + binary image
->   synthesis.** NB02c `compute_v_rel()` called for science frames; replaces
->   the direct `wind_map.sample()` call (NB02c returns wind components too).
->   Four new CSV columns (43–46): `v_wind_los_ms`, `v_earth_los_ms`,
->   `v_sc_los_ms`, `v_rel_ms`. `truth_v_los` in `ImageMetadata` now populated.
->   CSV extended to 46 columns. New §7: binary image synthesis — one `.bin`
->   file per frame (science: Airy fringe at v_rel; cal: two-line neon; dark:
->   dark current + read noise). `_encode_header()` is the exact inverse of P01
->   `parse_header()`. C12 updated (42→46); C18–C21 added.
+>   frames; wind map registry; CSV 42 columns; C14–C17 added.
+> - v9 (2026-04-16): **NB02c LOS decomposition + binary image synthesis.**
+>   `compute_v_rel()` replaces direct `wind_map.sample()` call; returns all
+>   six LOS velocity components. `truth_v_los` now populated from
+>   `vr['v_wind_LOS']`. Four new CSV columns (43–46). Binary image synthesis:
+>   `_encode_u64()`, `_encode_f64()`, `_encode_header()` (exact P01 inverses,
+>   round-trip verified); `_generate_science_pixels()` (Airy fringe at v_rel),
+>   `_generate_cal_pixels()` (two-line neon), `_generate_dark_pixels()`
+>   (exponential dark current + read noise); `_write_bin_file()` (143,520-byte
+>   P01 layout); `_bin_filename()`. C12 updated (42→46); C18–C21 added.
+>   All 21 checks pass; 26 prerequisite tests pass.
 
 ---
 
@@ -58,28 +71,25 @@ G01 is a standalone, interactive Python script that pre-computes and saves
 the complete AOCS/instrument metadata array **and** a corresponding set of
 synthetic binary FPI image files for a WindCube observation campaign.
 
-**What G01 produces per frame type (v9):**
+**What G01 produces per frame type:**
 
 | Frame type | NB01 | NB02a | NB02b | NB02c | Image synthesis |
 |------------|------|-------|-------|-------|-----------------|
-| science | ✓ orbit state | ✓ `q`, `los_eci` | ✓ tangent point | ✓ `v_rel`, LOS decomposition | Airy fringe at `v_rel` Doppler |
-| cal | ✓ orbit state | ✓ `q`, `los_eci` | — | — | Two-line neon Airy pattern |
+| science | ✓ orbit state | ✓ `q`, `los_eci` | ✓ tangent point | ✓ full LOS decomposition | Airy fringe at `v_rel` Doppler |
+| cal | ✓ orbit state | ✓ `q`, `los_eci` | — | — | Two-line neon (λ₁, λ₂) |
 | dark | ✓ orbit state | ✓ `q`, `los_eci` | — | — | Dark current + read noise |
 
-**What G01 does not produce:**
-- `truth_v_los` was previously `None`; it is now populated from NB02c
-  `v_wind_LOS` for science frames.
-- Nothing else from the "not computed" list changes.
+**Storage note:** ~120,000 `.bin` files × 143,520 bytes ≈ **17.3 GB** for a
+30-day run at 10 s cadence. Ensure adequate disk space before running.
 
-**Storage note:** At 10 s cadence over 30 days, G01 produces ~120,000 `.bin`
-files × 143,520 bytes each ≈ **17.3 GB** of binary image data. Ensure
-adequate disk space before running with `duration_days = 30`.
+**What G01 does not produce:**
+- `truth_v_los` was `None` in v1–v8; it is now populated from NB02c
+  `v_wind_LOS` for science frames.
+- Pixel data from complex wind retrieval (v_rel inversion) — that is Z02/Z03.
 
 ---
 
 ## 2. User interface — interactive prompts
-
-Unchanged from v8. Shown here for completeness.
 
 ```
 === G01 — WindCube Synthetic Metadata Generator ===
@@ -106,88 +116,220 @@ Select output folder (dialog opening — check taskbar if not visible)...
 → Selected: C:\Users\sewell\WindCube\G01_outputs
 ```
 
-Sub-prompts and parameter table are unchanged from v8 (§2.1–§2.3).
+### 2.1 Numeric parameter table
+
+| Symbol | Description | Default | Type | Valid range |
+|--------|-------------|---------|------|-------------|
+| `t_start` | Start epoch | `"2027-01-01T00:00:00"` | ISO 8601 UTC | Any valid UTC string |
+| `duration_days` | Duration | 30.0 | float | 0.1 – 365.0 |
+| `lat_band_deg` | Science band half-width | 40.0 | float | 5.0 – 89.0 |
+| `obs_cadence_s` | Observation cadence | 10.0 | float | 10.0 – 3600.0 |
+| `n_caldark` | Cal/dark frames per trigger | 5 | int | 1 – 50 |
+| `exp_time_cts` | Exposure time, timer counts | 8000 | int | 100 – 100000 |
+| `altitude_km` | S/C altitude | 510.0 | float | 400.0 – 700.0 |
+| `h_target_km` | Tangent height | 250.0 | float | 100.0 – 400.0 |
+| `rng_seed` | NumPy RNG seed | 42 | int | ≥ 0 |
+
+### 2.2 Wind map sub-prompts
+
+| Choice | Sub-prompts (defaults) |
+|--------|----------------------|
+| 1 — Uniform | `v_zonal [m/s, default 100]`, `v_merid [m/s, default 0]` |
+| 2 — Analytic sine_lat | `A_zonal [m/s, default 200]`, `A_merid [m/s, default 100]` |
+| 3 — Analytic wave4 | `A_zonal [m/s, default 150]`, `A_merid [m/s, default 75]`, `phase [rad, default 0.0]` |
+| 4 — HWM14 quiet | `day_of_year [default 172]`, `ut_hours [default 12.0]`, `f107 [default 150.0]`, `ap [default 4]` |
+| 5 — HWM14 storm | `day_of_year [default 355]`, `ut_hours [default 3.0]`, `f107 [default 180.0]`, `ap [default 80]` |
+
+For choices 4 and 5, if `hwm14` is not importable, print an error and
+re-display the menu without crashing.
+
+### 2.3 Output folder — `_pick_folder()`
+
+Print `"Select output folder (dialog opening — check taskbar if not visible)..."`
+and open `tkinter.filedialog.askdirectory()` with root window hidden and
+raised. Default starting location: `C:\Users\sewell\WindCube\G01_outputs`.
+Cancel → use the default. Echo chosen path to terminal.
+
+**Constraint warnings** (console only):
+- `lat_band_deg ≥ 60.0`: cal/dark trigger within science band; cal/dark wins.
+- `2 × n_caldark × obs_cadence_s > 1200`: sequence may span past 60°N arc.
 
 ---
 
-## 3. Wind map registry
+## 3. Wind map registry — extensible design
 
-Unchanged from v8 (§3). `WIND_MAP_REGISTRY` and `WIND_MAP_TAGS` with
-5 builders. Extension by adding one entry to each dict.
+```python
+WIND_MAP_REGISTRY: dict[str, tuple[str, callable]] = {
+    '1': ('Uniform constant',    _build_uniform),
+    '2': ('Analytic sine_lat',   _build_analytic_sine),
+    '3': ('Analytic wave4/DE3',  _build_analytic_wave4),
+    '4': ('HWM14 quiet-time',    _build_hwm14),
+    '5': ('HWM14 storm/DWM07',   _build_storm),
+}
+
+WIND_MAP_TAGS: dict[str, str] = {
+    '1': 'uniform', '2': 'sine_lat', '3': 'wave4',
+    '4': 'hwm14',   '5': 'storm',
+}
+```
+
+**To add a new map type:** write `_build_X(rng, h_target_km, **kw) → WindMap`,
+add `'N': ('Label', _build_X)` to `WIND_MAP_REGISTRY`, add `'N': 'tag'` to
+`WIND_MAP_TAGS`, add a row to §2.2. No other changes needed.
+
+Builder signature: `(rng: Generator, h_target_km: float, **user_params) → WindMap`.
 
 ---
 
 ## 4. Orbit propagation and CONOPS scheduling
 
-Unchanged from v8 (§4.1–§4.5). NB01 at `SCHED_DT_S = 10.0` s; science at
-`±lat_band_deg`; cal/dark triggered at `CAL_TRIGGER_LAT_DEG = 60.0°N`
-ascending.
+### 4.1 Two-tier propagation
+
+NB01 always at `SCHED_DT_S = 10.0` s. User cadence → step:
+
+```python
+SCHED_DT_S       = 10.0
+step             = max(1, round(obs_cadence_s / SCHED_DT_S))
+actual_cadence_s = step * SCHED_DT_S
+```
+
+```python
+from src.geometry.nb01_orbit_propagator_2026_04_16 import propagate_orbit
+
+df_sched = propagate_orbit(t_start=t_start,
+                            duration_s=duration_days * 86400.0,
+                            dt_s=SCHED_DT_S)
+```
+
+Orbit number and look mode (INT01 method):
+
+```python
+a_m       = WGS84_A_M + altitude_km * 1e3
+T_ORBIT_S = 2 * np.pi * np.sqrt(a_m**3 / EARTH_GRAV_PARAM_M3_S2)
+t0        = pd.Timestamp(t_start, tz='UTC')
+df_sched['elapsed_s']    = (df_sched['epoch'] - t0).dt.total_seconds()
+df_sched['orbit_number'] = (df_sched['elapsed_s'] // T_ORBIT_S).astype(int) + 1
+df_sched['look_mode']    = df_sched['orbit_number'].apply(
+    lambda n: 'along_track' if n % 2 == 1 else 'cross_track')
+```
+
+### 4.2 Science frame selection
+
+*(CONOPS reference: [TBD — §TBD science band and cadence])*
+
+```python
+science_indices = []
+in_band, band_entry_i = False, None
+for i, row in df_sched.iterrows():
+    if abs(row.lat_deg) <= lat_band_deg:
+        if not in_band:
+            in_band, band_entry_i = True, i
+        if (i - band_entry_i) % step == 0:
+            science_indices.append(i)
+    else:
+        in_band, band_entry_i = False, None
+```
+
+Science state: `gpio = [0,0,0,0]`, `lamp = [0,0,0,0,0,0]`.
+
+### 4.3 Calibration and dark trigger
+
+*(CONOPS reference: [TBD — §TBD calibration schedule])*
+
+```python
+CAL_TRIGGER_LAT_DEG = 60.0   # CONOPS fixed — see header citation
+
+cal_trigger_indices = []
+lat = df_sched['lat_deg'].values
+for i in range(1, len(lat)):
+    if lat[i] > CAL_TRIGGER_LAT_DEG and lat[i-1] <= CAL_TRIGGER_LAT_DEG \
+            and lat[i] > lat[i-1]:
+        cal_trigger_indices.append(i)
+```
+
+Cal sequence: `t₀ + k·step` for `k = 0..n−1`.
+Dark sequence: `t₀ + (n+k)·step` for `k = 0..n−1`.
+Skip indices ≥ `len(df_sched)`.
+
+Cal state: `gpio = [0,1,1,0]`, `lamp = [1,1,1,1,1,1]`.
+Dark state: `gpio = [1,0,0,1]`, `lamp = [0,0,0,0,0,0]`.
+
+### 4.4 `img_type` derivation
+
+```python
+def _classify_img_type(lamp_ch_array, gpio_pwr_on):
+    """P01 §2.5 logic — keep in sync with p01_image_metadata_2026_04_06.py."""
+    if any(lamp_ch_array):           return "cal"
+    elif gpio_pwr_on[0] == 1 \
+         and gpio_pwr_on[3] == 1:   return "dark"
+    return "science"
+```
+
+### 4.5 Schedule assembly
+
+```python
+cal_dark_set  = set(cal_indices) | set(dark_indices)
+science_final = [i for i in science_indices if i not in cal_dark_set]
+obs_indices   = sorted(science_final + cal_indices + dark_indices)
+```
+
+`n_complete_orbits = len(cal_trigger_indices)` (used for C10/C11).
+`frame_sequence`: 0-based among all observation frames per orbit, by epoch.
 
 ---
 
-## 5. Main metadata loop — per-frame computation
-
-The loop is updated in v9 to replace the direct `wind_map.sample()` call with
-`compute_v_rel()`, which returns the wind components alongside the full LOS
-decomposition. Only science frames call NB02b and NB02c.
+## 5. Main metadata loop
 
 ```python
-from src.geometry.nb02a_boresight_2026_04_16 import compute_los_eci
+from src.geometry.nb02a_boresight_2026_04_16   import compute_los_eci
 from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
 from src.geometry.nb02c_los_projection_2026_04_16 import compute_v_rel
 
-metadata_list = []
 bin_dir = pathlib.Path(output_dir) / "bin_frames"
 bin_dir.mkdir(parents=True, exist_ok=True)
+metadata_list = []
 
 for frame_i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
     row       = df_sched.loc[idx]
     pos       = np.array([row.pos_eci_x, row.pos_eci_y, row.pos_eci_z])
     vel       = np.array([row.vel_eci_x, row.vel_eci_y, row.vel_eci_z])
-    look_mode = row.look_mode
     epoch_t   = Time(row.epoch)
+    look_mode = row.look_mode
 
-    # ── NB02a: attitude quaternion + LOS vector ───────────────────────────
-    # los_eci is retained — it is an input to both NB02b and NB02c
+    # ── NB02a ─────────────────────────────────────────────────────────────
+    # los_eci is retained — required by both NB02b and NB02c
     los_eci, q = compute_los_eci(pos, vel, look_mode, h_target_km=h_target_km)
 
-    # ── RNG draws — metadata noise (fixed order, 9 draws total) ──────────
+    # ── Metadata RNG draws (9 total; pixel draws follow after) ────────────
     theta        = rng.normal(0.0, SIGMA_POINTING_RAD)          # draw 1
-    raw          = rng.standard_normal(3)                        # draws 2-4
+    raw          = rng.standard_normal(3)                        # draws 2–4
     n_hat        = raw / np.linalg.norm(raw)
     half_t       = theta / 2.0
     qe           = [n_hat[0]*np.sin(half_t), n_hat[1]*np.sin(half_t),
                     n_hat[2]*np.sin(half_t), np.cos(half_t)]
     qe           = [c / np.linalg.norm(qe) for c in qe]
-    etalon_temps = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, 4)  # draws 5-8
+    etalon_temps = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, 4)  # draws 5–8
     ccd_temp1    = float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))    # draw 9
 
-    # ── NB02b + NB02c: tangent point + full LOS decomposition ────────────
-    # (science frames only; NB02c replaces the direct wind_map.sample() call)
+    # ── NB02b + NB02c (science only) ──────────────────────────────────────
     tp_lat = tp_lon = tp_alt = None
-    v_zonal = v_merid = None
-    v_wind_LOS = v_earth_LOS = V_sc_LOS = v_rel = None
+    v_zonal = v_merid = v_wind_LOS = v_earth_LOS = V_sc_LOS = v_rel = None
 
     if frame_type == 'science':
         tp = compute_tangent_point(pos, los_eci, epoch_t, h_target_km=h_target_km)
-        tp_lat = tp['tp_lat_deg']
-        tp_lon = tp['tp_lon_deg']
-        tp_alt = tp['tp_alt_km']
+        tp_lat, tp_lon, tp_alt = tp['tp_lat_deg'], tp['tp_lon_deg'], tp['tp_alt_km']
 
-        vr = compute_v_rel(
-            wind_map,
-            tp_lat, tp_lon, tp['tp_eci'],
-            vel, los_eci, epoch_t,
-        )
-        # NB02c returns all six keys; use them to populate both metadata and CSV
-        v_wind_LOS = vr['v_wind_LOS']
+        # NB02c subsumes wind_map.sample() — no separate NB00 call needed
+        vr = compute_v_rel(wind_map, tp_lat, tp_lon, tp['tp_eci'],
+                           vel, los_eci, epoch_t)
+        v_wind_LOS  = vr['v_wind_LOS']
         v_earth_LOS = vr['v_earth_LOS']
-        V_sc_LOS   = vr['V_sc_LOS']
-        v_rel      = vr['v_rel']
-        v_zonal    = vr['v_zonal_ms']   # wind_map.sample() result via NB02c
-        v_merid    = vr['v_merid_ms']
+        V_sc_LOS    = vr['V_sc_LOS']
+        v_rel       = vr['v_rel']
+        v_zonal     = vr['v_zonal_ms']    # from wind_map.sample() via NB02c
+        v_merid     = vr['v_merid_ms']
 
-    # ── Instrument state, ADCS flag ───────────────────────────────────────
+    # ── Instrument state and ADCS flag ────────────────────────────────────
     gpio, lamp, exp_time_cs = _instrument_state(frame_type)
     adcs_flag = compute_adcs_quality_flag({
         'pointing_error': qe,
@@ -195,10 +337,10 @@ for frame_i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
         'adcs_timestamp': int(row.epoch.timestamp() * 1000),
     })
 
-    # ── Construct ImageMetadata ───────────────────────────────────────────
+    # ── ImageMetadata ─────────────────────────────────────────────────────
     meta = ImageMetadata(
         # ... all fields per §6 table ...
-        truth_v_los        = v_wind_LOS,   # now populated for science frames
+        truth_v_los        = v_wind_LOS,    # populated for science; None otherwise
         tangent_lat        = tp_lat,
         tangent_lon        = tp_lon,
         tangent_alt_km     = tp_alt,
@@ -209,17 +351,15 @@ for frame_i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
     )
     metadata_list.append(meta)
 
-    # ── Binary image synthesis and file write (§7) ────────────────────────
+    # ── Binary image synthesis and write (§7) ─────────────────────────────
     pixels_256 = _generate_pixels(frame_type, v_rel, ccd_temp1,
-                                  exp_time_cts, rng)  # pixel RNG draws after draw 9
+                                  exp_time_cts, rng)
     _write_bin_file(meta, pixels_256, bin_dir / _bin_filename(meta))
 ```
 
 ---
 
 ## 6. `ImageMetadata` field assignment
-
-Fields changed from `None` in v8 are marked **UPDATED**.
 
 | Field | Source | Value / formula |
 |-------|--------|-----------------|
@@ -229,7 +369,7 @@ Fields changed from `None` in v8 are marked **UPDATED**.
 | `exp_unit` | §4.5 | `38500` (hardware register, fixed) |
 | `binning` | constant | `2` |
 | `img_type` | §4.4 | `_classify_img_type(lamp_ch_array, gpio_pwr_on)` |
-| `lua_timestamp` | NB01 `epoch` | `int(row.epoch.timestamp() * 1000)` ms |
+| `lua_timestamp` | NB01 `epoch` | `int(row.epoch.timestamp() × 1000)` ms |
 | `adcs_timestamp` | NB01 `epoch` | `= lua_timestamp` |
 | `utc_timestamp` | NB01 `epoch` | `row.epoch.isoformat()` |
 | `spacecraft_latitude` | NB01 `lat_deg` | `np.radians(row.lat_deg)` rad |
@@ -238,7 +378,7 @@ Fields changed from `None` in v8 are marked **UPDATED**.
 | `pos_eci_hat` | NB01 `pos_eci_*` | `[pos_eci_x, pos_eci_y, pos_eci_z]` m |
 | `vel_eci_hat` | NB01 `vel_eci_*` | `[vel_eci_x, vel_eci_y, vel_eci_z]` m/s |
 | `attitude_quaternion` | NB02a | `q`, scalar-last `[x,y,z,w]` |
-| `pointing_error` | §4.1 noise | Gaussian error quaternion, σ = 5 arcsec |
+| `pointing_error` | noise | Gaussian error quaternion, σ = 5 arcsec |
 | `obs_mode` | NB01 parity | `'along_track'` / `'cross_track'` |
 | `ccd_temp1` | noise | `rng.normal(-10.0, 1.0)` °C |
 | `etalon_temps` | noise | `rng.normal(24.0, 0.1, 4).tolist()` °C |
@@ -246,8 +386,8 @@ Fields changed from `None` in v8 are marked **UPDATED**.
 | `gpio_pwr_on` | §4.2–4.3 | frame-type dependent |
 | `lamp_ch_array` | §4.2–4.3 | frame-type dependent |
 | `lamp1/2/3_status` | P01 rule | derived from `lamp_ch_array` |
-| `orbit_number` | §4.1 | 1-based |
-| `frame_sequence` | §4.5 | 0-based within orbit |
+| `orbit_number` | §4.1 | 1-based from elapsed time |
+| `frame_sequence` | §4.5 | 0-based within orbit observation list |
 | `orbit_parity` | §4.1 | `'along_track'` / `'cross_track'` |
 | `adcs_quality_flag` | P01 | `compute_adcs_quality_flag(...)` |
 | `is_synthetic` | constant | `True` |
@@ -257,7 +397,7 @@ Fields changed from `None` in v8 are marked **UPDATED**.
 | `tangent_alt_km` | NB02b (science) | `tp['tp_alt_km']`; `None` for cal/dark |
 | `truth_v_zonal` | NB02c (science) | `vr['v_zonal_ms']`; `None` for cal/dark |
 | `truth_v_meridional` | NB02c (science) | `vr['v_merid_ms']`; `None` for cal/dark |
-| `truth_v_los` **UPDATED** | NB02c (science) | `vr['v_wind_LOS']`; `None` for cal/dark |
+| `truth_v_los` | NB02c (science) | `vr['v_wind_LOS']`; `None` for cal/dark |
 | `etalon_gap_mm` | — | `None` |
 | All other Optional fields | — | `None` / defaults |
 
@@ -269,379 +409,230 @@ Fields changed from `None` in v8 are marked **UPDATED**.
 
 ```python
 # FPI optical model (S03 authoritative values)
-LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm source wavelength, m
+LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm, m
 LAMBDA_NE1_M     = 640.2248e-9    # Neon strong line (Burns et al. 1950)
 LAMBDA_NE2_M     = 638.2991e-9    # Neon weak line  (Burns et al. 1950)
-ETALON_GAP_M     = 20.106e-3      # Tolansky-recovered gap (S03, mm → m)
-FOCAL_LENGTH_M   = 0.19912        # Imaging lens focal length, m
+ETALON_GAP_M     = 20.106e-3      # Tolansky-recovered, m
+FOCAL_LENGTH_M   = 0.19912        # Imaging lens, m
 PLATE_SCALE_RPX  = 1.6071e-4      # rad/px (2×2 binned, Tolansky)
 R_REFL           = 0.53           # Effective reflectivity (FlatSat)
-N_GAP            = 1.0            # Refractive index of etalon gap (air)
-C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
-
-# Finesse coefficient: F = 4R/(1-R)²
-FINESSE_F        = 4 * R_REFL / (1 - R_REFL)**2    # ≈ 9.6 for R=0.53
+N_GAP            = 1.0            # Refractive index, air gap
+C_LIGHT_MS       = 2.99792458e8   # m/s
+FINESSE_F        = 4*R_REFL / (1-R_REFL)**2    # ≈ 9.6
 
 # CCD / pixel layout
-NX_PIX           = 256   # science region width (2×2 binned)
-NY_PIX           = 256   # science region height
-N_ROWS_BIN       = 259   # pixel rows in binary file (rows 1–259)
-N_COLS_BIN       = 276   # pixel columns in binary file
-ROW_OFFSET_PIX   = 1     # row within pixel array where science image starts
-COL_OFFSET_PIX   = 10    # column offset (centres 256 in 276)
-BIAS_ADU         = 100   # CCD bias level, ADU (uniform background)
-ADU_MAX          = 16383 # 14-bit ADC maximum
+NX_PIX, NY_PIX   = 256, 256       # science region (2×2 binned)
+N_ROWS_BIN       = 259            # pixel rows in binary file
+N_COLS_BIN       = 276            # pixel columns in binary file
+ROW_OFFSET_PIX   = 1              # top-left row of science window in pixel array
+COL_OFFSET_PIX   = 10             # top-left col of science window
+BIAS_ADU         = 100            # CCD bias, ADU
+ADU_MAX          = 16383          # 14-bit ceiling
 
-# Science frame signal level
-SCI_PEAK_ADU     = 5000  # peak Airy fringe ADU for OI 630 nm at default exposure
-SCI_READ_NOISE   = 5.0   # read noise, ADU rms
-
-# Calibration frame signal level
-CAL_PEAK_ADU     = 12000 # peak ADU for neon bright fringes
-CAL_NE_RATIO     = 3.0   # intensity ratio strong (λ1) : weak (λ2)
+# Frame signal levels
+SCI_PEAK_ADU     = 5000           # OI 630 nm fringe peak
+SCI_READ_NOISE   = 5.0            # ADU rms
+CAL_PEAK_ADU     = 12000          # Neon bright fringe peak
+CAL_NE_RATIO     = 3.0            # Strong λ1 : weak λ2 intensity ratio
 CAL_READ_NOISE   = 5.0
-
-# Dark frame noise model
-DARK_REF_ADU_S   = 0.05  # dark current, ADU/px/s at T_REF_DARK_C
-T_REF_DARK_C     = -20.0 # reference temperature for dark model, °C
-T_DOUBLE_C       = 6.5   # temperature interval for dark current to double, °C
+DARK_REF_ADU_S   = 0.05           # Dark current at T_REF_DARK_C, ADU/px/s
+T_REF_DARK_C     = -20.0          # Reference temperature for dark model, °C
+T_DOUBLE_C       = 6.5            # Dark current doubling interval, °C
 DARK_READ_NOISE  = 5.0
 ```
 
-### 7.2 Binary header encoder — `_encode_header()`
+### 7.2 Mixed-endian encoding helpers
 
-The exact inverse of P01 `parse_header()`. Takes an `ImageMetadata` and
-returns a `np.ndarray` of shape `(276,)`, `dtype=">u2"` (big-endian uint16).
-
-**Mixed-endian encoding helpers:**
+Exact inverses of P01 `_u64()` and `_f64()`. Round-trip requirement:
+`_f64(np.array(_encode_f64(x), dtype=">u2"), 0) == x` for all finite float64.
 
 ```python
-import struct
-
 def _encode_u64(val: int) -> list[int]:
     """uint64 → 4 BE uint16 words in LE word order (LSW first)."""
     return [(val >> (16 * i)) & 0xFFFF for i in range(4)]
 
 def _encode_f64(val: float) -> list[int]:
     """float64 → 4 BE uint16 words in LE word order (LSW first)."""
-    b     = struct.pack(">d", val)            # 8 bytes, big-endian double
-    words = struct.unpack(">4H", b)           # [MSW, w1, w2, LSW]
-    return list(reversed(words))              # [LSW, w2, w1, MSW] — LE word order
+    b     = struct.pack(">d", val)        # 8 bytes, big-endian double
+    words = struct.unpack(">4H", b)       # [MSW, w1, w2, LSW]
+    return list(reversed(words))          # [LSW, w2, w1, MSW] — LE word order
 ```
 
-**Verification:** `_f64(h, w)` in P01 does `struct.pack(">4H", *reversed(h[w:w+4]))` then
-`struct.unpack(">d", ...)`. Encoding reverses this exactly. Round-trip error must be zero.
+### 7.3 Header encoder — `_encode_header()`
+
+Exact inverse of P01 `parse_header()`. Returns `np.ndarray` shape `(276,)`
+`dtype=">u2"`. Quaternion convention: pipeline `[x,y,z,w]` → binary `[w,x,y,z]`
+(applied to both `attitude_quaternion` and `pointing_error`).
 
 ```python
 def _encode_header(meta: ImageMetadata) -> np.ndarray:
-    """
-    Encode ImageMetadata into the 276-word binary header row.
-
-    Quaternion convention: P01 pipeline uses scalar-last [x,y,z,w];
-    binary header stores scalar-first [w,x,y,z]. Re-ordering performed here
-    for both attitude_quaternion and pointing_error (words 28–59).
-    """
     h = np.zeros(276, dtype=">u2")
-
-    # Words 0–3: image dimensions and timing register
-    h[0] = meta.rows
-    h[1] = meta.cols
-    h[2] = meta.exp_time          # centiseconds
-    h[3] = meta.exp_unit          # hardware register (38500)
-
-    # Words 4–7: ccd_temp1 (float64)
-    for i, w in enumerate(_encode_f64(meta.ccd_temp1)):
-        h[4 + i] = w
-
-    # Words 8–11: lua_timestamp (uint64)
-    for i, w in enumerate(_encode_u64(meta.lua_timestamp)):
-        h[8 + i] = w
-
-    # Words 12–15: adcs_timestamp (uint64)
-    for i, w in enumerate(_encode_u64(meta.adcs_timestamp)):
-        h[12 + i] = w
-
-    # Words 16–27: geodetic position (lat, lon, alt — each float64)
+    h[0], h[1], h[2], h[3] = meta.rows, meta.cols, meta.exp_time, meta.exp_unit
+    for i, w in enumerate(_encode_f64(meta.ccd_temp1)):        h[4 + i]  = w
+    for i, w in enumerate(_encode_u64(meta.lua_timestamp)):    h[8 + i]  = w
+    for i, w in enumerate(_encode_u64(meta.adcs_timestamp)):   h[12 + i] = w
     for j, val in enumerate([meta.spacecraft_latitude,
                               meta.spacecraft_longitude,
                               meta.spacecraft_altitude]):
-        for i, w in enumerate(_encode_f64(val)):
-            h[16 + j*4 + i] = w
-
-    # Words 28–43: attitude quaternion (4 × float64)
-    # Pipeline [x,y,z,w] → binary [w,x,y,z]
-    q = meta.attitude_quaternion               # [x, y, z, w]
-    q_bin = [q[3], q[0], q[1], q[2]]          # [w, x, y, z]
-    for j, val in enumerate(q_bin):
-        for i, w in enumerate(_encode_f64(val)):
-            h[28 + j*4 + i] = w
-
-    # Words 44–59: pointing error quaternion (4 × float64)
-    qe = meta.pointing_error                   # [x, y, z, w]
-    qe_bin = [qe[3], qe[0], qe[1], qe[2]]
-    for j, val in enumerate(qe_bin):
-        for i, w in enumerate(_encode_f64(val)):
-            h[44 + j*4 + i] = w
-
-    # Words 60–71: ECI position (3 × float64)
+        for i, w in enumerate(_encode_f64(val)):               h[16 + j*4 + i] = w
+    # attitude_quaternion: [x,y,z,w] → [w,x,y,z] for binary
+    q = meta.attitude_quaternion
+    for j, val in enumerate([q[3], q[0], q[1], q[2]]):
+        for i, w in enumerate(_encode_f64(val)):               h[28 + j*4 + i] = w
+    # pointing_error: same reorder
+    qe = meta.pointing_error
+    for j, val in enumerate([qe[3], qe[0], qe[1], qe[2]]):
+        for i, w in enumerate(_encode_f64(val)):               h[44 + j*4 + i] = w
     for j, val in enumerate(meta.pos_eci_hat):
-        for i, w in enumerate(_encode_f64(val)):
-            h[60 + j*4 + i] = w
-
-    # Words 72–83: ECI velocity (3 × float64)
+        for i, w in enumerate(_encode_f64(val)):               h[60 + j*4 + i] = w
     for j, val in enumerate(meta.vel_eci_hat):
-        for i, w in enumerate(_encode_f64(val)):
-            h[72 + j*4 + i] = w
-
-    # Words 84–99: etalon temperatures (4 × float64)
+        for i, w in enumerate(_encode_f64(val)):               h[72 + j*4 + i] = w
     for j, val in enumerate(meta.etalon_temps):
-        for i, w in enumerate(_encode_f64(val)):
-            h[84 + j*4 + i] = w
-
-    # Words 100–103: gpio_pwr_on (4 × uint8 in low byte)
-    for j, val in enumerate(meta.gpio_pwr_on):
-        h[100 + j] = int(val) & 0xFF
-
-    # Words 104–109: lamp_ch_array (6 × uint8 in low byte)
-    for j, val in enumerate(meta.lamp_ch_array):
-        h[104 + j] = int(val) & 0xFF
-
-    # Words 110–275: padding (already zero from np.zeros)
+        for i, w in enumerate(_encode_f64(val)):               h[84 + j*4 + i] = w
+    for j, val in enumerate(meta.gpio_pwr_on):                 h[100 + j] = int(val) & 0xFF
+    for j, val in enumerate(meta.lamp_ch_array):               h[104 + j] = int(val) & 0xFF
+    # Words 110–275: padding (zeros)
     return h
 ```
 
-### 7.3 Pixel image generators
+### 7.4 Pixel image generators
 
-All generators return a `np.ndarray` of shape `(256, 256)`, `dtype=np.uint16`,
-with values clipped to `[0, ADU_MAX]`. The 256×256 array is embedded into the
-259×276 binary pixel area by `_write_bin_file()`.
+All return `np.ndarray` shape `(256, 256)` `dtype=np.uint16`, clipped to
+`[0, ADU_MAX]`. The 256×256 array is embedded in the 259×276 binary pixel
+area by `_write_bin_file()`.
 
-#### 7.3.1 Science frame — Airy fringe at `v_rel` Doppler
-
-Uses the delta-function OI source model (no temperature broadening; temperature
-is not a science product). The fringe shift is applied through the observed
-wavelength:
-
-```
-λ_obs = LAMBDA_OI_M × (1 + v_rel_ms / C_LIGHT_MS)
-```
-
-Positive `v_rel` (recession) → λ increases → fringes shift to smaller radii.
+#### Science — Airy fringe with Doppler shift
 
 ```python
 def _generate_science_pixels(v_rel_ms: float, rng) -> np.ndarray:
     """
-    Generate OI 630 nm Airy fringe image with Doppler shift v_rel_ms.
-
-    Parameters
-    ----------
-    v_rel_ms : float — Doppler velocity from NB02c, m/s.
-    rng      : numpy.random.Generator
-
-    Physics
-    -------
-    Phase at pixel radius r_px:
-        θ = r_px × PLATE_SCALE_RPX              (angle from optical axis, rad)
-        λ_obs = LAMBDA_OI_M × (1 + v_rel_ms/C)
-        δ = 4π × N_GAP × ETALON_GAP_M × cos(θ) / λ_obs
-        I_airy = 1 / (1 + FINESSE_F × sin²(δ/2))
-
-    Signal model:
-        signal(r) = SCI_PEAK_ADU × I_airy(r)
-        N_px ~ Poisson(signal(r))   (photon noise)
-        + Normal(0, SCI_READ_NOISE) (read noise)
-        + BIAS_ADU                  (CCD bias)
-
-    Fringe centre: (NX_PIX/2, NY_PIX/2) in the 256×256 image.
+    OI 630 nm Airy fringe pattern with Doppler shift v_rel_ms.
+    λ_obs = LAMBDA_OI_M × (1 + v_rel_ms / C_LIGHT_MS)
+    Positive v_rel (recession) → λ increases → fringes shift inward.
+    δ(r) = 4π·N_GAP·ETALON_GAP_M·cos(r·PLATE_SCALE_RPX) / λ_obs
+    I_airy = 1 / (1 + FINESSE_F·sin²(δ/2))
+    Signal = SCI_PEAK_ADU × I_airy + Poisson(photon) + Normal(0, READ_NOISE) + BIAS
     """
     lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
-
-    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
-    x = np.arange(NX_PIX) - cx
-    y = np.arange(NY_PIX) - cy
+    x, y = np.arange(NX_PIX) - NX_PIX/2.0, np.arange(NY_PIX) - NY_PIX/2.0
     XX, YY = np.meshgrid(x, y)
-    r_px = np.sqrt(XX**2 + YY**2)
-
-    theta = r_px * PLATE_SCALE_RPX
-    delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
+    theta  = np.sqrt(XX**2 + YY**2) * PLATE_SCALE_RPX
+    delta  = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
     I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
-
     signal = SCI_PEAK_ADU * I_airy
-    photon = rng.poisson(np.clip(signal, 0, None))          # Poisson shot noise
-    read   = rng.normal(0.0, SCI_READ_NOISE, size=signal.shape)
-    image  = np.round(photon + read + BIAS_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+    image  = rng.poisson(np.clip(signal, 0, None)).astype(float) \
+             + rng.normal(0.0, SCI_READ_NOISE, signal.shape) + BIAS_ADU
+    return np.clip(np.round(image), 0, ADU_MAX).astype(np.uint16)
 ```
 
-#### 7.3.2 Calibration frame — two-line neon Airy pattern
-
-Two superimposed Airy patterns at the neon wavelengths (Burns et al. 1950
-IAU standards, confirmed). Weighted sum with `CAL_NE_RATIO : 1` (strong:weak).
+#### Calibration — two-line neon
 
 ```python
 def _generate_cal_pixels(rng) -> np.ndarray:
     """
-    Generate two-line neon calibration fringe image.
-
-    Lines: λ1 = 640.2248 nm (strong), λ2 = 638.2991 nm (weak).
-    Combined intensity: (CAL_NE_RATIO × I_airy(λ1) + I_airy(λ2)) /
-                        (CAL_NE_RATIO + 1)
-    Peak scaled to CAL_PEAK_ADU.
+    Two superimposed Airy patterns at λ1=640.2248 nm (strong) and
+    λ2=638.2991 nm (weak), ratio CAL_NE_RATIO:1 (Burns et al. 1950).
     """
-    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
-    x = np.arange(NX_PIX) - cx
-    y = np.arange(NY_PIX) - cy
+    x, y = np.arange(NX_PIX) - NX_PIX/2.0, np.arange(NY_PIX) - NY_PIX/2.0
     XX, YY = np.meshgrid(x, y)
-    r_px   = np.sqrt(XX**2 + YY**2)
-    theta  = r_px * PLATE_SCALE_RPX
+    theta  = np.sqrt(XX**2 + YY**2) * PLATE_SCALE_RPX
 
     def _airy(lam):
-        delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lam
-        return 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
+        d = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lam
+        return 1.0 / (1.0 + FINESSE_F * np.sin(d / 2.0)**2)
 
-    I_cal = (CAL_NE_RATIO * _airy(LAMBDA_NE1_M) + _airy(LAMBDA_NE2_M)) \
-            / (CAL_NE_RATIO + 1.0)
-
+    I_cal  = (CAL_NE_RATIO * _airy(LAMBDA_NE1_M) + _airy(LAMBDA_NE2_M)) \
+             / (CAL_NE_RATIO + 1.0)
     signal = CAL_PEAK_ADU * I_cal
-    photon = rng.poisson(np.clip(signal, 0, None))
-    read   = rng.normal(0.0, CAL_READ_NOISE, size=signal.shape)
-    image  = np.round(photon + read + BIAS_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+    image  = rng.poisson(np.clip(signal, 0, None)).astype(float) \
+             + rng.normal(0.0, CAL_READ_NOISE, signal.shape) + BIAS_ADU
+    return np.clip(np.round(image), 0, ADU_MAX).astype(np.uint16)
 ```
 
-#### 7.3.3 Dark frame — dark current + read noise
-
-Dark current scales exponentially with CCD temperature; the rate doubles
-every `T_DOUBLE_C = 6.5°C`. The mean dark signal per pixel is:
-
-```
-dark_rate [ADU/px/s] = DARK_REF_ADU_S × 2^((ccd_temp1 - T_REF_DARK_C) / T_DOUBLE_C)
-N_dark = dark_rate × exp_time_s
-```
+#### Dark — exponential dark current model
 
 ```python
-def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng) -> np.ndarray:
+def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float,
+                           rng) -> np.ndarray:
     """
-    Generate dark frame based on CCD temperature and exposure time.
-
-    Model:
-        dark_rate = DARK_REF_ADU_S × 2^((T - T_REF_DARK_C) / T_DOUBLE_C)
-        mean dark signal per pixel = dark_rate × exp_time_s
-        N_px ~ Poisson(mean_dark) + Normal(0, DARK_READ_NOISE) + BIAS_ADU
+    Dark current rate doubles every T_DOUBLE_C = 6.5°C.
+    dark_rate [ADU/px/s] = DARK_REF_ADU_S × 2^((T - T_REF_DARK_C) / T_DOUBLE_C)
+    mean_dark = dark_rate × exp_time_s
+    N_px ~ Poisson(mean_dark) + Normal(0, READ_NOISE) + BIAS_ADU
     """
-    dark_rate  = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
-    mean_dark  = max(dark_rate * exp_time_s, 0.0)
-    dark_arr   = rng.poisson(mean_dark, size=(NY_PIX, NX_PIX)).astype(float)
-    read       = rng.normal(0.0, DARK_READ_NOISE, size=(NY_PIX, NX_PIX))
-    image      = np.round(dark_arr + read + BIAS_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+    dark_rate = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
+    mean_dark = max(dark_rate * exp_time_s, 0.0)
+    image = rng.poisson(mean_dark, size=(NY_PIX, NX_PIX)).astype(float) \
+            + rng.normal(0.0, DARK_READ_NOISE, size=(NY_PIX, NX_PIX)) + BIAS_ADU
+    return np.clip(np.round(image), 0, ADU_MAX).astype(np.uint16)
 ```
 
-#### 7.3.4 Dispatcher
+#### Dispatcher
 
 ```python
-def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
-                     exp_time_cts: int, rng) -> np.ndarray:
-    """
-    Dispatch to the appropriate pixel generator.
-    RNG draws for pixel synthesis always occur after the 9 metadata draws.
-    """
+def _generate_pixels(frame_type, v_rel_ms, ccd_temp1_c,
+                     exp_time_cts, rng) -> np.ndarray:
     exp_time_s = exp_time_cts * TIMER_PERIOD_S
-    if frame_type == 'science':
-        return _generate_science_pixels(v_rel_ms, rng)
-    elif frame_type == 'cal':
-        return _generate_cal_pixels(rng)
-    elif frame_type == 'dark':
-        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng)
-    else:
-        raise ValueError(f"Unknown frame_type: {frame_type!r}")
+    if   frame_type == 'science': return _generate_science_pixels(v_rel_ms, rng)
+    elif frame_type == 'cal':     return _generate_cal_pixels(rng)
+    elif frame_type == 'dark':    return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng)
+    raise ValueError(f"Unknown frame_type: {frame_type!r}")
 ```
 
-### 7.4 Binary file writer — `_write_bin_file()`
-
-Assembles the 276-word header row and the 259×276 pixel array into the
-143,520-byte P01 binary format.
+### 7.5 Binary file writer — `_write_bin_file()`
 
 ```python
 def _write_bin_file(meta: ImageMetadata,
                     pixels_256: np.ndarray,
                     path: pathlib.Path) -> None:
     """
-    Write a WindCube FPI binary image file.
-
-    Binary layout (P01 §2.1):
-        Row 0       : 276 × uint16 — encoded ImageMetadata header
-        Rows 1–259  : 259 × 276 × uint16 — pixel data (14-bit, 0–16383)
-        Total bytes : 260 × 276 × 2 = 143,520
-
-    The 256×256 science region is embedded at:
-        rows [ROW_OFFSET_PIX : ROW_OFFSET_PIX+256]
-        cols [COL_OFFSET_PIX : COL_OFFSET_PIX+256]
-    All other pixels in the 259×276 region are set to BIAS_ADU.
-
-    Parameters
-    ----------
-    meta       : ImageMetadata
-    pixels_256 : np.ndarray, shape (256, 256), uint16
-    path       : destination .bin file path (parent directory must exist)
+    P01 §2.1 binary layout: 260 × 276 × 2 = 143,520 bytes.
+    Row 0:     276-word header  (_encode_header).
+    Rows 1–259: 259 × 276 pixel region; 256×256 science window at
+               [ROW_OFFSET_PIX:ROW_OFFSET_PIX+256, COL_OFFSET_PIX:COL_OFFSET_PIX+256];
+               all other pixels = BIAS_ADU.
     """
-    header       = _encode_header(meta)                          # (276,) ">u2"
-    pixel_array  = np.full((N_ROWS_BIN, N_COLS_BIN),
-                           BIAS_ADU, dtype=np.uint16)
-    pixel_array[ROW_OFFSET_PIX : ROW_OFFSET_PIX + NY_PIX,
-                COL_OFFSET_PIX : COL_OFFSET_PIX + NX_PIX] = pixels_256
-
-    full_array   = np.vstack([
-        header.reshape(1, N_COLS_BIN),
-        pixel_array.astype(">u2"),
-    ]).astype(">u2")
-
-    assert full_array.shape  == (260, 276),  f"Unexpected shape: {full_array.shape}"
-    assert full_array.nbytes == 143_520,     f"Unexpected size: {full_array.nbytes}"
+    header      = _encode_header(meta)
+    pixel_array = np.full((N_ROWS_BIN, N_COLS_BIN), BIAS_ADU, dtype=np.uint16)
+    pixel_array[ROW_OFFSET_PIX:ROW_OFFSET_PIX + NY_PIX,
+                COL_OFFSET_PIX:COL_OFFSET_PIX + NX_PIX] = pixels_256
+    full_array  = np.vstack([header.reshape(1, N_COLS_BIN),
+                             pixel_array.astype(">u2")]).astype(">u2")
+    assert full_array.shape  == (260, 276)
+    assert full_array.nbytes == 143_520
     path.write_bytes(full_array.tobytes())
 ```
 
-### 7.5 Filename convention — `_bin_filename()`
+### 7.6 Filename — `_bin_filename()`
 
 ```python
 def _bin_filename(meta: ImageMetadata) -> str:
-    """
-    Return the binary filename for this frame.
-
-    Format: YYYYMMDDThhmmssZ_{img_type}.bin
-    Colons are excluded for Windows filesystem compatibility.
-
-    Examples:
-        20270101T000000Z_science.bin
-        20270101T013420Z_cal.bin
-        20270101T013510Z_dark.bin
-    """
+    """YYYYMMDDThhmmssZ_{img_type}.bin  (no colons — Windows compatible)."""
     from datetime import datetime, timezone
-    dt     = datetime.fromtimestamp(meta.lua_timestamp / 1000.0, tz=timezone.utc)
-    ts_str = dt.strftime('%Y%m%dT%H%M%SZ')
-    return f"{ts_str}_{meta.img_type}.bin"
+    dt = datetime.fromtimestamp(meta.lua_timestamp / 1000.0, tz=timezone.utc)
+    return f"{dt.strftime('%Y%m%dT%H%M%SZ')}_{meta.img_type}.bin"
 ```
 
-### 7.6 RNG draw order — complete per-frame sequence
-
-The pixel synthesis draws (step 5) always follow the 9 metadata draws
-(steps 1–4). This ensures that the metadata noise fields are reproducible
-regardless of whether image synthesis is later modified.
+### 7.7 RNG draw order — complete per-frame sequence (fixed)
 
 ```
-Per observation frame — total RNG draws:
-  1.  theta           1 draw  — rng.normal(0, SIGMA_POINTING_RAD)
-  2.  axis raw        3 draws — rng.standard_normal(3)
-  3.  etalon temps    4 draws — rng.normal(24.0, 0.1, 4)
-  4.  ccd_temp1       1 draw  — rng.normal(-10.0, 1.0)
-  ── metadata draws complete (9 total) ──────────────────────────
-  5a. [science] photon noise  65536 draws — rng.poisson(signal, size=(256,256))
-  5b. [science] read noise    65536 draws — rng.normal(0, READ_NOISE, (256,256))
-  5a. [cal]     photon noise  65536 draws — rng.poisson(signal, size=(256,256))
-  5b. [cal]     read noise    65536 draws — rng.normal(0, READ_NOISE, (256,256))
-  5a. [dark]    dark Poisson  65536 draws — rng.poisson(mean_dark, size=(256,256))
-  5b. [dark]    read noise    65536 draws — rng.normal(0, READ_NOISE, (256,256))
+Metadata draws (9 total) — always first:
+  draw 1    theta              rng.normal(0, SIGMA_POINTING_RAD)
+  draws 2–4 axis raw           rng.standard_normal(3)
+  draws 5–8 etalon temps       rng.normal(24.0, 0.1, 4)
+  draw 9    ccd_temp1          rng.normal(-10.0, 1.0)
+
+Pixel synthesis draws — always after draw 9:
+  [science]  Poisson  65536    rng.poisson(signal, size=(256,256))
+  [science]  Normal   65536    rng.normal(0, SCI_READ_NOISE, (256,256))
+  [cal]      Poisson  65536    rng.poisson(signal, size=(256,256))
+  [cal]      Normal   65536    rng.normal(0, CAL_READ_NOISE, (256,256))
+  [dark]     Poisson  65536    rng.poisson(mean_dark, size=(256,256))
+  [dark]     Normal   65536    rng.normal(0, DARK_READ_NOISE, (256,256))
 ```
+
+Do not change this order. Metadata reproducibility is independent of
+pixel synthesis changes so long as metadata draws precede pixel draws.
 
 ---
 
@@ -657,23 +648,17 @@ Per observation frame — total RNG draws:
     ├── 20270101T000000Z_science.bin
     ├── 20270101T000010Z_science.bin
     ...
-    ├── 20270101T012950Z_cal.bin
-    ├── 20270101T013000Z_cal.bin
-    ...
-    └── 20270101T235950Z_dark.bin
+    ├── 20270101T013420Z_cal.bin
+    └── 20270101T013510Z_dark.bin
 ```
 
-All `.bin` files land in `{output_dir}/bin_frames/`. The directory is
-created by G01; it must not pre-exist or must be empty to avoid mixing
-outputs from different runs.
-
-### 8.2 `.npy` — primary pipeline format (unchanged)
+### 8.2 `.npy` — primary pipeline format
 
 Full `ImageMetadata` for every frame, including `truth_v_los` (now populated).
 
 ### 8.3 `.csv` — 46 columns
 
-Columns 1–42 are unchanged from v8. Four new columns appended:
+Columns 1–42 unchanged from v8. Four new columns (43–46):
 
 | # | Column name | P01 field | Science | Cal / Dark |
 |---|-------------|-----------|---------|-----------|
@@ -683,38 +668,27 @@ Columns 1–42 are unchanged from v8. Four new columns appended:
 | 46 | `v_rel_ms` | — (CSV only) | NB02c `v_rel`, m/s | `NaN` |
 
 `V_sc_LOS`, `v_earth_LOS`, and `v_rel` have no dedicated `ImageMetadata`
-fields; they exist in the CSV only. A future P01 spec revision could add
-them to `ImageMetadata` if needed by downstream modules.
-
-```python
-row_dict.update({
-    'v_wind_los_ms':  vr['v_wind_LOS']  if frame_type == 'science' else float('nan'),
-    'v_earth_los_ms': vr['v_earth_LOS'] if frame_type == 'science' else float('nan'),
-    'v_sc_los_ms':    vr['V_sc_LOS']    if frame_type == 'science' else float('nan'),
-    'v_rel_ms':       vr['v_rel']       if frame_type == 'science' else float('nan'),
-})
-```
+fields; they live in the CSV only.
 
 ---
 
 ## 9. Progress reporting and verification
 
-### 9.1 Console additions (v9)
+### 9.1 Console output (additions from v9)
 
 ```
 Building NB02a + NB02b + NB02c + image synthesis ...
   [====================] 120410/120410
   NB02b+NB02c called for 115860 science frames.
-  .bin files written to: .../bin_frames/ (120410 files, ~17.3 GB)
+  .bin files → bin_frames/ (120410 files, ~17.3 GB)
 
 v_rel stats for science frames (m/s):
-  Mean  : XXXX.X   (dominated by V_sc_LOS ≈ -7100 m/s for along-track)
-  Std   :  XXX.X
-  Min   : XXXX.X   Max: XXXX.X
+  Mean : XXXX.X   (along-track dominated by V_sc_LOS ≈ -7100 m/s)
+  Std  :  XXX.X
 
 v_wind_LOS stats (m/s):
-  Mean  :  XXX.X   (truth wind projected onto LOS)
-  Std   :   XX.X
+  Mean :  XXX.X
+  Std  :   XX.X
 ```
 
 ### 9.2 Verification checks (C1–C21)
@@ -733,36 +707,26 @@ v_wind_LOS stats (m/s):
 | C10 | Cal count ≈ `n_caldark × len(cal_trigger_indices)` ±5% | `.npy` |
 | C11 | Dark count ≈ `n_caldark × len(cal_trigger_indices)` ±5% | `.npy` |
 | C12 | CSV has exactly **46** columns | `.csv` |
-| C13 | `.npy` round-trip succeeds | `.npy` |
+| C13 | `.npy` round-trip: `ImageMetadata(**np.load(...)[0])` | `.npy` |
 | C14 | `tp_lat_deg` is `NaN` for all cal/dark rows | `.csv` |
 | C15 | `tp_lat_deg` is non-NaN for all science rows | `.csv` |
 | C16 | `tp_lat_deg` within `lat_band_deg + 5°` of 0° for science rows | `.csv` |
 | C17 | `wind_v_zonal_ms` is non-NaN for all science rows | `.csv` |
 | C18 | `v_rel_ms` is non-NaN for all science rows | `.csv` |
-| C19 | `v_rel_ms` is NaN for all cal/dark rows | `.csv` |
-| C20 | All `.bin` files exist and have size 143,520 bytes exactly | `bin_frames/` |
-| C21 | Header round-trip: parse header of first science `.bin` via P01 `parse_header()`; `lua_timestamp` matches CSV row | `bin_frames/` |
-
-**C20 implementation:**
-```python
-bin_files = list(bin_dir.glob("*.bin"))
-sizes_ok  = all(f.stat().st_size == 143_520 for f in bin_files)
-count_ok  = len(bin_files) == len(metadata_list)
-c20 = sizes_ok and count_ok
-```
+| C19 | `v_rel_ms` is `NaN` for all cal/dark rows | `.csv` |
+| C20 | All `.bin` files exist; size = 143,520 bytes; count = `len(metadata_list)` | `bin_frames/` |
+| C21 | Header round-trip: `parse_header()` on first science `.bin`; `lua_timestamp` matches CSV | `bin_frames/` |
 
 **C21 implementation:**
 ```python
-# Find first science .bin, load it, decode header, compare timestamp
-first_sci_bin = next(f for f in sorted(bin_dir.glob("*.bin"))
-                     if 'science' in f.name)
-raw  = np.frombuffer(first_sci_bin.read_bytes(), dtype=">u2")
-hdr  = raw[:276]
-from src.metadata.p01_image_metadata_2026_04_06 import parse_header
-d    = parse_header(hdr)
-# Find matching CSV row
-sci_csv = df_csv[df_csv.img_type_derived == 'science'].iloc[0]
-c21 = (d['lua_timestamp'] == int(sci_csv['lua_timestamp']))
+first_sci = next(f for f in sorted(bin_dir.glob("*.bin")) if 'science' in f.name)
+hdr       = np.frombuffer(first_sci.read_bytes(), dtype=">u2")[:276]
+d         = parse_header(hdr)
+sci_row   = df_csv[df_csv.apply(
+    lambda r: _classify_img_type(
+        [int(r[f'lamp_{i}']) for i in range(6)],
+        [int(r[f'gpio_{i}']) for i in range(4)]) == 'science', axis=1)].iloc[0]
+c21 = (d['lua_timestamp'] == int(sci_row['lua_timestamp']))
 ```
 
 ---
@@ -773,13 +737,7 @@ c21 = (d['lua_timestamp'] == int(sci_csv['lua_timestamp']))
 soc_sewell/
 ├── validation/
 │   ├── gen01_synthetic_metadata_generator_2026_04_16.py
-│   └── outputs/   (or user-selected folder outside repo)
-│       ├── GEN01_20270101_030.0d_uniform_seed0042.npy
-│       ├── GEN01_20270101_030.0d_uniform_seed0042.csv
-│       └── bin_frames/
-│           ├── 20270101T000000Z_science.bin
-│           ├── 20270101T013420Z_cal.bin
-│           └── ...  (~120k files, ~17 GB for 30-day run)
+│   └── (outputs in user-selected folder outside repo)
 └── docs/specs/
     └── G01_synthetic_metadata_generator_2026-04-16.md
 ```
@@ -795,15 +753,11 @@ cat PIPELINE_STATUS.md
 
 ### Prerequisite reads
 1. This spec in full.
-2. NB02c spec / `nb02c_los_projection_2026_04_16.py` — `compute_v_rel(wind_map,
-   tp_lat_deg, tp_lon_deg, tp_eci, vel_eci, los_eci, epoch)` → dict with
-   keys `v_rel`, `v_wind_LOS`, `V_sc_LOS`, `v_earth_LOS`, `v_zonal_ms`,
-   `v_merid_ms`. Note capital `V` in `V_sc_LOS`.
-3. P01 spec / `p01_image_metadata_2026_04_06.py` — `parse_header()` (for
-   C21 round-trip check); `_f64()` and `_u64()` decode logic (to verify
-   your encode inverses are correct).
-4. All other prerequisite reads from v8 (NB00, NB01, NB02a, NB02b, P01,
-   `CLAUDE.md`).
+2. NB02c spec / `nb02c_los_projection_2026_04_16.py` — `compute_v_rel()`.
+   Note capital `V` in `V_sc_LOS` key.
+3. P01 `parse_header()` and `_f64()` / `_u64()` — verify your encode
+   inverses produce exact round-trips before use.
+4. All previous prerequisite reads (NB00, NB01, NB02a, NB02b, P01, `CLAUDE.md`).
 
 ### Prerequisite tests
 ```bash
@@ -812,67 +766,29 @@ pytest tests/test_nb02_geometry_2026_04_16.py -v # 10/10
 pytest tests/test_s19_p01_metadata.py -v         # 8/8
 ```
 
-### Additional import
-```python
-from src.geometry.nb02c_los_projection_2026_04_16 import compute_v_rel
-```
-
-### New constants to add to constants block
-```python
-# FPI optical model
-LAMBDA_OI_M    = 630.0e-9;   LAMBDA_NE1_M = 640.2248e-9;  LAMBDA_NE2_M = 638.2991e-9
-ETALON_GAP_M   = 20.106e-3;  FOCAL_LENGTH_M = 0.19912;    PLATE_SCALE_RPX = 1.6071e-4
-R_REFL         = 0.53;        N_GAP = 1.0;                 C_LIGHT_MS = 2.99792458e8
-FINESSE_F      = 4*R_REFL / (1-R_REFL)**2   # ≈ 9.6
-# Pixel layout
-NX_PIX=256; NY_PIX=256; N_ROWS_BIN=259; N_COLS_BIN=276
-ROW_OFFSET_PIX=1; COL_OFFSET_PIX=10; BIAS_ADU=100; ADU_MAX=16383
-# Signal levels
-SCI_PEAK_ADU=5000; SCI_READ_NOISE=5.0
-CAL_PEAK_ADU=12000; CAL_NE_RATIO=3.0; CAL_READ_NOISE=5.0
-# Dark model
-DARK_REF_ADU_S=0.05; T_REF_DARK_C=-20.0; T_DOUBLE_C=6.5; DARK_READ_NOISE=5.0
-```
-
-### Critical rules (additions over v8)
-
-- **NB02c replaces `wind_map.sample()`** in the science-frame path. Do not
-  call `wind_map.sample()` directly for science frames; use `compute_v_rel()`
-  which calls it internally and returns `v_zonal_ms` and `v_merid_ms`.
-- **`truth_v_los` = `vr['v_wind_LOS']`** for science frames. This field is
-  now populated (was `None` in v7/v8).
-- **`los_eci` must be retained** from `compute_los_eci()`. It is needed by
-  both NB02b and NB02c.
-- **`tp['tp_eci']`** (a `numpy.ndarray`) is the `tp_eci` argument to
-  `compute_v_rel()`, not `tp_eci_x/y/z` scalars.
-- **`_encode_f64` round-trip must be exact.** Verify once:
-  `assert struct.unpack(">d", struct.pack(">4H", *reversed(_encode_f64(x))))[0] == x`
-  for x = 1.234567890123456e7 before using it.
-- **Quaternion reorder in `_encode_header`**: pipeline `[x,y,z,w]` → binary
-  `[w,x,y,z]`. Apply to both `attitude_quaternion` and `pointing_error`.
-- **C21 derives `img_type`** by running `_classify_img_type(gpio, lamp)` on
-  the decoded header; do not read `img_type` from the header dict directly
-  (the parse_header function in P01 does derive it, but checking it explicitly
-  is more robust as a verification step).
-- **C12 = 46 columns** (was 42).
-- **RNG order**: 9 metadata draws first; pixel draws always after. Never
-  interleave.
-- **`bin_dir`** = `{output_dir}/bin_frames/`. Create with `mkdir(parents=True,
-  exist_ok=True)` before the loop. Do not create a new directory per orbit.
-- **Storage estimate** in console: `len(metadata_list) × 143_520 / 1e9` GB.
+### Critical rules
+- **`los_eci` retained** from NB02a — input to both NB02b and NB02c.
+- **NB02c replaces `wind_map.sample()`** — no separate NB00 call for science.
+  `truth_v_los = vr['v_wind_LOS']` (was `None` in v8).
+- **`tp['tp_eci']`** (ndarray) is the `tp_eci` arg to `compute_v_rel()`.
+- **`_encode_f64` round-trip must be exact** before use; assert it once.
+- **Quaternion reorder**: `[x,y,z,w]` → `[w,x,y,z]` for both quaternion
+  fields in `_encode_header()`.
+- **C12 = 46 columns.**
+- **RNG order**: 9 metadata draws first; pixel draws after. Never interleave.
+- **`bin_dir`** = `{output_dir}/bin_frames/`; create once before the loop.
+- **`exp_unit` = `38500` always;** `exp_time` = `round(cts × 0.001 × 100)` cs.
+- **NB01 at `SCHED_DT_S = 10.0` always.**
+- **Timezone**: `t0 = pd.Timestamp(t_start, tz='UTC')`.
 
 ### Epilogue
 ```bash
 git add PIPELINE_STATUS.md \
         validation/gen01_synthetic_metadata_generator_2026_04_16.py
-git commit -m "feat(g01): NB02c LOS decomposition + binary image synthesis, C1-C21
+git commit -m "docs: update G01 spec to v9 (NB02c + binary synthesis confirmed)
 
-NB02c: v_rel, v_wind_LOS, V_sc_LOS, v_earth_LOS for science frames
-truth_v_los now populated in ImageMetadata
-CSV: 46 columns (+v_wind_los_ms/v_earth_los_ms/v_sc_los_ms/v_rel_ms)
-Binary synthesis: science=Airy(v_rel), cal=two-line neon, dark=dark+noise
-_encode_header() inverse of P01 parse_header(); C21 round-trip verified
-~17 GB .bin output for 30-day run (143520 bytes/file)
+All 21 checks pass; 26 prerequisite tests pass.
+truth_v_los populated; CSV 46 columns; .bin synthesis verified.
 
 Also updates PIPELINE_STATUS.md"
 ```
