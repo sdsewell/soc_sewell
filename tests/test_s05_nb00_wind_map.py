@@ -158,6 +158,32 @@ def test_T4a_storm_equatorward_surge():
     )
 
 
+# =============================================================================
+# T1e — plot() four-mode smoke test (no display required)
+# =============================================================================
+
+def test_T1_plot_all_modes():
+    """T1e — plot() completes without exception for all four modes (Agg backend)."""
+    pytest.importorskip("cartopy", reason="cartopy not installed; skipping T1e")
+    import matplotlib
+    matplotlib.use('Agg')   # non-interactive — must be set before pyplot import
+    import matplotlib.pyplot as plt
+
+    wm_t1 = UniformWindMap(v_zonal_ms=150.0, v_merid_ms=-75.0)
+    wm_t2 = AnalyticWindMap(pattern='wave4')
+
+    for wm, label in [(wm_t1, 'T1'), (wm_t2, 'T2')]:
+        for mode in ('separate', 'vector', 'stream', 'magnitude'):
+            try:
+                wm.plot(title=f'{label} test', mode=mode)
+                plt.close('all')
+            except Exception as exc:
+                pytest.fail(
+                    f"plot(mode='{mode}') raised {type(exc).__name__} "
+                    f"for {label}: {exc}"
+                )
+
+
 def test_T4b_storm_magnitude_bounded():
     """T4b — Storm peak wind is physically bounded (< 1.5 × WIND_MAX_STORM_MS)."""
     pytest.importorskip("hwm14", reason="hwm14 not installed; skipping T4")

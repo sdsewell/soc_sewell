@@ -13,6 +13,7 @@ from src.fpi.m05_calibration_inversion_2026_04_06 import (
     fit_calibration_fringe,
     FitConfig,
 )
+from src.two_d_one_d_reduction.tolansky import TwoLineResult
 
 
 # ---------------------------------------------------------------------------
