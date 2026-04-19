@@ -58,7 +58,7 @@ from src.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
 # ---------------------------------------------------------------------------
 
 SCHED_DT_S            = 10.0   # NB01 propagation cadence — always fixed
-CAL_TRIGGER_LAT_DEG   = 60.0   # CONOPS ascending trigger — see spec header
+CAL_TRIGGER_LAT_DEG   = 70.0   # CONOPS ascending trigger — see spec header
 SIGMA_POINTING_ARCSEC =  5.0
 ETALON_TEMP_MEAN_C    = 24.0
 ETALON_TEMP_STD_C     =  0.1
@@ -522,6 +522,225 @@ def _bin_filename(meta: ImageMetadata) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ground track figure
+# ---------------------------------------------------------------------------
+
+def _plot_ground_tracks(
+    df_sched:      pd.DataFrame,
+    metadata_list: list,
+    obs_indices:   list,
+    frame_types:   list,
+    lat_band_deg:  float,
+    switch_at:     list,
+    save_path:     pathlib.Path,
+) -> None:
+    """
+    Plot spacecraft and tangent-point ground tracks for three attitude segments:
+      Seg 0 — partial along-track  (t=0 → first cal/dark sequence ends)
+      Seg 1 — full cross-track     (first → second attitude switch)
+      Seg 2 — full along-track     (second → third attitude switch)
+
+    Tangent points plotted only for science frames within the science band.
+    A dashed connector is drawn between the spacecraft position and its
+    tangent point for every 10th science observation.
+    Annotated event markers:
+      * TLE Acquisition                   — first timestep overall
+      * Change attitude to cross-track    — switch_at[0]
+      * Change attitude to along-track    — switch_at[1]
+      ▲ Cal/dark sequence start           — first cal frame per segment
+      ▼ Cal/dark sequence end             — last dark frame per segment
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+
+    lats_all = df_sched["lat_deg"].values
+    lons_all = df_sched["lon_deg"].values
+    n        = len(df_sched)
+
+    # --- Three attitude-based segments ---
+    sw0 = min(switch_at[0], n) if len(switch_at) > 0 else n
+    sw1 = min(switch_at[1], n) if len(switch_at) > 1 else n
+    sw2 = min(switch_at[2], n) if len(switch_at) > 2 else n
+
+    seg_bounds = [(0, sw0), (sw0, sw1), (sw1, sw2)]
+    seg_labels = [
+        "Orbit 1  (partial, along-track)",
+        "Orbit 2  (cross-track)",
+        "Orbit 3  (along-track)",
+    ]
+    seg_sc_cols  = ["#6baed6", "#d6604d", "#2166ac"]   # SC track colours
+    seg_tp_cols  = ["#c6dbef", "#fdae61", "#74add1"]   # tangent point colours
+    seg_cn_cols  = ["#6baed6", "#d6604d", "#2166ac"]   # connector colours
+
+    # Science observations per segment
+    idx_arr = np.arange(n)
+    sci_by_seg = []
+    for s_start, s_end in seg_bounds:
+        sci_by_seg.append([
+            (obs_indices[i], metadata_list[i])
+            for i, ft in enumerate(frame_types)
+            if ft == "science" and s_start <= obs_indices[i] < s_end
+        ])
+
+    # Cal/dark sequence bounds (first cal idx, last dark idx) per segment
+    def _cd_bounds(s_start, s_end):
+        idxs = sorted(
+            obs_indices[i]
+            for i, ft in enumerate(frame_types)
+            if ft in ("cal", "dark") and s_start <= obs_indices[i] < s_end
+        )
+        return (idxs[0], idxs[-1]) if idxs else None
+
+    cd_bounds = [_cd_bounds(s, e) for s, e in seg_bounds]
+
+    # --- Figure setup ---
+    _cartopy = False
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        fig = plt.figure(figsize=(16, 8))
+        ax  = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5, color="0.35")
+        ax.add_feature(cfeature.BORDERS,   linewidth=0.3, color="0.55")
+        ax.set_global()
+        ax.gridlines(draw_labels=True, linewidth=0.3, color="0.7", alpha=0.7)
+        _tr = ccrs.PlateCarree()
+        _cartopy = True
+    except ImportError:
+        fig, ax = plt.subplots(figsize=(16, 8))
+        ax.set_xlim(-180, 180)
+        ax.set_ylim(-90, 90)
+        ax.set_xlabel("Longitude (°)")
+        ax.set_ylabel("Latitude (°)")
+        ax.grid(True, linewidth=0.3, color="0.7", alpha=0.7)
+        _tr = None
+
+    def _sc(x, y, **kw):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        ax.scatter(x, y, **kw, **kw_tr)
+
+    def _ln(xs, ys, **kw):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        ax.plot(xs, ys, **kw, **kw_tr)
+
+    def _ann(lon, lat, label, marker, color, text_offset=(12, 10)):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        ax.scatter([lon], [lat], marker=marker, c=color, s=110, zorder=10,
+                   edgecolors="white", linewidths=0.9, **kw_tr)
+        ann_kw = {}
+        if _cartopy:
+            ann_kw["xycoords"] = _tr._as_mpl_transform(ax)
+        ax.annotate(
+            label,
+            xy=(lon, lat),
+            xytext=text_offset,
+            textcoords="offset points",
+            fontsize=6.5,
+            color=color,
+            arrowprops=dict(arrowstyle="-", color=color, lw=0.6, alpha=0.8),
+            bbox=dict(boxstyle="round,pad=0.25", fc="white",
+                      ec=color, lw=0.7, alpha=0.92),
+            zorder=11,
+            **ann_kw,
+        )
+
+    # --- SC ground tracks + tangent points ---
+    for seg, (s_start, s_end) in enumerate(seg_bounds):
+        if s_start >= n:
+            continue
+        seg_mask = (idx_arr >= s_start) & (idx_arr < s_end)
+        _sc(lons_all[seg_mask], lats_all[seg_mask],
+            c=seg_sc_cols[seg], s=1.5, alpha=0.45, zorder=3, linewidths=0)
+
+        for k, (idx, m) in enumerate(sci_by_seg[seg]):
+            if k == 0:
+                # Scatter all tangent pts for this segment in one call
+                tp_lats = [mm.tangent_lat for _, mm in sci_by_seg[seg]]
+                tp_lons = [mm.tangent_lon for _, mm in sci_by_seg[seg]]
+                _sc(tp_lons, tp_lats,
+                    c=seg_tp_cols[seg], s=6, alpha=0.8, zorder=5, linewidths=0)
+            if k % 10 == 0:
+                sc_lat = df_sched.loc[idx, "lat_deg"]
+                sc_lon = df_sched.loc[idx, "lon_deg"]
+                _ln([sc_lon, m.tangent_lon], [sc_lat, m.tangent_lat],
+                    linestyle="--", color=seg_cn_cols[seg],
+                    lw=0.9, alpha=0.55, zorder=4)
+
+    # Science band boundaries
+    for bnd in [lat_band_deg, -lat_band_deg]:
+        _ln([-180, 180], [bnd, bnd], linestyle=":", color="k", lw=0.8, alpha=0.55)
+
+    # --- Event markers ---
+    _CD_COL   = "#b5651d"
+    _ATT_COLS = ["#7b2fa8", "#0e6655"]   # cross-track switch, along-track switch
+
+    # TLE Acquisition: very first timestep
+    _ann(float(lons_all[0]), float(lats_all[0]),
+         "TLE Acquisition", "*", "#1a7d1a", text_offset=(12, 10))
+
+    # Attitude switch markers
+    att_events = [
+        (sw0, "Change attitude to cross-track",  _ATT_COLS[0], (12, -20)),
+        (sw1, "Change attitude to along-track",  _ATT_COLS[1], (12,  10)),
+    ]
+    for sw_idx, label, col, off in att_events:
+        if sw_idx < n:
+            _ann(float(lons_all[sw_idx]), float(lats_all[sw_idx]),
+                 label, "*", col, text_offset=off)
+
+    # Cal/dark start (▲) and end (▼) per segment
+    seg_labels_short = ["Orb 1", "Orb 2", "Orb 3"]
+    for seg, bounds in enumerate(cd_bounds):
+        if bounds is None:
+            continue
+        idx_start, idx_end = bounds
+        _ann(float(df_sched.loc[idx_start, "lon_deg"]),
+             float(df_sched.loc[idx_start, "lat_deg"]),
+             f"Cal/dark start ({seg_labels_short[seg]})",
+             "^", _CD_COL, text_offset=(10, 10))
+        _ann(float(df_sched.loc[idx_end, "lon_deg"]),
+             float(df_sched.loc[idx_end, "lat_deg"]),
+             f"Cal/dark end ({seg_labels_short[seg]})",
+             "v", _CD_COL, text_offset=(10, -18))
+
+    # --- Legend ---
+    handles = []
+    for seg in range(3):
+        handles += [
+            mlines.Line2D([], [], color=seg_sc_cols[seg], marker="o", ls="None",
+                          markersize=5, label=f"{seg_labels[seg]}  S/C"),
+            mlines.Line2D([], [], color=seg_tp_cols[seg], marker="o", ls="None",
+                          markersize=5, label=f"{seg_labels[seg]}  tangent pts"),
+            mlines.Line2D([], [], color=seg_cn_cols[seg], ls="--", lw=1.1,
+                          label=f"{seg_labels[seg]}  S/C → tangent pt  (every 10th)"),
+        ]
+    handles += [
+        mlines.Line2D([], [], color="k", ls=":", lw=0.9,
+                      label=f"Science band  ±{lat_band_deg:.0f}°"),
+        mlines.Line2D([], [], color="#1a7d1a", marker="*", ls="None",
+                      markersize=8, label="TLE Acquisition"),
+        mlines.Line2D([], [], color=_ATT_COLS[0], marker="*", ls="None",
+                      markersize=8, label="Change attitude to cross-track"),
+        mlines.Line2D([], [], color=_ATT_COLS[1], marker="*", ls="None",
+                      markersize=8, label="Change attitude to along-track"),
+        mlines.Line2D([], [], color=_CD_COL, marker="^", ls="None",
+                      markersize=6, label="Cal/dark sequence start"),
+        mlines.Line2D([], [], color=_CD_COL, marker="v", ls="None",
+                      markersize=6, label="Cal/dark sequence end"),
+    ]
+    ax.legend(handles=handles, fontsize=6.5, loc="lower left",
+              framealpha=0.85, edgecolor="0.6", ncol=2)
+    ax.set_title(
+        "G01 Ground Tracks — Orbits 1, 2 & 3  "
+        "(partial along-track stub + two complete orbits)\n"
+        "S/C positions (all latitudes)  +  observed-volume tangent pts (science band only)"
+    )
+    plt.tight_layout()
+    fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -689,9 +908,8 @@ def main():
     t0 = pd.Timestamp(t_start, tz="UTC")
     df_sched["elapsed_s"]    = (df_sched["epoch"] - t0).dt.total_seconds()
     df_sched["orbit_number"] = (df_sched["elapsed_s"] // T_ORBIT_S).astype(int) + 1
-    df_sched["look_mode"]    = df_sched["orbit_number"].apply(
-        lambda n: "along_track" if n % 2 == 1 else "cross_track"
-    )
+    # look_mode is assigned after the schedule is built (needs cal_trigger_indices)
+    df_sched["look_mode"] = "along_track"
 
     print("done")
 
@@ -701,6 +919,21 @@ def main():
     obs_indices, frame_types, cal_trigger_indices = _build_schedule(
         df_sched, lat_band_deg, n_caldark, step
     )
+
+    # Attitude switches just after each cal/dark sequence completes.
+    # switch_at[k] is the first df_sched row index at which the new attitude is in effect.
+    switch_at = [t0_i + 2 * n_caldark * step for t0_i in cal_trigger_indices]
+    _n   = len(df_sched)
+    _lk  = np.empty(_n, dtype=object)
+    _md  = "along_track"
+    _sw  = 0
+    for _ii in range(_n):
+        while _sw < len(switch_at) and _ii >= switch_at[_sw]:
+            _md = "cross_track" if _md == "along_track" else "along_track"
+            _sw += 1
+        _lk[_ii] = _md
+    df_sched["look_mode"] = _lk
+    del _lk, _md, _sw, _ii, _n
     n_obs             = len(obs_indices)
     n_complete_orbits = len(cal_trigger_indices)
 
@@ -798,7 +1031,7 @@ def main():
 
         lua_ts       = int(row.epoch.timestamp() * 1000)
         orbit_num    = int(row.orbit_number)
-        orbit_parity = "along_track" if orbit_num % 2 == 1 else "cross_track"
+        orbit_parity = str(row.look_mode)
 
         adcs_flag = compute_adcs_quality_flag({
             "pointing_error": pointing_error,
@@ -948,58 +1181,108 @@ def main():
     records = [dataclasses.asdict(m) for m in metadata_list]
     np.save(str(npy_path), np.array(records, dtype=object), allow_pickle=True)
 
-    # CSV: 42 columns from v8 + 4 new LOS velocity columns = 46 total
+    # Build lookup: df_sched index → (record_dict, vrel_dict, frame_type)
+    obs_data = {
+        idx: (records[i], vrel_list[i], frame_types[i])
+        for i, idx in enumerate(obs_indices)
+    }
+
+    # CSV: one row per obs-cadence step across the full schedule.
+    # Observed frames carry full metadata (47 cols: obs_type + 46 data cols).
+    # Non-observing steps have exp_time=0, obs_type='none', NaN for frame fields.
+    all_indices = sorted(set(range(0, len(df_sched), step)) | set(obs_indices))
+
+    _nan = float("nan")
     rows_csv = []
-    for r, vd in zip(records, vrel_list):
-        rows_csv.append({
-            "rows":                  r["rows"],
-            "cols":                  r["cols"],
-            "exp_time":              r["exp_time"],
-            "exp_unit":              r["exp_unit"],
-            "ccd_temp1":             r["ccd_temp1"],
-            "lua_timestamp":         r["lua_timestamp"],
-            "adcs_timestamp":        r["adcs_timestamp"],
-            "spacecraft_latitude":   r["spacecraft_latitude"],
-            "spacecraft_longitude":  r["spacecraft_longitude"],
-            "spacecraft_altitude":   r["spacecraft_altitude"],
-            "att_q_x":  r["attitude_quaternion"][0],
-            "att_q_y":  r["attitude_quaternion"][1],
-            "att_q_z":  r["attitude_quaternion"][2],
-            "att_q_w":  r["attitude_quaternion"][3],
-            "pe_q_x":   r["pointing_error"][0],
-            "pe_q_y":   r["pointing_error"][1],
-            "pe_q_z":   r["pointing_error"][2],
-            "pe_q_w":   r["pointing_error"][3],
-            "pos_eci_x": r["pos_eci_hat"][0],
-            "pos_eci_y": r["pos_eci_hat"][1],
-            "pos_eci_z": r["pos_eci_hat"][2],
-            "vel_eci_x": r["vel_eci_hat"][0],
-            "vel_eci_y": r["vel_eci_hat"][1],
-            "vel_eci_z": r["vel_eci_hat"][2],
-            "etalon_t0": r["etalon_temps"][0],
-            "etalon_t1": r["etalon_temps"][1],
-            "etalon_t2": r["etalon_temps"][2],
-            "etalon_t3": r["etalon_temps"][3],
-            "gpio_0": r["gpio_pwr_on"][0],
-            "gpio_1": r["gpio_pwr_on"][1],
-            "gpio_2": r["gpio_pwr_on"][2],
-            "gpio_3": r["gpio_pwr_on"][3],
-            "lamp_0": r["lamp_ch_array"][0],
-            "lamp_1": r["lamp_ch_array"][1],
-            "lamp_2": r["lamp_ch_array"][2],
-            "lamp_3": r["lamp_ch_array"][3],
-            "lamp_4": r["lamp_ch_array"][4],
-            "lamp_5": r["lamp_ch_array"][5],
-            "tp_lat_deg":      r["tangent_lat"]       if r["tangent_lat"]       is not None else float("nan"),
-            "tp_lon_deg":      r["tangent_lon"]        if r["tangent_lon"]        is not None else float("nan"),
-            "wind_v_zonal_ms": r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else float("nan"),
-            "wind_v_merid_ms": r["truth_v_meridional"] if r["truth_v_meridional"] is not None else float("nan"),
-            # v9: LOS velocity decomposition (columns 43–46)
-            "v_wind_los_ms":  vd["v_wind_los_ms"],
-            "v_earth_los_ms": vd["v_earth_los_ms"],
-            "v_sc_los_ms":    vd["v_sc_los_ms"],
-            "v_rel_ms":       vd["v_rel_ms"],
-        })
+    for idx in all_indices:
+        srow = df_sched.loc[idx]
+        lua_ts = int(srow.epoch.timestamp() * 1000)
+
+        if idx in obs_data:
+            r, vd, ft = obs_data[idx]
+            rows_csv.append({
+                "obs_type":             ft,
+                "rows":                 r["rows"],
+                "cols":                 r["cols"],
+                "exp_time":             r["exp_time"],
+                "exp_unit":             r["exp_unit"],
+                "ccd_temp1":            r["ccd_temp1"],
+                "lua_timestamp":        r["lua_timestamp"],
+                "adcs_timestamp":       r["adcs_timestamp"],
+                "spacecraft_latitude":  r["spacecraft_latitude"],
+                "spacecraft_longitude": r["spacecraft_longitude"],
+                "spacecraft_altitude":  r["spacecraft_altitude"],
+                "att_q_x":  r["attitude_quaternion"][0],
+                "att_q_y":  r["attitude_quaternion"][1],
+                "att_q_z":  r["attitude_quaternion"][2],
+                "att_q_w":  r["attitude_quaternion"][3],
+                "pe_q_x":   r["pointing_error"][0],
+                "pe_q_y":   r["pointing_error"][1],
+                "pe_q_z":   r["pointing_error"][2],
+                "pe_q_w":   r["pointing_error"][3],
+                "pos_eci_x": r["pos_eci_hat"][0],
+                "pos_eci_y": r["pos_eci_hat"][1],
+                "pos_eci_z": r["pos_eci_hat"][2],
+                "vel_eci_x": r["vel_eci_hat"][0],
+                "vel_eci_y": r["vel_eci_hat"][1],
+                "vel_eci_z": r["vel_eci_hat"][2],
+                "etalon_t0": r["etalon_temps"][0],
+                "etalon_t1": r["etalon_temps"][1],
+                "etalon_t2": r["etalon_temps"][2],
+                "etalon_t3": r["etalon_temps"][3],
+                "gpio_0": r["gpio_pwr_on"][0],
+                "gpio_1": r["gpio_pwr_on"][1],
+                "gpio_2": r["gpio_pwr_on"][2],
+                "gpio_3": r["gpio_pwr_on"][3],
+                "lamp_0": r["lamp_ch_array"][0],
+                "lamp_1": r["lamp_ch_array"][1],
+                "lamp_2": r["lamp_ch_array"][2],
+                "lamp_3": r["lamp_ch_array"][3],
+                "lamp_4": r["lamp_ch_array"][4],
+                "lamp_5": r["lamp_ch_array"][5],
+                "tp_lat_deg":      r["tangent_lat"]       if r["tangent_lat"]       is not None else _nan,
+                "tp_lon_deg":      r["tangent_lon"]        if r["tangent_lon"]        is not None else _nan,
+                "wind_v_zonal_ms": r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else _nan,
+                "wind_v_merid_ms": r["truth_v_meridional"] if r["truth_v_meridional"] is not None else _nan,
+                "v_wind_los_ms":   vd["v_wind_los_ms"],
+                "v_earth_los_ms":  vd["v_earth_los_ms"],
+                "v_sc_los_ms":     vd["v_sc_los_ms"],
+                "v_rel_ms":        vd["v_rel_ms"],
+            })
+        else:
+            # Non-observing step: orbital state only, exp_time=0
+            rows_csv.append({
+                "obs_type":             "none",
+                "rows":                 0,
+                "cols":                 0,
+                "exp_time":             0,
+                "exp_unit":             0,
+                "ccd_temp1":            _nan,
+                "lua_timestamp":        lua_ts,
+                "adcs_timestamp":       lua_ts,
+                "spacecraft_latitude":  float(np.radians(srow.lat_deg)),
+                "spacecraft_longitude": float(np.radians(srow.lon_deg)),
+                "spacecraft_altitude":  float(srow.alt_km * 1e3),
+                "att_q_x":  _nan, "att_q_y":  _nan,
+                "att_q_z":  _nan, "att_q_w":  _nan,
+                "pe_q_x":   _nan, "pe_q_y":   _nan,
+                "pe_q_z":   _nan, "pe_q_w":   _nan,
+                "pos_eci_x": float(srow.pos_eci_x),
+                "pos_eci_y": float(srow.pos_eci_y),
+                "pos_eci_z": float(srow.pos_eci_z),
+                "vel_eci_x": float(srow.vel_eci_x),
+                "vel_eci_y": float(srow.vel_eci_y),
+                "vel_eci_z": float(srow.vel_eci_z),
+                "etalon_t0": _nan, "etalon_t1": _nan,
+                "etalon_t2": _nan, "etalon_t3": _nan,
+                "gpio_0": 0, "gpio_1": 0, "gpio_2": 0, "gpio_3": 0,
+                "lamp_0": 0, "lamp_1": 0, "lamp_2": 0,
+                "lamp_3": 0, "lamp_4": 0, "lamp_5": 0,
+                "tp_lat_deg":      _nan, "tp_lon_deg":      _nan,
+                "wind_v_zonal_ms": _nan, "wind_v_merid_ms": _nan,
+                "v_wind_los_ms":   _nan, "v_earth_los_ms":  _nan,
+                "v_sc_los_ms":     _nan, "v_rel_ms":        _nan,
+            })
 
     df_csv = pd.DataFrame(rows_csv)
     df_csv.to_csv(str(csv_path), index=False)
@@ -1024,13 +1307,28 @@ def main():
     )
     print("done")
 
+    gt_path = out_path / f"{stem}_ground_tracks.png"
+    print("Saving ground track figure ...", end=" ", flush=True)
+    _plot_ground_tracks(
+        df_sched      = df_sched,
+        metadata_list = metadata_list,
+        obs_indices   = obs_indices,
+        frame_types   = frame_types,
+        lat_band_deg  = lat_band_deg,
+        switch_at     = switch_at,
+        save_path     = gt_path,
+    )
+    print("done")
+
     npy_mb = npy_path.stat().st_size / 1e6
     csv_mb = csv_path.stat().st_size / 1e6
     png_kb = png_path.stat().st_size / 1e3
+    gt_kb  = gt_path.stat().st_size  / 1e3
     print(f"\nOutput files:")
     print(f"  {npy_path}  ({npy_mb:.1f} MB)")
     print(f"  {csv_path}  ({csv_mb:.1f} MB)")
     print(f"  {png_path}  ({png_kb:.0f} KB)")
+    print(f"  {gt_path}  ({gt_kb:.0f} KB)")
 
     # -----------------------------------------------------------------------
     # Step 6: Verification checks C1–C21
@@ -1105,8 +1403,8 @@ def main():
                c11_dev <= 0.05,
                f"got {n_dark} ({c11_dev*100:.1f}% off)")
 
-    c12 = _chk("C12 CSV has exactly 46 columns",
-               len(df_csv.columns) == 46,
+    c12 = _chk("C12 CSV has exactly 47 columns",
+               len(df_csv.columns) == 47,
                f"got {len(df_csv.columns)}")
 
     try:
@@ -1116,15 +1414,16 @@ def main():
     except Exception as exc:
         c13 = _chk("C13 P01 round-trip", False, str(exc))
 
-    img_type_arr = np.array([m.img_type for m in metadata_list])
-    sci_mask     = img_type_arr == "science"
-    nons_mask    = ~sci_mask
+    # Derive masks from the obs_type column (CSV now contains non-obs rows too)
+    obs_type_col  = df_csv["obs_type"].values
+    sci_mask      = obs_type_col == "science"
+    cal_dark_mask = np.isin(obs_type_col, ["cal", "dark"])
 
     tp_col = df_csv["tp_lat_deg"].values
 
     c14 = _chk("C14 tp_lat_deg NaN for all cal/dark rows",
-               bool(np.all(np.isnan(tp_col[nons_mask]))),
-               f"{np.sum(~np.isnan(tp_col[nons_mask]))} non-NaN cal/dark rows found")
+               bool(np.all(np.isnan(tp_col[cal_dark_mask]))),
+               f"{np.sum(~np.isnan(tp_col[cal_dark_mask]))} non-NaN cal/dark rows found")
 
     c15 = _chk("C15 tp_lat_deg non-NaN for all science rows",
                bool(np.all(~np.isnan(tp_col[sci_mask]))),
@@ -1149,8 +1448,8 @@ def main():
                f"{np.sum(np.isnan(vrel_col[sci_mask]))} NaN science rows found")
 
     c19 = _chk("C19 v_rel_ms NaN for all cal/dark rows",
-               bool(np.all(np.isnan(vrel_col[nons_mask]))),
-               f"{np.sum(~np.isnan(vrel_col[nons_mask]))} non-NaN cal/dark rows found")
+               bool(np.all(np.isnan(vrel_col[cal_dark_mask]))),
+               f"{np.sum(~np.isnan(vrel_col[cal_dark_mask]))} non-NaN cal/dark rows found")
 
     bin_files = list(bin_dir.glob("*.bin"))
     sizes_ok  = all(f.stat().st_size == 143_520 for f in bin_files)
@@ -1167,9 +1466,7 @@ def main():
         hdr = raw[:276]
         from src.metadata.p01_image_metadata_2026_04_06 import parse_header
         d = parse_header(hdr)
-        sci_csv = df_csv[df_csv["img_type_derived"] == "science"].iloc[0] \
-            if "img_type_derived" in df_csv.columns \
-            else df_csv[img_type_arr == "science"].iloc[0]
+        sci_csv = df_csv[df_csv["obs_type"] == "science"].iloc[0]
         c21 = _chk("C21 Header round-trip lua_timestamp matches CSV",
                    d["lua_timestamp"] == int(sci_csv["lua_timestamp"]),
                    f"header={d['lua_timestamp']}, csv={int(sci_csv['lua_timestamp'])}")
