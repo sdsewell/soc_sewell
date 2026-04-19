@@ -23,13 +23,33 @@ Depends on:     src/windmap  (NB00 implementation)
 """
 
 import sys
+import os
 import importlib
 import importlib.util
 from pathlib import Path
+
+# On Windows, conda DLLs (OpenBLAS, Tcl/Tk, etc.) live in Library\bin
+# inside the env.  VS Code sets the Python exe but not PATH, so those
+# DLLs are invisible and numpy / matplotlib crash silently before any
+# output.  Prepend the conda env directories to PATH now, before any
+# scientific package is imported.
+if sys.platform == "win32":
+    _py = Path(sys.executable).parent          # e.g. …\envs\soc
+    _conda_dirs = [
+        str(_py),
+        str(_py / "Library" / "bin"),
+        str(_py / "Library" / "mingw-w64" / "bin"),
+        str(_py / "Library" / "usr" / "bin"),
+        str(_py / "Scripts"),
+    ]
+    _existing = os.environ.get("PATH", "").split(os.pathsep)
+    _new_dirs = [d for d in _conda_dirs if d not in _existing and Path(d).is_dir()]
+    if _new_dirs:
+        os.environ["PATH"] = os.pathsep.join(_new_dirs) + os.pathsep + os.environ.get("PATH", "")
+
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')          # change to 'Agg' and add save_path= if no display
-import matplotlib.pyplot as plt
+# matplotlib imported lazily below, after the menu, so a backend crash
+# does not prevent the text menu from appearing.
 
 # ---------------------------------------------------------------------------
 # 1.  Locate the soc_sewell repo root and insert it into sys.path
@@ -202,15 +222,25 @@ base_title = f"{entry['id']}  {entry['label'].split('—')[1].strip()}"
 print("Plotting all four modes.")
 print("Close each figure window to proceed to the next.\n")
 
+import matplotlib
+import matplotlib.pyplot as plt
+_headless = matplotlib.get_backend().lower() == 'agg'
+if _headless:
+    print("NOTE: no interactive display — figures will be saved as PNG files.\n")
+
 for mode, description in MODES:
     print(f"  [{mode:12s}]  {description}")
+    save_path = f"{entry['id']}_{mode}.png" if _headless else None
     try:
         wm.plot(
             title=base_title,
             alt_km=250.0,
-            subsample=8,     # coarser arrows for readability at global scale
+            subsample=8,
             mode=mode,
+            save_path=save_path,
         )
+        if save_path:
+            print(f"             → saved to {save_path}")
     except Exception as exc:
         print(f"    WARNING: plot(mode='{mode}') failed — {type(exc).__name__}: {exc}")
         plt.close('all')
