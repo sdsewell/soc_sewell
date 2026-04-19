@@ -9,10 +9,28 @@ CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
 Usage:     python validation/gen01_synthetic_metadata_generator_2026_04_16.py
 """
 
+import os
 import struct
 import sys
 import pathlib
 import dataclasses
+
+# On Windows, conda DLLs (OpenBLAS, etc.) are in Library\bin inside the env.
+# VS Code sets the Python exe but not PATH, so prepend conda dirs before any
+# scientific package is imported.
+if sys.platform == "win32":
+    _py = pathlib.Path(sys.executable).parent
+    _conda_dirs = [
+        str(_py),
+        str(_py / "Library" / "bin"),
+        str(_py / "Library" / "mingw-w64" / "bin"),
+        str(_py / "Library" / "usr" / "bin"),
+        str(_py / "Scripts"),
+    ]
+    _existing = os.environ.get("PATH", "").split(os.pathsep)
+    _new_dirs = [d for d in _conda_dirs if d not in _existing and pathlib.Path(d).is_dir()]
+    if _new_dirs:
+        os.environ["PATH"] = os.pathsep.join(_new_dirs) + os.pathsep + os.environ.get("PATH", "")
 import tkinter as tk
 from tkinter import filedialog
 

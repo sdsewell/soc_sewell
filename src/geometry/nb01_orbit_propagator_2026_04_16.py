@@ -44,18 +44,11 @@ from src.constants import (
 # ---------------------------------------------------------------------------
 
 
-def _datetime_to_sgp4_epoch(dt) -> tuple[int, float]:
-    """Convert a datetime/ISO string to (year, fractional day-of-year) for sgp4init."""
+def _datetime_to_sgp4_epoch(dt) -> float:
+    """Convert a datetime/ISO string to days since Jan 0.0 1950 (sgp4init epoch format)."""
     t = Time(dt, scale="utc")
-    year = t.datetime.year
-    day_of_year = t.datetime.timetuple().tm_yday
-    frac_day = (
-        t.datetime.hour
-        + t.datetime.minute / 60
-        + t.datetime.second / 3600
-        + t.datetime.microsecond / 3.6e9
-    ) / 24
-    return year, day_of_year + frac_day
+    # sgp4init epoch = JD - 2433281.5  (Jan 0.0 1950 = JD 2433281.5)
+    return float(t.jd) - 2433281.5
 
 
 def _build_satrec(
@@ -96,14 +89,14 @@ def _build_satrec(
     n_rad_s = np.sqrt(EARTH_GRAV_PARAM_M3_S2 / (a_km * 1e3) ** 3)
     n_rad_min = n_rad_s * 60  # sgp4init expects radians/minute
 
-    year, epochdays = _datetime_to_sgp4_epoch(epoch_dt)
+    epoch = _datetime_to_sgp4_epoch(epoch_dt)
 
     satrec = Satrec()
     satrec.sgp4init(
         WGS84,                       # gravity model
+        'i',                         # opsmode ('i' = improved, sgp4 2.x API)
         0,                           # satellite number (arbitrary for synthetic)
-        year,                        # epoch year
-        epochdays,                   # fractional day of year
+        epoch,                       # days since Jan 0.0 1950 (sgp4 2.x format)
         bstar,                       # drag term B*
         0.0,                         # ndot — first deriv. of mean motion (unused)
         0.0,                         # nddot — second deriv. of mean motion (unused)
