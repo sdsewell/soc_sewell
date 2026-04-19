@@ -210,33 +210,33 @@ def _instrument_state(frame_type: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 def _build_uniform(rng, h_target_km, v_zonal_ms=100.0, v_merid_ms=0.0):
-    from src.windmap.nb00_wind_map_2026_04_06 import UniformWindMap
+    from src.windmap import UniformWindMap
     return UniformWindMap(v_zonal_ms=v_zonal_ms, v_merid_ms=v_merid_ms)
 
 
 def _build_analytic_sine(rng, h_target_km, A_zonal_ms=200.0, A_merid_ms=100.0):
-    from src.windmap.nb00_wind_map_2026_04_06 import AnalyticWindMap
+    from src.windmap import AnalyticWindMap
     return AnalyticWindMap(pattern="sine_lat",
                            A_zonal_ms=A_zonal_ms, A_merid_ms=A_merid_ms)
 
 
 def _build_analytic_wave4(rng, h_target_km,
                           A_zonal_ms=150.0, A_merid_ms=75.0, phase_rad=0.0):
-    from src.windmap.nb00_wind_map_2026_04_06 import AnalyticWindMap
+    from src.windmap import AnalyticWindMap
     return AnalyticWindMap(pattern="wave4", A_zonal_ms=A_zonal_ms,
                            A_merid_ms=A_merid_ms, phase_rad=phase_rad)
 
 
 def _build_hwm14(rng, h_target_km, day_of_year=172, ut_hours=12.0,
                  f107=150.0, ap=4.0):
-    from src.windmap.nb00_wind_map_2026_04_06 import HWM14WindMap
+    from src.windmap import HWM14WindMap
     return HWM14WindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
                         ut_hours=ut_hours, f107=f107, ap=float(ap))
 
 
 def _build_storm(rng, h_target_km, day_of_year=355, ut_hours=3.0,
                  f107=180.0, ap=80.0):
-    from src.windmap.nb00_wind_map_2026_04_06 import StormWindMap
+    from src.windmap import StormWindMap
     return StormWindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
                         ut_hours=ut_hours, f107=f107, ap=float(ap))
 
@@ -532,8 +532,8 @@ def main():
         "Start epoch          [2027-01-01T00:00:00 UTC]  : ",
         "2027-01-01T00:00:00", str)
     duration_days = _prompt(
-        "Duration             [days,  default  30       ] : ",
-        30.0, float, 0.1, 365.0)
+        "Duration             [days,  default   1       ] : ",
+        1.0, float, 0.1, 365.0)
     lat_band_deg  = _prompt(
         "Science band         [deg,   default  40       ] : ",
         40.0, float, 5.0, 89.0)
@@ -1004,11 +1004,33 @@ def main():
     df_csv = pd.DataFrame(rows_csv)
     df_csv.to_csv(str(csv_path), index=False)
 
+    if wm_choice == "1":
+        _wm_title = (
+            f"G01  Uniform  "
+            f"({wm_params['v_zonal_ms']:+.0f} m/s eastward,  "
+            f"{wm_params['v_merid_ms']:+.0f} m/s southward)"
+        )
+    else:
+        _wm_title = f"G01  {windmap_label}"
+
+    png_path = out_path / f"{stem}_windmap_vector.png"
+    print("Saving wind map vector plot ...", end=" ", flush=True)
+    wind_map.plot(
+        title=_wm_title,
+        alt_km=h_target_km,
+        subsample=8,
+        mode="vector",
+        save_path=str(png_path),
+    )
+    print("done")
+
     npy_mb = npy_path.stat().st_size / 1e6
     csv_mb = csv_path.stat().st_size / 1e6
+    png_kb = png_path.stat().st_size / 1e3
     print(f"\nOutput files:")
     print(f"  {npy_path}  ({npy_mb:.1f} MB)")
     print(f"  {csv_path}  ({csv_mb:.1f} MB)")
+    print(f"  {png_path}  ({png_kb:.0f} KB)")
 
     # -----------------------------------------------------------------------
     # Step 6: Verification checks C1–C21
