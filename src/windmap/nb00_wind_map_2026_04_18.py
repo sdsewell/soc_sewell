@@ -215,11 +215,13 @@ class WindMap(ABC):
         )
         fig.suptitle(title, fontsize=11)
 
-        panels = [
-            (axes[0], vz_grid, 'Zonal wind  U  (m/s)',      400, 'RdBu_r'),
-            (axes[1], vm_grid, 'Meridional wind  V  (m/s)', 200, 'RdBu_r'),
-        ]
-        for ax, grid, label, vmax, cmap in panels:
+        lat_s = LAT2D[si, si].ravel()
+        lon_s = LON2D[si, si].ravel()
+
+        for ax, grid, label, vmax, cmap, comp in [
+            (axes[0], vz_grid, 'Zonal wind  U  (m/s)',      400, 'RdBu_r', vz_grid),
+            (axes[1], vm_grid, 'Meridional wind  V  (m/s)', 200, 'RdBu_r', vm_grid),
+        ]:
             ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
             ax.add_feature(cfeature.BORDERS,   linewidth=0.3)
             ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.5)
@@ -229,13 +231,16 @@ class WindMap(ABC):
                                transform=ccrs.PlateCarree())
             plt.colorbar(im, ax=ax, orientation='horizontal',
                          pad=0.05, label=label)
-            ax.quiver(
-                LON2D[si, si], LAT2D[si, si],
-                vz_grid[si, si], vm_grid[si, si],
-                transform=ccrs.PlateCarree(),
-                color='black', alpha=0.6,
-                width=0.003, scale=4000,
-            )
+            nz = comp[si, si].ravel() != 0
+            if nz.any():
+                ax.quiver(
+                    lon_s[nz], lat_s[nz],
+                    vz_grid[si, si].ravel()[nz],
+                    vm_grid[si, si].ravel()[nz],
+                    transform=ccrs.PlateCarree(),
+                    color='black', alpha=0.6,
+                    width=0.003, scale=4000,
+                )
 
         plt.tight_layout()
         if save_path:
@@ -286,13 +291,16 @@ class WindMap(ABC):
         plt.colorbar(im, ax=ax, orientation='horizontal',
                      pad=0.05, label='Wind speed (m/s)')
 
-        ax.quiver(
-            LON2D[si, si], LAT2D[si, si],
-            u_norm[si, si], v_norm[si, si],
-            transform=ccrs.PlateCarree(),
-            color='white', alpha=0.75,
-            width=0.003, scale=30, headwidth=4,
-        )
+        spd_s = speed[si, si].ravel()
+        nz = spd_s > 0
+        if nz.any():
+            ax.quiver(
+                LON2D[si, si].ravel()[nz], LAT2D[si, si].ravel()[nz],
+                u_norm[si, si].ravel()[nz], v_norm[si, si].ravel()[nz],
+                transform=ccrs.PlateCarree(),
+                color='white', alpha=0.75,
+                width=0.003, scale=30, headwidth=4,
+            )
 
         plt.tight_layout()
         if save_path:

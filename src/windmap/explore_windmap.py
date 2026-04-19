@@ -108,7 +108,13 @@ _hwm14_available = importlib.util.find_spec('hwm14') is not None
 # ---------------------------------------------------------------------------
 # 3.  Menu definition
 # ---------------------------------------------------------------------------
+_uniform_vz: float = 150.0
+_uniform_vs: float = -150.0
+
+
 def _build_uniform_interactive() -> UniformWindMap:
+    global _uniform_vz, _uniform_vs
+
     def _prompt(name: str, default: float) -> float:
         while True:
             raw = input(f"  {name} [default {default:+.0f} m/s, range -1000..+1000]: ").strip()
@@ -124,9 +130,9 @@ def _build_uniform_interactive() -> UniformWindMap:
                 continue
             return val
 
-    vz = _prompt("Eastward wind speed", 150.0)
-    vs = _prompt("Southward wind speed", -150.0)
-    return UniformWindMap(v_zonal_ms=vz, v_merid_ms=vs)
+    _uniform_vz = _prompt("Eastward wind speed", 150.0)
+    _uniform_vs = _prompt("Southward wind speed", -150.0)
+    return UniformWindMap(v_zonal_ms=_uniform_vz, v_merid_ms=_uniform_vs)
 
 
 MENU = [
@@ -223,18 +229,26 @@ except Exception as exc:
 print("Done.\n")
 
 # ---------------------------------------------------------------------------
-# 5.  Plot in all four modes
+# 5.  Plot modes (all four, or just separate/vector for Uniform)
 # ---------------------------------------------------------------------------
-MODES = [
+ALL_MODES = [
     ('separate',  'Two-panel U / V colour maps  +  quiver arrows'),
     ('vector',    'Single panel — speed colour  +  direction arrows'),
     ('stream',    'Single panel — streamlines coloured by speed'),
     ('magnitude', 'Single panel — speed magnitude  +  STM threshold contour'),
 ]
 
-base_title = f"{entry['id']}  {entry['label'].split('—')[1].strip()}"
+if entry['id'] == 'T1':
+    MODES = ALL_MODES[:2]
+    base_title = (
+        f"{entry['id']}  Uniform  "
+        f"({_uniform_vz:+.0f} m/s eastward,  {_uniform_vs:+.0f} m/s southward)"
+    )
+else:
+    MODES = ALL_MODES
+    base_title = f"{entry['id']}  {entry['label'].split('—')[1].strip()}"
 
-print("Plotting all four modes.")
+print(f"Plotting {len(MODES)} mode(s).")
 print("Close each figure window to proceed to the next.\n")
 
 import matplotlib
