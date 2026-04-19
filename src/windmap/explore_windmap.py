@@ -108,17 +108,32 @@ _hwm14_available = importlib.util.find_spec('hwm14') is not None
 # ---------------------------------------------------------------------------
 # 3.  Menu definition
 # ---------------------------------------------------------------------------
+def _build_uniform_interactive() -> UniformWindMap:
+    def _prompt(name: str, default: float) -> float:
+        while True:
+            raw = input(f"  {name} [default {default:+.0f} m/s, range -1000..+1000]: ").strip()
+            if raw == "":
+                return default
+            try:
+                val = float(raw)
+            except ValueError:
+                print("    Please enter a number.")
+                continue
+            if not (-1000.0 <= val <= 1000.0):
+                print("    Value must be between -1000 and +1000 m/s.")
+                continue
+            return val
+
+    vz = _prompt("Eastward wind speed", 150.0)
+    vs = _prompt("Southward wind speed", -150.0)
+    return UniformWindMap(v_zonal_ms=vz, v_merid_ms=vs)
+
+
 MENU = [
     {
-        'id':    'T1a',
-        'label': 'T1 — Uniform  (100 m/s eastward, 0 m/s northward)',
-        'build': lambda: UniformWindMap(v_zonal_ms=100.0, v_merid_ms=0.0),
-        'needs_hwm14': False,
-    },
-    {
-        'id':    'T1b',
-        'label': 'T1 — Uniform  (150 m/s eastward, −75 m/s southward)',
-        'build': lambda: UniformWindMap(v_zonal_ms=150.0, v_merid_ms=-75.0),
+        'id':    'T1',
+        'label': 'T1 — Uniform  (custom eastward / southward speeds)',
+        'build': _build_uniform_interactive,
         'needs_hwm14': False,
     },
     {
