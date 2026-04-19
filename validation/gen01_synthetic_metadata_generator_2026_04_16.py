@@ -5,7 +5,7 @@ Spec:      docs/specs/G01_synthetic_metadata_generator_2026-04-16.md
 Spec date: 2026-04-16
 Generated: 2026-04-17
 Tool:      Claude Code
-CONOPS:    [TBD — insert document ID and version when known]
+CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
 Usage:     python validation/gen01_synthetic_metadata_generator_2026_04_16.py
 """
 
