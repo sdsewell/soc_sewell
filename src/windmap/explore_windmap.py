@@ -138,7 +138,7 @@ def _build_uniform_interactive() -> UniformWindMap:
 MENU = [
     {
         'id':    'T1',
-        'label': 'T1 — Uniform  (custom eastward / southward speeds)',
+        'label': 'T1 — Uniform  (user selected U,V components)',
         'build': _build_uniform_interactive,
         'needs_hwm14': False,
     },
@@ -239,10 +239,10 @@ ALL_MODES = [
 ]
 
 if entry['id'] == 'T1':
-    MODES = ALL_MODES[:2]
+    MODES = ALL_MODES[1:2]
     base_title = (
-        f"{entry['id']}  Uniform  "
-        f"({_uniform_vz:+.0f} m/s eastward,  {_uniform_vs:+.0f} m/s southward)"
+        f"{entry['id']}  Uniform    "
+        f"U = {_uniform_vz:+.0f} m/s,   V = {_uniform_vs:+.0f} m/s"
     )
 else:
     MODES = ALL_MODES
@@ -260,13 +260,15 @@ if _headless:
 for mode, description in MODES:
     print(f"  [{mode:12s}]  {description}")
     save_path = f"{entry['id']}_{mode}.png" if _headless else None
+    is_uniform = entry['id'] == 'T1'
     try:
         wm.plot(
             title=base_title,
             alt_km=250.0,
-            subsample=8,
+            subsample=16 if is_uniform else 8,
             mode=mode,
             save_path=save_path,
+            show_colorbar=not is_uniform,
         )
         if save_path:
             print(f"             → saved to {save_path}")

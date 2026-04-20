@@ -33,6 +33,27 @@ from src.constants import (
 
 
 # =============================================================================
+# Colorbar sizing helper
+# =============================================================================
+
+def _fit_colorbars(fig, ax_cb_pairs):
+    """
+    After tight_layout(), resize each colorbar so it spans exactly the same
+    width (horizontal) or height (vertical) as its parent GeoAxes.
+
+    ax_cb_pairs : list of (axes, colorbar, orientation_str)
+    """
+    fig.canvas.draw()
+    for ax, cb, orientation in ax_cb_pairs:
+        ap = ax.get_position()
+        cp = cb.ax.get_position()
+        if orientation == "horizontal":
+            cb.ax.set_position([ap.x0, cp.y0, ap.width, cp.height])
+        else:
+            cb.ax.set_position([cp.x0, ap.y0, cp.width, ap.height])
+
+
+# =============================================================================
 # WindMap — abstract base class
 # =============================================================================
 
@@ -116,6 +137,7 @@ class WindMap(ABC):
         subsample: int = 5,
         mode: str = 'separate',
         save_path: str | None = None,
+        show_colorbar: bool = True,
     ) -> None:
         """
         Visualise the wind field on a global Plate Carrée projection.
@@ -167,7 +189,7 @@ class WindMap(ABC):
         if mode == 'separate':
             self._plot_separate(vz_grid, vm_grid, full_title, subsample, save_path)
         elif mode == 'vector':
-            self._plot_vector(vz_grid, vm_grid, full_title, subsample, save_path)
+            self._plot_vector(vz_grid, vm_grid, full_title, subsample, save_path, show_colorbar)
         elif mode == 'stream':
             self._plot_stream(vz_grid, vm_grid, full_title, save_path)
         elif mode == 'magnitude':
@@ -217,6 +239,7 @@ class WindMap(ABC):
 
         lat_s = LAT2D[si, si].ravel()
         lon_s = LON2D[si, si].ravel()
+        cb_pairs = []
 
         for ax, grid, label, vmax, cmap, comp in [
             (axes[0], vz_grid, 'Zonal wind  U  (m/s)',      400, 'RdBu_r', vz_grid),
@@ -229,8 +252,9 @@ class WindMap(ABC):
                                vmin=-vmax, vmax=vmax,
                                cmap=cmap,
                                transform=ccrs.PlateCarree())
-            plt.colorbar(im, ax=ax, orientation='horizontal',
-                         pad=0.05, label=label)
+            cb = plt.colorbar(im, ax=ax, orientation='horizontal',
+                              pad=0.05, label=label)
+            cb_pairs.append((ax, cb, 'horizontal'))
             nz = comp[si, si].ravel() != 0
             if nz.any():
                 ax.quiver(
@@ -243,6 +267,7 @@ class WindMap(ABC):
                 )
 
         plt.tight_layout()
+        _fit_colorbars(fig, cb_pairs)
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
@@ -256,6 +281,7 @@ class WindMap(ABC):
         title: str,
         subsample: int,
         save_path: str | None,
+        show_colorbar: bool = True,
     ) -> None:
         """Single-panel: wind speed magnitude as colour, direction as arrows."""
         import matplotlib.pyplot as plt
@@ -288,8 +314,11 @@ class WindMap(ABC):
                            vmin=0, vmax=v_max,
                            cmap='viridis',
                            transform=ccrs.PlateCarree())
-        plt.colorbar(im, ax=ax, orientation='horizontal',
-                     pad=0.05, label='Wind speed (m/s)')
+        cb_pairs = []
+        if show_colorbar:
+            cb = plt.colorbar(im, ax=ax, orientation='horizontal',
+                              pad=0.05, label='Wind speed (m/s)')
+            cb_pairs.append((ax, cb, 'horizontal'))
 
         spd_s = speed[si, si].ravel()
         nz = spd_s > 0
@@ -303,6 +332,7 @@ class WindMap(ABC):
             )
 
         plt.tight_layout()
+        _fit_colorbars(fig, cb_pairs)
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
@@ -400,8 +430,8 @@ class WindMap(ABC):
                            vmin=0, vmax=v_max,
                            cmap='hot_r',
                            transform=ccrs.PlateCarree())
-        plt.colorbar(im, ax=ax, orientation='vertical',
-                     pad=0.02, label='Wind speed (m/s)')
+        cb = plt.colorbar(im, ax=ax, orientation='vertical',
+                          pad=0.02, label='Wind speed (m/s)')
 
         # STM threshold contour (solid black)
         cs1 = ax.contour(lons, lats, speed,
@@ -419,6 +449,7 @@ class WindMap(ABC):
         ax.clabel(cs2, fmt='100 m/s', fontsize=7)
 
         plt.tight_layout()
+        _fit_colorbars(fig, [(ax, cb, 'vertical')])
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
