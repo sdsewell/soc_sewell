@@ -676,9 +676,10 @@ def _plot_ground_tracks(
     _CD_COL   = "#b5651d"
     _ATT_COLS = ["#7b2fa8", "#0e6655"]   # cross-track switch, along-track switch
 
-    # TLE Acquisition: very first timestep
+    # Orbit propagation start: very first timestep
+    _t0_utc = pd.Timestamp(df_sched["epoch"].iloc[0]).strftime("%Y-%m-%dT%H:%M:%SZ")
     _ann(float(lons_all[0]), float(lats_all[0]),
-         "TLE Acquisition", "*", "#1a7d1a", text_offset=(12, 10))
+         f"Orbit Propagation Start\n{_t0_utc}", "*", "#1a7d1a", text_offset=(12, 10))
 
     # Attitude switch markers
     att_events = [
@@ -690,20 +691,48 @@ def _plot_ground_tracks(
             _ann(float(lons_all[sw_idx]), float(lats_all[sw_idx]),
                  label, "*", col, text_offset=off)
 
-    # Cal/dark start (▲) and end (▼) per segment
-    seg_labels_short = ["Orb 1", "Orb 2", "Orb 3"]
-    for seg, bounds in enumerate(cd_bounds):
-        if bounds is None:
-            continue
-        idx_start, idx_end = bounds
-        _ann(float(df_sched.loc[idx_start, "lon_deg"]),
-             float(df_sched.loc[idx_start, "lat_deg"]),
-             f"Cal/dark start ({seg_labels_short[seg]})",
-             "^", _CD_COL, text_offset=(10, 10))
-        _ann(float(df_sched.loc[idx_end, "lon_deg"]),
-             float(df_sched.loc[idx_end, "lat_deg"]),
-             f"Cal/dark end ({seg_labels_short[seg]})",
-             "v", _CD_COL, text_offset=(10, -18))
+    # --- KSAT Ground Station (Svalbard, Norway) ---
+    _KSAT_LAT = 78.23
+    _KSAT_LON = 15.40
+    _KSAT_COL = "#c0392b"
+    kw_tr = {"transform": _tr} if _cartopy else {}
+    ax.scatter([_KSAT_LON], [_KSAT_LAT],
+               marker=(3, 0, 0),   # triangle-up used as radar dish silhouette
+               c=_KSAT_COL, s=160, zorder=12,
+               edgecolors="white", linewidths=0.8, **kw_tr)
+    ann_kw = {}
+    if _cartopy:
+        ann_kw["xycoords"] = _tr._as_mpl_transform(ax)
+    ax.annotate(
+        "KSAT Ground Station\n(Svalbard, 78.2°N)",
+        xy=(_KSAT_LON, _KSAT_LAT),
+        xytext=(10, 10),
+        textcoords="offset points",
+        fontsize=6.5,
+        color=_KSAT_COL,
+        arrowprops=dict(arrowstyle="-", color=_KSAT_COL, lw=0.6, alpha=0.8),
+        bbox=dict(boxstyle="round,pad=0.25", fc="white",
+                  ec=_KSAT_COL, lw=0.7, alpha=0.92),
+        zorder=13,
+        **ann_kw,
+    )
+
+    # --- Science band latitude labels (left edge of map) ---
+    for bnd, valign, offset in [
+        ( lat_band_deg, "bottom", 2),
+        (-lat_band_deg, "top",   -2),
+    ]:
+        label_kw = {}
+        if _cartopy:
+            label_kw["transform"] = _tr
+        ax.text(
+            -178, bnd + offset / 10,
+            f"{bnd:+.0f}°  science band",
+            fontsize=6.5, color="k", va=valign, ha="left",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.75),
+            zorder=9,
+            **label_kw,
+        )
 
     # --- Legend ---
     handles = []
@@ -718,18 +747,14 @@ def _plot_ground_tracks(
                           label=f"{seg_labels[seg]}  S/C → tangent pt  (every 10th)"),
         ]
     handles += [
-        mlines.Line2D([], [], color="k", ls=":", lw=0.9,
-                      label=f"Science band  ±{lat_band_deg:.0f}°"),
         mlines.Line2D([], [], color="#1a7d1a", marker="*", ls="None",
-                      markersize=8, label="TLE Acquisition"),
+                      markersize=8, label="Orbit Propagation Start"),
         mlines.Line2D([], [], color=_ATT_COLS[0], marker="*", ls="None",
                       markersize=8, label="Change attitude to cross-track"),
         mlines.Line2D([], [], color=_ATT_COLS[1], marker="*", ls="None",
                       markersize=8, label="Change attitude to along-track"),
-        mlines.Line2D([], [], color=_CD_COL, marker="^", ls="None",
-                      markersize=6, label="Cal/dark sequence start"),
-        mlines.Line2D([], [], color=_CD_COL, marker="v", ls="None",
-                      markersize=6, label="Cal/dark sequence end"),
+        mlines.Line2D([], [], color=_KSAT_COL, marker="^", ls="None",
+                      markersize=8, label="KSAT Ground Station (Svalbard)"),
     ]
     ax.legend(handles=handles, fontsize=6.5, loc="lower left",
               framealpha=0.85, edgecolor="0.6", ncol=2)
