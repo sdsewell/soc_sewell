@@ -198,7 +198,7 @@ def _instrument_state(frame_type: str) -> tuple:
     if frame_type == "science":
         return [0, 0, 0, 0], [0, 0, 0, 0, 0, 0]
     elif frame_type == "cal":
-        return [0, 1, 1, 0], [1, 1, 1, 1, 1, 1]
+        return [1, 1, 1, 1], [1, 1, 1, 1, 1, 1]
     elif frame_type == "dark":
         return [1, 0, 0, 1], [0, 0, 0, 0, 0, 0]
     else:
@@ -517,7 +517,7 @@ def _bin_filename(meta: ImageMetadata) -> str:
     """
     from datetime import datetime, timezone
     dt     = datetime.fromtimestamp(meta.lua_timestamp / 1000.0, tz=timezone.utc)
-    ts_str = dt.strftime("%Y%m%dT%H%M%SZ")
+    ts_str = dt.strftime("%Y-%m-%dT%H-%M-%SZ")
     return f"{ts_str}_{meta.img_type}.bin"
 
 
@@ -975,6 +975,50 @@ def main():
     rng      = np.random.default_rng(rng_seed)
     bin_dir  = pathlib.Path(output_dir) / "bin_frames"
     bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write simulation settings readme alongside the binary frames
+    _readme_lines = [
+        "G01 Synthetic Metadata Generator — Simulation Settings",
+        "=" * 56,
+        f"Generated          : {pd.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')} UTC",
+        "",
+        "--- Timing & Orbit ---",
+        f"Start epoch        : {t_start} UTC",
+        f"Duration           : {duration_days:.1f} days",
+        f"S/C altitude       : {altitude_km:.1f} km",
+        f"Orbital period     : {T_ORBIT_S:.1f} s  ({T_ORBIT_S / 60:.2f} min)",
+        "",
+        "--- Observation Schedule ---",
+        f"Science band       : ±{lat_band_deg:.1f}°",
+        f"Cal trigger lat    : {CAL_TRIGGER_LAT_DEG:.1f}°N  (ascending)",
+        f"Obs. cadence       : {obs_cadence_s:.1f} s requested  →  {actual_cadence:.1f} s actual  (step={step})",
+        f"Cal/dark per orbit : {n_caldark} cal + {n_caldark} dark = {2 * n_caldark} frames",
+        f"Science frames     : {n_science}",
+        f"Cal frames         : {n_cal}",
+        f"Dark frames        : {n_dark}",
+        f"Total obs frames   : {n_obs}",
+        "",
+        "--- Instrument ---",
+        f"Tangent height     : {h_target_km:.1f} km",
+        f"Exposure time      : {exp_time_cts} counts × {TIMER_PERIOD_S * 1000:.1f} ms/count"
+        f"  =  {exp_time_cts * TIMER_PERIOD_S:.3f} s  (exp_unit={EXP_UNIT})",
+        "",
+        "--- Wind Map ---",
+        f"Model              : {windmap_label}  (tag='{windmap_tag}')",
+    ]
+    for k, v in wm_params.items():
+        _readme_lines.append(f"  {k:<18s} : {v}")
+    _readme_lines += [
+        "",
+        "--- Reproducibility ---",
+        f"Random seed        : {rng_seed}",
+        "",
+        "--- Output ---",
+        f"Binary frame dir   : {bin_dir}",
+        f"Binary filename fmt: YYYY-MM-DDTHH-MM-SSZ_{{img_type}}.bin",
+        f"Frame size         : 260 rows × 276 cols × 2 bytes = 143 520 bytes",
+    ]
+    (bin_dir / "readme.txt").write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
 
     metadata_list  = []
     vrel_list      = []   # CSV-only LOS velocity components per frame
