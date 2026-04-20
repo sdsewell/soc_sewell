@@ -657,8 +657,10 @@ def _plot_ground_tracks(
                 # Scatter all tangent pts for this segment in one call
                 tp_lats = [mm.tangent_lat for _, mm in sci_by_seg[seg]]
                 tp_lons = [mm.tangent_lon for _, mm in sci_by_seg[seg]]
-                _sc(tp_lons, tp_lats,
-                    c=seg_tp_cols[seg], s=6, alpha=0.8, zorder=5, linewidths=0)
+                ax.scatter(tp_lons, tp_lats,
+                           marker="+", c=seg_tp_cols[seg], s=18,
+                           alpha=0.85, zorder=5, linewidths=0.8,
+                           **({} if not _cartopy else {"transform": _tr}))
             if k % 10 == 0:
                 sc_lat = df_sched.loc[idx, "lat_deg"]
                 sc_lon = df_sched.loc[idx, "lon_deg"]
@@ -709,8 +711,9 @@ def _plot_ground_tracks(
         handles += [
             mlines.Line2D([], [], color=seg_sc_cols[seg], marker="o", ls="None",
                           markersize=5, label=f"{seg_labels[seg]}  S/C"),
-            mlines.Line2D([], [], color=seg_tp_cols[seg], marker="o", ls="None",
-                          markersize=5, label=f"{seg_labels[seg]}  tangent pts"),
+            mlines.Line2D([], [], color=seg_tp_cols[seg], marker="+", ls="None",
+                          markersize=6, markeredgewidth=0.9,
+                          label=f"{seg_labels[seg]}  tangent pts"),
             mlines.Line2D([], [], color=seg_cn_cols[seg], ls="--", lw=1.1,
                           label=f"{seg_labels[seg]}  S/C → tangent pt  (every 10th)"),
         ]
