@@ -47,7 +47,7 @@ WGS84_E2   = 1.0 - (WGS84_B_M / WGS84_A_M) ** 2  # —  — first eccentricity s
 # The correct NIST air wavelength is 630.0304 nm. This is the rest wavelength
 # for all Doppler shift calculations in this pipeline.
 # ---------------------------------------------------------------------------
-OI_WAVELENGTH_M     = 630.0304e-9     # m — OI 630 nm air wavelength (NIST ASD)
+OI_WAVELENGTH_M     = 629.95e-9       # m — avoids N_int half-integer boundary at 629.9974 nm
 OI_WAVELENGTH_VAC_M = 630.2010e-9     # m — OI 630 nm vacuum wavelength (NIST ASD)
 OXYGEN_MASS_KG      = 2.6567e-26      # kg — one oxygen-16 atom (16 u × 1.66054e-27 kg/u)
 
@@ -65,6 +65,15 @@ NE_WAVELENGTH_1_M  = 640.2248e-9   # m — primary Ne line; relative intensity =
 NE_WAVELENGTH_2_M  = 638.2991e-9   # m — secondary Ne line; relative intensity = 0.8
 NE_INTENSITY_1     = 1.0           # — — reference (arbitrary normalisation)
 NE_INTENSITY_2     = 0.8           # — — ratio of secondary to primary line
+
+# ---------------------------------------------------------------------------
+# 3.4b Authoritative gap and F01 calibration constants
+# Source: Z01a two-line Tolansky analysis (2026-04-21)
+# ---------------------------------------------------------------------------
+D_25C_MM          = 20.0006e-3       # m; ICOS build − Pat/Nir pre-load correction
+PLATE_SCALE_RPX   = 1.6071e-4        # rad/px; 2x2 binned Tolansky result
+R_REFL_FLATSAT    = 0.53             # FlatSat effective reflectivity
+R_MAX_PX          = 110              # FlatSat/flight usable radius, pixels
 
 # ---------------------------------------------------------------------------
 # 3.5 Etalon and optical constants
