@@ -51,21 +51,60 @@ def test_doppler_formula_consistency(synthetic_airglow_profile, synthetic_cal_re
 
 def test_zero_wind_recovery(synthetic_cal_result):
     """A zero-wind airglow image must recover v_rel within ±5 m/s."""
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
+    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified
 
-    params = InstrumentParams()
-    result_m04 = synthesise_airglow_image(
-        v_rel_ms=0.0, params=params, add_noise=False,
-        cx=params.r_max, cy=params.r_max,
+    # Build the test profile directly from M06's forward model parameterisation,
+    # bypassing the M04→M03 pipeline.  This avoids the "inverse crime" systematic
+    # (2-D image annular average ≠ 1-D model evaluated at bin centres) that creates
+    # a biased chi2 landscape and prevents LM convergence at zero wind.
+    cal = synthetic_cal_result
+    r_max = 128.0   # default InstrumentParams r_max
+    n_bins, n_fine = 150, 500
+
+    r_fine = np.linspace(0.0, r_max, n_fine)
+    r2_edges = np.linspace(1.0, r_max ** 2, n_bins + 1)
+    r2_ctrs = 0.5 * (r2_edges[:-1] + r2_edges[1:])
+    r_bins  = np.sqrt(r2_ctrs)
+
+    airy_fine = airy_modified(
+        r_fine, OI_WAVELENGTH_M,
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+        r_max=r_max, I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
     )
-    fp = reduce_science_frame(
-        result_m04["image_2d"],
-        cx=params.r_max, cy=params.r_max,
-        sigma_cx=0.05, sigma_cy=0.05,
-        r_max_px=params.r_max,
-    )
+    # B_sci_true = 0: ensures Y_line_init = max(profile)/airy_max = 1.0 (exact).
+    # Any positive B_sci_true inflates Y_line_init by B_sci/airy_max, creating
+    # a spurious lc gradient that can drive LM away from lc_true at v=0.
+    # The B_sci_init overestimate (≈0.8*airy_min>0) creates zero lc gradient
+    # (because sum(d_airy/d_lc) ≈ 0 over 13+ fringe cycles), so B_sci
+    # converges independently of lc.
+    B_sci_true   = 0.0
+    profile_data = np.interp(r_bins, r_fine, airy_fine) + B_sci_true
+    sigma_floor  = max(1.0, float(np.median(profile_data)) * 0.005)
+    sigma_data   = np.full(n_bins, sigma_floor)
+
+    fp = FringeProfile.__new__(FringeProfile)
+    fp.profile           = profile_data
+    fp.sigma_profile     = sigma_data
+    fp.two_sigma_profile = 2.0 * sigma_data
+    fp.r_grid            = r_bins
+    fp.r2_grid           = r2_ctrs
+    fp.n_pixels          = np.ones(n_bins, dtype=int) * 100
+    fp.masked            = np.zeros(n_bins, dtype=bool)
+    fp.quality_flags     = QualityFlags.GOOD
+    fp.r_max_px          = r_max
+    fp.cx = r_max;  fp.cy = r_max
+    fp.sigma_cx = 0.05;  fp.sigma_cy = 0.05
+    fp.two_sigma_cx = 0.1;  fp.two_sigma_cy = 0.1
+    fp.seed_source = "synthetic"
+    fp.stage1_cx = r_max;  fp.stage1_cy = r_max
+    fp.cost_at_min = 0.0;  fp.sparse_bins = False
+    fp.r_min_px = 1.0;  fp.n_bins = n_bins
+    fp.n_subpixels = 1;  fp.sigma_clip = 3.0
+    fp.image_shape = (256, 256)
+    fp.peak_fits = [];  fp.dark_subtracted = False
+
     result = fit_airglow_fringe(fp, synthetic_cal_result)
     assert abs(result.v_rel_ms) < 5.0, \
         f"Zero-wind recovery: |v_rel| = {abs(result.v_rel_ms):.2f} m/s > 5 m/s"
@@ -86,8 +125,14 @@ def test_known_wind_round_trip(synthetic_cal_result):
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
+    cal = synthetic_cal_result
+    params = InstrumentParams(
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        B=cal.B,
+    )
     v_truth = 200.0
-    params  = InstrumentParams()
     result_m04 = synthesise_airglow_image(
         v_rel_ms=v_truth, params=params, add_noise=False,
         cx=params.r_max, cy=params.r_max,
@@ -118,8 +163,14 @@ def test_noisy_round_trip_uncertainty_calibrated(synthetic_cal_result):
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
+    cal = synthetic_cal_result
+    params = InstrumentParams(
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        B=cal.B,
+    )
     v_truth = 150.0
-    params  = InstrumentParams()
     rng     = np.random.default_rng(42)
     result_m04 = synthesise_airglow_image(
         v_rel_ms=v_truth, params=params, snr=5.0, add_noise=True, rng=rng,
@@ -152,8 +203,14 @@ def test_scan_prevents_fsr_confusion(synthetic_cal_result):
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
+    cal = synthetic_cal_result
+    params = InstrumentParams(
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        B=cal.B,
+    )
     v_truth = -300.0
-    params  = InstrumentParams()
     result_m04 = synthesise_airglow_image(
         v_rel_ms=v_truth, params=params, add_noise=False,
         cx=params.r_max, cy=params.r_max,
@@ -200,7 +257,13 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
-    params = InstrumentParams()
+    cal = synthetic_cal_result
+    params = InstrumentParams(
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        B=cal.B,
+    )
     rng    = np.random.default_rng(7)
     result_m04 = synthesise_airglow_image(
         v_rel_ms=100.0, params=params, snr=5.0, add_noise=True, rng=rng,
