@@ -91,7 +91,35 @@ C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
 
 FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 9.6 for R=0.53
 
-# CCD / pixel layout
+# CCD / pixel layout — keyed by binning factor (1 or 2)
+# Layout: row 0 of file = header (276 words, zero-padded to N_COLS_FRAME);
+#         remaining rows = pixel data; science region at [ROW_OFF:ROW_OFF+NY, COL_OFF:COL_OFF+NX]
+BINNING_CFG = {
+    2: dict(
+        nx_pix        = 256,
+        ny_pix        = 256,
+        n_rows_frame  = 260,    # 1 header + 259 pixel rows
+        n_cols_frame  = 276,
+        row_offset    = 1,
+        col_offset    = 10,
+        plate_scale   = PLATE_SCALE_RPX,          # 1.6071e-4 rad/px
+        rows_meta     = 260,
+        cols_meta     = 276,
+    ),
+    1: dict(
+        nx_pix        = 512,
+        ny_pix        = 512,
+        n_rows_frame  = 528,    # 1 header + 527 pixel rows
+        n_cols_frame  = 552,
+        row_offset    = 2,
+        col_offset    = 20,
+        plate_scale   = PLATE_SCALE_RPX / 2.0,   # 8.036e-5 rad/px
+        rows_meta     = 528,
+        cols_meta     = 552,
+    ),
+}
+
+# Legacy module-level aliases (used by pixel generators — overridden at runtime via binning_cfg)
 NX_PIX           = 256
 NY_PIX           = 256
 N_ROWS_BIN       = 259
@@ -409,18 +437,19 @@ def _encode_header(meta: ImageMetadata) -> np.ndarray:
 # Pixel image generators (§7.3)
 # ---------------------------------------------------------------------------
 
-def _generate_science_pixels(v_rel_ms: float, rng) -> np.ndarray:
+def _generate_science_pixels(v_rel_ms: float, rng,
+                              nx: int, ny: int, plate_scale: float) -> np.ndarray:
     """Generate OI 630 nm Airy fringe image with Doppler shift v_rel_ms."""
     lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
 
-    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
-    x = np.arange(NX_PIX) - cx
-    y = np.arange(NY_PIX) - cy
+    cx, cy = nx / 2.0, ny / 2.0
+    x = np.arange(nx) - cx
+    y = np.arange(ny) - cy
     XX, YY = np.meshgrid(x, y)
     r_px = np.sqrt(XX**2 + YY**2)
 
-    theta = r_px * PLATE_SCALE_RPX
-    delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
+    theta  = r_px * plate_scale
+    delta  = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
     I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
 
     signal = SCI_PEAK_ADU * I_airy
@@ -430,14 +459,14 @@ def _generate_science_pixels(v_rel_ms: float, rng) -> np.ndarray:
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
 
 
-def _generate_cal_pixels(rng) -> np.ndarray:
+def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float) -> np.ndarray:
     """Generate two-line neon calibration fringe image."""
-    cx, cy = NX_PIX / 2.0, NY_PIX / 2.0
-    x = np.arange(NX_PIX) - cx
-    y = np.arange(NY_PIX) - cy
+    cx, cy = nx / 2.0, ny / 2.0
+    x = np.arange(nx) - cx
+    y = np.arange(ny) - cy
     XX, YY = np.meshgrid(x, y)
     r_px   = np.sqrt(XX**2 + YY**2)
-    theta  = r_px * PLATE_SCALE_RPX
+    theta  = r_px * plate_scale
 
     def _airy(lam):
         delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lam
@@ -453,26 +482,30 @@ def _generate_cal_pixels(rng) -> np.ndarray:
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
 
 
-def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng) -> np.ndarray:
+def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
+                           nx: int, ny: int) -> np.ndarray:
     """Generate dark frame based on CCD temperature and exposure time."""
-    dark_rate  = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
-    mean_dark  = max(dark_rate * exp_time_s, 0.0)
-    dark_arr   = rng.poisson(mean_dark, size=(NY_PIX, NX_PIX)).astype(float)
-    read       = rng.normal(0.0, DARK_READ_NOISE, size=(NY_PIX, NX_PIX))
-    image      = np.round(dark_arr + read + BIAS_ADU).astype(np.float32)
+    dark_rate = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
+    mean_dark = max(dark_rate * exp_time_s, 0.0)
+    dark_arr  = rng.poisson(mean_dark, size=(ny, nx)).astype(float)
+    read      = rng.normal(0.0, DARK_READ_NOISE, size=(ny, nx))
+    image     = np.round(dark_arr + read + BIAS_ADU).astype(np.float32)
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
 
 
 def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
-                     exp_time_cts: int, rng) -> np.ndarray:
-    """Dispatch to the appropriate pixel generator. Pixel draws always after 9 metadata draws."""
-    exp_time_s = exp_time_cts * TIMER_PERIOD_S
+                     exp_time_cts: int, rng, binning_cfg: dict) -> np.ndarray:
+    """Dispatch to the appropriate pixel generator."""
+    nx          = binning_cfg["nx_pix"]
+    ny          = binning_cfg["ny_pix"]
+    plate_scale = binning_cfg["plate_scale"]
+    exp_time_s  = exp_time_cts * TIMER_PERIOD_S
     if frame_type == "science":
-        return _generate_science_pixels(v_rel_ms, rng)
+        return _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale)
     elif frame_type == "cal":
-        return _generate_cal_pixels(rng)
+        return _generate_cal_pixels(rng, nx, ny, plate_scale)
     elif frame_type == "dark":
-        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng)
+        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny)
     else:
         raise ValueError(f"Unknown frame_type: {frame_type!r}")
 
@@ -482,27 +515,42 @@ def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
 # ---------------------------------------------------------------------------
 
 def _write_bin_file(meta: ImageMetadata,
-                    pixels_256: np.ndarray,
-                    path: pathlib.Path) -> None:
+                    pixels: np.ndarray,
+                    path: pathlib.Path,
+                    binning_cfg: dict) -> None:
     """
     Write a WindCube FPI binary image file.
 
-    Layout: row 0 = 276-word header; rows 1–259 = 259×276 pixel data.
-    Total = 260 × 276 × 2 = 143,520 bytes.
-    The 256×256 science region is embedded at rows [1:257], cols [10:266].
+    Layout: row 0 = 276-word header zero-padded to n_cols_frame;
+            remaining rows = pixel data with science region embedded.
+    2×2 binned : 260 rows × 276 cols × 2 B = 143 520 B
+    1×1 unbinned: 528 rows × 552 cols × 2 B = 583 488 B
     """
-    header      = _encode_header(meta)
-    pixel_array = np.full((N_ROWS_BIN, N_COLS_BIN), BIAS_ADU, dtype=np.uint16)
-    pixel_array[ROW_OFFSET_PIX : ROW_OFFSET_PIX + NY_PIX,
-                COL_OFFSET_PIX : COL_OFFSET_PIX + NX_PIX] = pixels_256
+    n_rows  = binning_cfg["n_rows_frame"]
+    n_cols  = binning_cfg["n_cols_frame"]
+    nx      = binning_cfg["nx_pix"]
+    ny      = binning_cfg["ny_pix"]
+    row_off = binning_cfg["row_offset"]
+    col_off = binning_cfg["col_offset"]
+
+    # Header: 276 words, zero-padded to n_cols
+    header_276  = _encode_header(meta)
+    header_row  = np.zeros(n_cols, dtype=">u2")
+    header_row[:276] = header_276
+
+    # Pixel block: bias-filled, science region embedded
+    n_pixel_rows = n_rows - 1
+    pixel_array  = np.full((n_pixel_rows, n_cols), BIAS_ADU, dtype=np.uint16)
+    pixel_array[row_off : row_off + ny, col_off : col_off + nx] = pixels
 
     full_array = np.vstack([
-        header.reshape(1, N_COLS_BIN),
+        header_row.reshape(1, n_cols),
         pixel_array.astype(">u2"),
     ]).astype(">u2")
 
-    assert full_array.shape  == (260, 276),  f"Unexpected shape: {full_array.shape}"
-    assert full_array.nbytes == 143_520,     f"Unexpected size: {full_array.nbytes}"
+    expected_bytes = n_rows * n_cols * 2
+    assert full_array.shape  == (n_rows, n_cols), f"Unexpected shape: {full_array.shape}"
+    assert full_array.nbytes == expected_bytes,   f"Unexpected size: {full_array.nbytes}"
     path.write_bytes(full_array.tobytes())
 
 
@@ -793,6 +841,15 @@ def main():
     exp_time_cts  = _prompt(
         "Exposure time        [cts,   default 8000      ] : ",
         8000, int, 100, 100000)
+    _bin_factor   = _prompt(
+        "Binning              [1 or 2, default  2       ] : ",
+        2, int, 1, 2)
+    while _bin_factor not in (1, 2):
+        print("  Please enter 1 (unbinned, 528×552) or 2 (2×2 binned, 260×276).")
+        _bin_factor = _prompt(
+            "Binning              [1 or 2, default  2       ] : ",
+            2, int, 1, 2)
+    binning_cfg   = BINNING_CFG[_bin_factor]
     altitude_km   = _prompt(
         "S/C altitude         [km,    default 510       ] : ",
         510.0, float, 400.0, 700.0)
@@ -911,6 +968,9 @@ def main():
     print(f"  Exp. time        : {exp_time_cts} counts × {TIMER_PERIOD_S*1000:.1f} ms/count "
           f"= {exp_time_cts * TIMER_PERIOD_S:.3f} s  ({exp_time_cs} cs in P01,  "
           f"exp_unit={EXP_UNIT})")
+    print(f"  Binning          : {_bin_factor}×{_bin_factor}  "
+          f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
+          f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)")
     print(f"  S/C altitude     : {altitude_km:.1f} km")
     print(f"  Tangent ht       : {h_target_km:.1f} km")
     print(f"  Wind map         : {windmap_label}  "
@@ -1041,7 +1101,12 @@ def main():
         "--- Output ---",
         f"Binary frame dir   : {bin_dir}",
         f"Binary filename fmt: YYYY-MM-DDTHH-MM-SSZ_{{img_type}}.bin",
-        f"Frame size         : 260 rows × 276 cols × 2 bytes = 143 520 bytes",
+        f"Binning            : {_bin_factor}×{_bin_factor}  "
+        f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
+        f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)",
+        f"Frame size         : {binning_cfg['n_rows_frame']} rows × "
+        f"{binning_cfg['n_cols_frame']} cols × 2 bytes = "
+        f"{binning_cfg['n_rows_frame'] * binning_cfg['n_cols_frame'] * 2:,} bytes",
     ]
     (bin_dir / "readme.txt").write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
 
@@ -1112,11 +1177,11 @@ def main():
         })
 
         meta = ImageMetadata(
-            rows                 = 260,
-            cols                 = 276,
+            rows                 = binning_cfg["rows_meta"],
+            cols                 = binning_cfg["cols_meta"],
             exp_time             = exp_time_cs,
             exp_unit             = EXP_UNIT,
-            binning              = 2,
+            binning              = _bin_factor,
             img_type             = img_type,
             lua_timestamp        = lua_ts,
             adcs_timestamp       = lua_ts,
@@ -1160,9 +1225,9 @@ def main():
         })
 
         # Binary image synthesis — pixel draws follow the 9 metadata draws
-        pixels_256 = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
-                                      exp_time_cts, rng)
-        _write_bin_file(meta, pixels_256, bin_dir / _bin_filename(meta))
+        pixels = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
+                                  exp_time_cts, rng, binning_cfg)
+        _write_bin_file(meta, pixels, bin_dir / _bin_filename(meta), binning_cfg)
 
         if i % max(1, n_obs // 100) == 0 or i == n_obs - 1:
             pct = 100 * (i + 1) / n_obs
@@ -1170,7 +1235,8 @@ def main():
             print(f"\r  [{bar}] {i+1}/{n_obs}", end="", flush=True)
 
     print()
-    bin_gb = len(metadata_list) * 143_520 / 1e9
+    _frame_bytes = binning_cfg["n_rows_frame"] * binning_cfg["n_cols_frame"] * 2
+    bin_gb = len(metadata_list) * _frame_bytes / 1e9
     print(f"  NB02b+NB02c called for {n_science} science frames.")
     print(f"  .bin files written to: {bin_dir}  "
           f"({len(metadata_list)} files, ~{bin_gb:.1f} GB)")

@@ -53,16 +53,33 @@ if str(_REPO_ROOT) not in sys.path:
 from src.metadata.p01_image_metadata_2026_04_06 import parse_header
 
 # ── Constants ────────────────────────────────────────────────────────────────
-ADU_MIN       = 0
-ADU_MAX       = 16383          # 2^14 − 1
-FILE_BYTES    = 260 * 276 * 2  # 143 520
-N_HDR_WORDS   = 276
-N_PIX_ROWS    = 259
-N_PIX_COLS    = 276
-SCI_ROW_OFF   = 1              # science region row offset inside pixel block
-SCI_COL_OFF   = 10             # science region col offset
-SCI_ROWS      = 256
-SCI_COLS      = 256
+ADU_MIN     = 0
+ADU_MAX     = 16383   # 2^14 − 1
+N_HDR_WORDS = 276     # header is always 276 words (zero-padded to n_cols_frame)
+
+# Layout parameters keyed by total file size in bytes.
+# Header occupies the first row (276 words, zero-padded to n_cols_frame).
+# Science region is embedded in the pixel block at [row_off:row_off+sci_rows, col_off:col_off+sci_cols].
+_LAYOUTS = {
+    260 * 276 * 2: dict(   # 143 520 B — 2×2 binned
+        binning    = 2,
+        n_rows     = 260,
+        n_cols     = 276,
+        sci_row_off = 1,
+        sci_col_off = 10,
+        sci_rows   = 256,
+        sci_cols   = 256,
+    ),
+    528 * 552 * 2: dict(   # 582 912 B — 1×1 unbinned
+        binning    = 1,
+        n_rows     = 528,
+        n_cols     = 552,
+        sci_row_off = 2,
+        sci_col_off = 20,
+        sci_rows   = 512,
+        sci_cols   = 512,
+    ),
+}
 
 
 # ── File picker ──────────────────────────────────────────────────────────────
@@ -84,18 +101,21 @@ def _pick_file() -> pathlib.Path:
 # ── Binary reader ────────────────────────────────────────────────────────────
 
 def _load_bin(path: pathlib.Path):
-    """Return (meta_dict, pixel_array 259×276 uint16)."""
+    """Return (layout, meta_dict, pixel_array) auto-detecting 1×1 or 2×2 binning."""
     raw_bytes = path.read_bytes()
-    if len(raw_bytes) != FILE_BYTES:
+    layout = _LAYOUTS.get(len(raw_bytes))
+    if layout is None:
+        valid = ", ".join(f"{b:,} B" for b in _LAYOUTS)
         raise ValueError(
-            f"Unexpected file size {len(raw_bytes)} bytes "
-            f"(expected {FILE_BYTES}).  Not a valid WindCube .bin file?"
+            f"Unexpected file size {len(raw_bytes):,} bytes "
+            f"(expected one of: {valid}).  Not a valid WindCube .bin file?"
         )
     raw    = np.frombuffer(raw_bytes, dtype=">u2")
+    # Header: first 276 words of row 0 (rest of row is zero-padding for 1×1)
     header = raw[:N_HDR_WORDS]
-    pixels = raw[N_HDR_WORDS:].reshape(N_PIX_ROWS, N_PIX_COLS)
+    pixels = raw[layout["n_cols"] :].reshape(layout["n_rows"] - 1, layout["n_cols"])
     meta   = parse_header(header)
-    return meta, pixels
+    return layout, meta, pixels
 
 
 # ── Metadata → display rows ──────────────────────────────────────────────────
@@ -154,17 +174,18 @@ def _build_table_rows(meta: dict, filename: str) -> list:
 
 # ── Figure builder ───────────────────────────────────────────────────────────
 
-def _build_figure(path: pathlib.Path, meta: dict, pixels: np.ndarray) -> plt.Figure:
+def _build_figure(path: pathlib.Path, meta: dict, pixels: np.ndarray,
+                  layout: dict):
     """
     Construct the three-panel figure:
       [image | histogram]
       [     metadata table     ]
     """
-    # Extract just the 256×256 science region for display
-    sci = pixels[
-        SCI_ROW_OFF : SCI_ROW_OFF + SCI_ROWS,
-        SCI_COL_OFF : SCI_COL_OFF + SCI_COLS,
-    ]
+    r0  = layout["sci_row_off"]
+    c0  = layout["sci_col_off"]
+    nr  = layout["sci_rows"]
+    nc  = layout["sci_cols"]
+    sci = pixels[r0 : r0 + nr, c0 : c0 + nc]
 
     # ── Layout ──────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(11, 8.5))   # landscape Letter / A4
@@ -202,7 +223,9 @@ def _build_figure(path: pathlib.Path, meta: dict, pixels: np.ndarray) -> plt.Fig
         interpolation = "nearest",
     )
     plt.colorbar(im, ax=ax_img, label="ADU", fraction=0.046, pad=0.04)
-    ax_img.set_title("Raw CCD Image  (256 × 256 science region)", fontsize=9)
+    ax_img.set_title(
+        f"Raw CCD Image  ({layout['sci_rows']} × {layout['sci_cols']} science region,"
+        f"  {layout['binning']}×{layout['binning']} binning)", fontsize=9)
     ax_img.set_xlabel("Column (px)", fontsize=8)
     ax_img.set_ylabel("Row (px)", fontsize=8)
     ax_img.tick_params(labelsize=7)
@@ -321,13 +344,14 @@ def main():
     path = _pick_file()
     print(f"  Loading: {path}")
 
-    meta, pixels = _load_bin(path)
+    layout, meta, pixels = _load_bin(path)
 
+    print(f"  Binning     : {layout['binning']}×{layout['binning']}")
     print(f"  Image type  : {meta['img_type'].upper()}")
     print(f"  UTC         : {meta['utc_timestamp']}")
     print(f"  Size        : {meta['rows']} × {meta['cols']}")
 
-    fig = _build_figure(path, meta, pixels)
+    fig = _build_figure(path, meta, pixels, layout)
 
     out_path = path.parent.parent / (path.stem + ".png")
     fig.savefig(str(out_path), dpi=150, bbox_inches="tight")
