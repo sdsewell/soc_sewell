@@ -15,7 +15,7 @@
 | S12  | M03         | impl   | passing  | 2026-04-06    |
 | S13  | Tolansky    | impl   | passing  | 2026-04-06    |
 | S14  | M05         | impl   | passing  | 2026-04-06    |
-| S15  | M06         | impl   | passing  | 2026-04-06    |
+| S15  | M06         | impl   | 8/8      | 2026-04-21    |
 | S16  | M07         | impl   | 8/8      | 2026-04-06    |
 | S17  | INT02       | impl   | 16/16    | 2026-04-07    |
 | S18  | INT03       | impl   | 14/14    | 2026-04-11    |

@@ -474,7 +474,7 @@ def fit_airglow_fringe(
     lc_start = float(OI_WAVELENGTH_M)   # scan centred at rest wavelength
     lambda_c_best, chi2_scan, scan_flags = _lambda_c_scan(
         r_good, profile_good, sigma_good, r2_good, r_max, cal,
-        n_scan=200, n_fine=n_fine,
+        n_scan=211, n_fine=n_fine,
     )
     result_flags |= scan_flags
 
