@@ -6,11 +6,13 @@ Run from the validation/ subfolder:
 """
 
 import sys
+import re
 import pathlib
 import tkinter as tk
 from tkinter import filedialog
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import matplotlib.table as mtable
 import matplotlib.ticker as mticker
 
@@ -30,18 +32,16 @@ from src.fpi.m03_annular_reduction_2026_04_06 import (  # noqa: E402
 _root = tk.Tk()
 _root.withdraw()   # hide the empty root window
 
-_BIN_FILTER = [("Binary images", "*.bin"), ("All files", "*.*")]
-
 cal_path = filedialog.askopenfilename(
-    title="Select calibration image (cal *_swapped.bin)",
-    filetypes=_BIN_FILTER,
+    title="Select calibration image",
+    filetypes=[("Cal images", "*cal*.bin"), ("All files", "*.*")],
 )
 if not cal_path:
     sys.exit("No calibration file selected — exiting.")
 
 dark_path = filedialog.askopenfilename(
-    title="Select dark image (dark *_swapped.bin)",
-    filetypes=_BIN_FILTER,
+    title="Select dark image",
+    filetypes=[("Dark images", "*dark*.bin"), ("All files", "*.*")],
     initialdir=str(pathlib.Path(cal_path).parent),
 )
 if not dark_path:
@@ -84,55 +84,106 @@ for fp in FILES:
     metas.append(meta)
     images.append(img)
 
-# ── Plot ──────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(2, 2, figsize=(14, 10),
-                         gridspec_kw={"height_ratios": [3, 2]})
-fig.subplots_adjust(hspace=0.35, wspace=0.15)
+# ── ROI / seed parameters (needed for first figure markers) ──────────────────
+# Synthetic files follow YYYY-MM-DDTHH-MM-SSZ_cal.bin (hyphens in time portion)
+_SYNTHETIC_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_")
+_is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
+CX, CY   = (138, 129) if _is_synthetic else (145, 145)
+ROI_SIZE = 224
 
-for col, (fp, meta, img) in enumerate(zip(FILES, metas, images)):
-    # ── Top row: image ────────────────────────────────────────────────────────
-    ax_img = axes[0][col]
-    vmin, vmax = np.percentile(img, [1, 99])
-    ax_img.imshow(img, origin="upper", cmap="gray", vmin=vmin, vmax=vmax,
-                  aspect="auto", interpolation="nearest")
-    ax_img.set_title(fp.name, fontsize=9, pad=6)
-    ax_img.axis("off")
+# ── Plot figure 1 — loop until user accepts ROI size ─────────────────────────
+_img_max_dim = min(images[0].shape)
+while True:
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10),
+                             gridspec_kw={"height_ratios": [3, 2]})
+    fig.subplots_adjust(hspace=0.35, wspace=0.15)
 
-    # ── Bottom row: metadata table ────────────────────────────────────────────
-    ax_tbl = axes[1][col]
-    ax_tbl.axis("off")
+    for col, (fp, meta, img) in enumerate(zip(FILES, metas, images)):
+        # ── Top row: image ────────────────────────────────────────────────────
+        ax_img = axes[0][col]
+        vmin, vmax = np.percentile(img, [1, 99])
+        ax_img.imshow(img, origin="upper", cmap="gray", vmin=vmin, vmax=vmax,
+                      aspect="auto", interpolation="nearest")
+        ax_img.set_title(fp.name, fontsize=9, pad=6)
+        ax_img.set_xlabel("Column (px)", fontsize=8)
+        ax_img.set_ylabel("Row (px)", fontsize=8)
+        ax_img.tick_params(labelsize=7)
 
-    meta_dict = meta.__dict__
-    cell_text = [[label, fmt_value(meta_dict[key])] for key, label in FIELDS]
+        # Absolute image centre
+        abs_cx = (img.shape[1] - 1) / 2.0
+        abs_cy = (img.shape[0] - 1) / 2.0
+        ax_img.plot(abs_cx, abs_cy, "+", color="cyan",
+                    markersize=14, markeredgewidth=1.5,
+                    label=f"Image centre  ({abs_cx:.1f}, {abs_cy:.1f})")
 
-    tbl = ax_tbl.table(
-        cellText=cell_text,
-        colLabels=["Field", "Value"],
-        loc="upper center",
-        cellLoc="left",
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(7.5)
-    tbl.auto_set_column_width([0, 1])
+        # Seed centre (CX = col, CY = row)
+        ax_img.plot(CX, CY, "x", color="yellow",
+                    markersize=12, markeredgewidth=1.5,
+                    label=f"Seed  ({CX}, {CY})")
 
-    # Style header row
-    for j in range(2):
-        tbl[0, j].set_facecolor("#4472C4")
-        tbl[0, j].set_text_props(color="white", fontweight="bold")
+        # ROI box — shown on cal image only
+        if col == 0:
+            half = ROI_SIZE // 2
+            roi_rect = mpatches.Rectangle(
+                (CX - half, CY - half), ROI_SIZE, ROI_SIZE,
+                linewidth=1.2, edgecolor="yellow", facecolor="none",
+                linestyle="--", label=f"ROI  {ROI_SIZE}×{ROI_SIZE} px",
+            )
+            ax_img.add_patch(roi_rect)
 
-    # Alternating row shading
-    for i in range(1, len(cell_text) + 1):
-        color = "#EEF2FF" if i % 2 == 0 else "white"
+        ax_img.legend(fontsize=6.5, loc="lower right",
+                      framealpha=0.7, edgecolor="0.5")
+
+        # ── Bottom row: metadata table ────────────────────────────────────────
+        ax_tbl = axes[1][col]
+        ax_tbl.axis("off")
+
+        meta_dict = meta.__dict__
+        cell_text = [[label, fmt_value(meta_dict[key])] for key, label in FIELDS]
+
+        tbl = ax_tbl.table(
+            cellText=cell_text,
+            colLabels=["Field", "Value"],
+            loc="upper center",
+            cellLoc="left",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(7.5)
+        tbl.auto_set_column_width([0, 1])
+
+        # Style header row
         for j in range(2):
-            tbl[i, j].set_facecolor(color)
+            tbl[0, j].set_facecolor("#4472C4")
+            tbl[0, j].set_text_props(color="white", fontweight="bold")
 
-plt.suptitle("Cal & Dark Image Viewer", fontsize=12, fontweight="bold", y=1.01)
-plt.tight_layout()
-plt.show()
+        # Alternating row shading
+        for i in range(1, len(cell_text) + 1):
+            color = "#EEF2FF" if i % 2 == 0 else "white"
+            for j in range(2):
+                tbl[i, j].set_facecolor(color)
+
+    plt.suptitle("Cal & Dark Image Viewer", fontsize=12, fontweight="bold", y=1.01)
+    plt.tight_layout()
+    plt.show()
+    plt.close(fig)
+
+    # Prompt to accept or change ROI size
+    raw = input(
+        f"\nROI size: {ROI_SIZE}×{ROI_SIZE} px.  "
+        f"Press Enter to accept, or type a new square size: "
+    ).strip()
+    if raw == "":
+        break
+    try:
+        new_size = int(raw)
+        if new_size < 10 or new_size > _img_max_dim:
+            print(f"  Must be between 10 and {_img_max_dim}. Try again.")
+        else:
+            ROI_SIZE = new_size
+    except ValueError:
+        print("  Please enter an integer (e.g. 220). Try again.")
 
 # ── ROI extraction ────────────────────────────────────────────────────────────
-CX, CY = 145, 145
-ROI_SIZE = 224
 half = ROI_SIZE // 2
 
 r0, r1 = CY - half, CY + half
