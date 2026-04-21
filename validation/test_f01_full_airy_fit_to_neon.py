@@ -41,7 +41,7 @@ _TRUE = dict(
 _R_MAX       = 110.0
 _N_BINS      = 500
 _RNG_SEED    = 42
-_N_PIX_BIN   = 100   # realistic pixels-per-bin (≈ π·R_max² / N_bins)
+_N_PIX_BIN   = 1     # N=1 keeps sigma_profile (≈31) >> sigma_floor (5), ensuring floor is inactive and chi2_red≈1
 
 
 # ---------------------------------------------------------------------------
