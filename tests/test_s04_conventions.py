@@ -42,9 +42,9 @@ def test_chi2_flag_logic():
 # ---------------------------------------------------------------------------
 def test_sigma_v_propagation():
     """Verify Doppler uncertainty propagation: sigma_v = c * sigma_lambda / lambda0."""
-    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_M
+    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_VACUUM_M
     sigma_lambda_c = 2.0e-14   # 0.02 pm, typical value
-    sigma_v_expected = SPEED_OF_LIGHT_MS * sigma_lambda_c / OI_WAVELENGTH_M
+    sigma_v_expected = SPEED_OF_LIGHT_MS * sigma_lambda_c / OI_WAVELENGTH_VACUUM_M
     assert 8.0 < sigma_v_expected < 12.0, (
         f"sigma_v = {sigma_v_expected:.2f} m/s; expected ~9.5 m/s for sigma_lambda = 0.02 pm"
     )
@@ -75,14 +75,14 @@ def test_quality_flag_operations():
 # ---------------------------------------------------------------------------
 def test_doppler_sign_convention():
     """Positive v_rel (recession) produces lambda_c > lambda_0."""
-    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_M
+    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_VACUUM_M
     v_rel = +100.0   # m/s, positive = recession = redshift
-    lambda_c = OI_WAVELENGTH_M * (1 + v_rel / SPEED_OF_LIGHT_MS)
-    assert lambda_c > OI_WAVELENGTH_M, (
+    lambda_c = OI_WAVELENGTH_VACUUM_M * (1 + v_rel / SPEED_OF_LIGHT_MS)
+    assert lambda_c > OI_WAVELENGTH_VACUUM_M, (
         "Recession should produce redshift (lambda_c > lambda_0)"
     )
 
-    v_rel_check = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_M) / OI_WAVELENGTH_M
+    v_rel_check = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_VACUUM_M) / OI_WAVELENGTH_VACUUM_M
     assert abs(v_rel_check - v_rel) < 0.01, "Round-trip Doppler formula failed"
 
 
@@ -91,8 +91,8 @@ def test_doppler_sign_convention():
 # ---------------------------------------------------------------------------
 def test_stm_wind_budget():
     """sigma_v of 9.8 m/s corresponds to sigma_lambda ~ 2.06e-14 m at OI 630 nm."""
-    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_M, WIND_BIAS_BUDGET_MS
-    sigma_lambda_required = WIND_BIAS_BUDGET_MS * OI_WAVELENGTH_M / SPEED_OF_LIGHT_MS
+    from src.constants import SPEED_OF_LIGHT_MS, OI_WAVELENGTH_VACUUM_M, WIND_BIAS_BUDGET_MS
+    sigma_lambda_required = WIND_BIAS_BUDGET_MS * OI_WAVELENGTH_VACUUM_M / SPEED_OF_LIGHT_MS
     # Should be ~2.06e-14 m = 0.0206 pm
     assert 1.5e-14 < sigma_lambda_required < 2.5e-14, (
         f"sigma_lambda required for STM = {sigma_lambda_required:.3e} m; expected ~2.06e-14 m"

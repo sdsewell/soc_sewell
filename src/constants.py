@@ -44,14 +44,17 @@ WGS84_E2   = 1.0 - (WGS84_B_M / WGS84_A_M) ** 2  # —  — first eccentricity s
 # Source: NIST Atomic Spectra Database (NIST ASD)
 #
 # LEGACY CORRECTION: legacy code uses OI_WAVELENGTH_M = 630.0e-9.
-# The correct NIST air wavelength is 630.0304 nm. This is the rest wavelength
-# for all Doppler shift calculations in this pipeline.
+# The correct NIST air wavelength is 630.0304 nm. That value is now in
+# OI_WAVELENGTH_VACUUM_M and used for all Doppler/physics calculations.
 # ---------------------------------------------------------------------------
-OI_WAVELENGTH_M     = 629.95e-9       # m — avoids N_int half-integer boundary at 629.9974 nm
-OI_WAVELENGTH_VAC_M = 630.2010e-9     # m — OI 630 nm vacuum wavelength (NIST ASD)
-OXYGEN_MASS_KG      = 2.6567e-26      # kg — one oxygen-16 atom (16 u × 1.66054e-27 kg/u)
+# Inversion rest wavelength — shifted 0.05 nm from vacuum value to avoid
+# N_int half-integer boundary at 629.9974 nm. Use for F01/F02 only.
+OI_WAVELENGTH_M        = 629.95e-9       # m — inversion reference (F01/F02 only)
+OI_WAVELENGTH_VACUUM_M = 630.0304e-9     # m — OI 630 nm vacuum wavelength (S03); use for Doppler
+OI_WAVELENGTH_VAC_M    = 630.2010e-9     # m — OI 630 nm vacuum wavelength (NIST ASD)
+OXYGEN_MASS_KG         = 2.6567e-26      # kg — one oxygen-16 atom (16 u × 1.66054e-27 kg/u)
 
-# Doppler formula: v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_M) / OI_WAVELENGTH_M
+# Doppler formula: v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_VACUUM_M) / OI_WAVELENGTH_VACUUM_M
 # Positive v_rel = recession (redshift, source moving away from spacecraft).
 
 # ---------------------------------------------------------------------------

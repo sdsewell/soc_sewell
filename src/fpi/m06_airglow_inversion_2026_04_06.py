@@ -18,7 +18,7 @@ from scipy.optimize import least_squares
 
 from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified
 from src.constants import (
-    OI_WAVELENGTH_M,
+    OI_WAVELENGTH_VACUUM_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
     ETALON_FSR_OI_M,
     WIND_BIAS_BUDGET_MS,

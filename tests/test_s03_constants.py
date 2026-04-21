@@ -15,12 +15,17 @@ import pytest
 # ---------------------------------------------------------------------------
 def test_OI_wavelength_not_legacy():
     """Catch any regression to the legacy 630.0 nm value."""
-    from src.constants import OI_WAVELENGTH_M
+    from src.constants import OI_WAVELENGTH_M, OI_WAVELENGTH_VACUUM_M
+    # OI_WAVELENGTH_M is the inversion reference (629.95 nm), not legacy 630.0 nm
     assert abs(OI_WAVELENGTH_M - 630.0e-9) > 1e-12, (
-        "OI_WAVELENGTH_M appears to be the legacy 630.0 nm value; should be 630.0304 nm"
+        "OI_WAVELENGTH_M appears to be the legacy 630.0 nm value"
     )
-    assert abs(OI_WAVELENGTH_M - 630.0304e-9) < 1e-14, (
-        f"OI_WAVELENGTH_M = {OI_WAVELENGTH_M * 1e9:.6f} nm; expected 630.0304 nm"
+    assert abs(OI_WAVELENGTH_M - 629.95e-9) < 1e-14, (
+        f"OI_WAVELENGTH_M = {OI_WAVELENGTH_M * 1e9:.6f} nm; expected 629.9500 nm (inversion reference)"
+    )
+    # Vacuum value used for Doppler/physics contexts
+    assert abs(OI_WAVELENGTH_VACUUM_M - 630.0304e-9) < 1e-14, (
+        f"OI_WAVELENGTH_VACUUM_M = {OI_WAVELENGTH_VACUUM_M * 1e9:.6f} nm; expected 630.0304 nm"
     )
 
 
