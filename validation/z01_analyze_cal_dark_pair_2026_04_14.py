@@ -89,7 +89,7 @@ for fp in FILES:
 _SYNTHETIC_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_")
 _is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
 CX, CY   = (138, 129) if _is_synthetic else (145, 145)
-ROI_SIZE = 224
+ROI_SIZE = 220
 
 # ── Plot figure 1 — loop until user accepts ROI size ─────────────────────────
 _img_max_dim = min(images[0].shape)
