@@ -1,0 +1,15 @@
+# F01 Step 4b CalibrationResult
+# parameter, value, sigma_1, note
+d_mm, 20.0006, 0, fixed from Tolansky
+R_refl, 0.47941744, 0.8683318, fitted
+alpha_radpx, 8.0355e-05, 7.841509e-06, fitted
+I0_adu, 3019.4604, 10, fitted
+I1, -0.5, 4.4233453, fitted
+I2, -0.5, 3.9328785, fitted
+sigma0_px, 5, 4.232064, fitted
+sigma1_px, 3, 5.8543261, fitted
+sigma2_px, 3, 93.195763, fitted
+B_adu, 2439.6487, 1520.4501, fitted
+chi2_red, 8149.6344, nan, diagnostic
+n_bins, 150, nan, diagnostic
+quality_flags, 70, nan, diagnostic

@@ -1,0 +1,130 @@
+<svg viewBox="0 0 740 820" width="740" height="820" xmlns="http://www.w3.org/2000/svg" role="img">
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#C8D4E8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#C07000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arr-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#009999" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arr-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#CC4444" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+<rect width="740" height="820" fill="#003479"/>
+
+<!-- TOLANSKY BOX -->
+<rect x="30" y="20" width="680" height="170" rx="10" fill="#001A40" stroke="#0057C2" stroke-width="1.5"/>
+<text x="370" y="48" text-anchor="middle" fill="white" font-size="13" font-weight="bold" font-family="DejaVu Sans">Two-Line Tolansky Analysis (Steps 1–3)</text>
+<text x="370" y="66" text-anchor="middle" fill="#C8D4E8" font-size="9.5" font-family="DejaVu Sans">Inputs: 1D annular profile + ICOS prior d₀ = 20.0006 mm</text>
+
+<!-- d box -->
+<rect x="60" y="80" width="180" height="90" rx="7" fill="#002860" stroke="#C07000" stroke-width="2"/>
+<text x="150" y="101" text-anchor="middle" fill="#C07000" font-size="10.5" font-weight="bold" font-family="DejaVu Sans">d  (Benoit gap)</text>
+<text x="150" y="118" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">d = (N_Δ + ε_a − ε_b)</text>
+<text x="150" y="133" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">· λ_a·λ_b / [2(λ_b−λ_a)]</text>
+<text x="150" y="151" text-anchor="middle" fill="#C07000" font-size="9.5" font-family="DejaVu Sans">= 20.0006 mm</text>
+
+<!-- alpha box -->
+<rect x="280" y="80" width="180" height="90" rx="7" fill="#002860" stroke="#009999" stroke-width="2"/>
+<text x="370" y="101" text-anchor="middle" fill="#009999" font-size="10.5" font-weight="bold" font-family="DejaVu Sans">α  (plate scale)</text>
+<text x="370" y="118" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">α = √(λ_a / (2nd₀·slope))</text>
+<text x="370" y="133" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">from WLS slope, 640 nm family</text>
+<text x="370" y="151" text-anchor="middle" fill="#009999" font-size="9.5" font-family="DejaVu Sans">≈ 1.607 × 10⁻⁴ rad/px</text>
+
+<!-- epsilon box -->
+<rect x="500" y="80" width="180" height="90" rx="7" fill="#002860" stroke="#CC4444" stroke-width="2"/>
+<text x="590" y="101" text-anchor="middle" fill="#CC4444" font-size="10.5" font-weight="bold" font-family="DejaVu Sans">ε₆₄₀, ε₆₃₈</text>
+<text x="590" y="118" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">ε = −intercept / slope</text>
+<text x="590" y="133" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">from WLS fit, each family</text>
+<text x="590" y="151" text-anchor="middle" fill="#CC4444" font-size="9.5" font-family="DejaVu Sans">ε₆₄₀=0.7735  ε₆₃₈=0.2711</text>
+
+<!-- ARROWS + LABELS -->
+<!-- d arrow + FIXED label -->
+<line x1="150" y1="170" x2="150" y2="305" stroke="#C07000" stroke-width="2" marker-end="url(#arr-amber)"/>
+<rect x="74" y="215" width="152" height="28" rx="5" fill="#1A0A00" stroke="#C07000" stroke-width="1"/>
+<text x="150" y="234" text-anchor="middle" fill="#C07000" font-size="9.5" font-weight="bold" font-family="DejaVu Sans">FIXED — never re-fit</text>
+
+<!-- alpha arrow + INITIAL GUESS label -->
+<line x1="370" y1="170" x2="370" y2="305" stroke="#009999" stroke-width="2" marker-end="url(#arr-teal)"/>
+<rect x="284" y="215" width="172" height="28" rx="5" fill="#001A1A" stroke="#009999" stroke-width="1"/>
+<text x="370" y="234" text-anchor="middle" fill="#009999" font-size="9.5" font-weight="bold" font-family="DejaVu Sans">INITIAL GUESS for α</text>
+
+<!-- epsilon arrow + DIAGNOSTIC label -->
+<line x1="590" y1="170" x2="590" y2="305" stroke="#CC4444" stroke-width="2" marker-end="url(#arr-red)"/>
+<rect x="488" y="215" width="204" height="28" rx="5" fill="#1A0000" stroke="#CC4444" stroke-width="1"/>
+<text x="590" y="234" text-anchor="middle" fill="#CC4444" font-size="9.5" font-weight="bold" font-family="DejaVu Sans">DIAGNOSTIC only (ε_cal)</text>
+
+<!-- F01 AIRY FIT BOX -->
+<rect x="30" y="305" width="680" height="375" rx="10" fill="#001A40" stroke="#0057C2" stroke-width="1.5"/>
+<text x="370" y="333" text-anchor="middle" fill="white" font-size="13" font-weight="bold" font-family="DejaVu Sans">F01 Staged Airy Fit (Step 4b)</text>
+<text x="370" y="351" text-anchor="middle" fill="#C8D4E8" font-size="9.5" font-family="DejaVu Sans">Forward model:  S(r) = Ã(r; λ_Ne, d, R, α, I₀, I₁, I₂, σ₀, σ₁, σ₂) + B</text>
+
+<!-- Fixed box inside F01 -->
+<rect x="55" y="368" width="220" height="235" rx="8" fill="#1A0A00" stroke="#C07000" stroke-width="2"/>
+<text x="165" y="390" text-anchor="middle" fill="#C07000" font-size="11" font-weight="bold" font-family="DejaVu Sans">FIXED  (1 param)</text>
+<text x="165" y="406" text-anchor="middle" fill="#888888" font-size="8.5" font-style="italic" font-family="DejaVu Sans">Tolansky gives this exactly.</text>
+<text x="165" y="420" text-anchor="middle" fill="#888888" font-size="8.5" font-style="italic" font-family="DejaVu Sans">LM is not allowed to move it.</text>
+<text x="75" y="446" fill="#C07000" font-size="10" font-weight="bold" font-family="monospace">d = 20.0006 mm</text>
+<text x="75" y="463" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">Fixing d prevents the LM from</text>
+<text x="75" y="478" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">jumping to a neighbouring FSR</text>
+<text x="75" y="493" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">period (an error of ~10 pm</text>
+<text x="75" y="508" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">maps to ~5000 m/s wind bias).</text>
+<line x1="75" y1="520" x2="255" y2="520" stroke="#C07000" stroke-width="0.5"/>
+<text x="75" y="535" fill="#888888" font-size="8.5" font-family="DejaVu Sans">Also fixed: n = 1.0 (air gap)</text>
+<text x="75" y="549" fill="#888888" font-size="8.5" font-family="DejaVu Sans">λ_Ne = 640.2248 nm</text>
+<line x1="75" y1="560" x2="255" y2="560" stroke="#C07000" stroke-width="0.5"/>
+<text x="75" y="574" fill="#C07000" font-size="8.5" font-family="DejaVu Sans">Total fixed: 3 params</text>
+
+<!-- Free box inside F01 -->
+<rect x="305" y="368" width="380" height="235" rx="8" fill="#001A1A" stroke="#009999" stroke-width="2"/>
+<text x="495" y="390" text-anchor="middle" fill="#009999" font-size="11" font-weight="bold" font-family="DejaVu Sans">FREE  (9 params, fitted by LM)</text>
+<text x="495" y="406" text-anchor="middle" fill="#888888" font-size="8.5" font-style="italic" font-family="DejaVu Sans">Tolansky seeds starting point. LM refines all of them.</text>
+<!-- table header -->
+<text x="320" y="428" fill="#009999" font-size="9.5" font-weight="bold" font-family="monospace">Param</text>
+<text x="430" y="428" fill="#009999" font-size="9.5" font-weight="bold" font-family="monospace">Initial guess</text>
+<text x="605" y="428" fill="#009999" font-size="9.5" font-weight="bold" font-family="monospace">Tolansky?</text>
+<line x1="315" y1="434" x2="675" y2="434" stroke="#009999" stroke-width="0.5"/>
+<text x="320" y="450" fill="#009999" font-size="9.5" font-family="monospace">α</text>
+<text x="430" y="450" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">tolansky.alpha_rpx</text>
+<text x="605" y="450" fill="#009999" font-size="9.5" font-weight="bold" font-family="DejaVu Sans">✓ YES</text>
+<text x="320" y="466" fill="#C8D4E8" font-size="9.5" font-family="monospace">R</text>
+<text x="430" y="466" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">0.53 (FlatSat prior)</text>
+<text x="605" y="466" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="482" fill="#C8D4E8" font-size="9.5" font-family="monospace">I₀</text>
+<text x="430" y="482" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">median(profile)</text>
+<text x="605" y="482" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="498" fill="#C8D4E8" font-size="9.5" font-family="monospace">I₁</text>
+<text x="430" y="498" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">−0.1 (hardcoded)</text>
+<text x="605" y="498" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="514" fill="#C8D4E8" font-size="9.5" font-family="monospace">I₂</text>
+<text x="430" y="514" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">0.005 (hardcoded)</text>
+<text x="605" y="514" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="530" fill="#C8D4E8" font-size="9.5" font-family="monospace">σ₀</text>
+<text x="430" y="530" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">0.5 px (hardcoded)</text>
+<text x="605" y="530" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="546" fill="#C8D4E8" font-size="9.5" font-family="monospace">σ₁ σ₂</text>
+<text x="430" y="546" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">0.0 (hardcoded)</text>
+<text x="605" y="546" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<text x="320" y="562" fill="#C8D4E8" font-size="9.5" font-family="monospace">B</text>
+<text x="430" y="562" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">percentile(profile, 5)</text>
+<text x="605" y="562" fill="#888888" font-size="9" font-family="DejaVu Sans">✗ No</text>
+<line x1="315" y1="571" x2="675" y2="571" stroke="#009999" stroke-width="0.5"/>
+<text x="605" y="585" fill="#009999" font-size="8.5" font-family="DejaVu Sans">Total free: 9 params</text>
+
+<!-- epsilon aside note -->
+<rect x="55" y="625" width="640" height="44" rx="7" fill="#1A0000" stroke="#CC4444" stroke-width="1.5"/>
+<text x="375" y="643" text-anchor="middle" fill="#CC4444" font-size="10" font-weight="bold" font-family="DejaVu Sans">ε₆₄₀ and ε₆₃₈ are NOT used by the Airy fit at all</text>
+<text x="375" y="659" text-anchor="middle" fill="#C8D4E8" font-size="9" font-family="DejaVu Sans">They are only needed inside the Benoit formula to produce d. After that their job is done. ε_cal (at 630 nm) goes to CalibrationResult as a diagnostic.</text>
+
+<!-- CalibrationResult output box -->
+<rect x="30" y="700" width="680" height="100" rx="10" fill="#001A40" stroke="#22AA44" stroke-width="2"/>
+<text x="370" y="724" text-anchor="middle" fill="#22AA44" font-size="12" font-weight="bold" font-family="DejaVu Sans">CalibrationResult  (F01 output)</text>
+<text x="370" y="742" text-anchor="middle" fill="#C8D4E8" font-size="9.5" font-family="DejaVu Sans">d (passed through from Tolansky)  +  9 fitted params with 1σ errors  +  ε_cal (diagnostic)</text>
+<text x="370" y="758" text-anchor="middle" fill="#C8D4E8" font-size="9.5" font-family="DejaVu Sans">All 10 instrument params are now known with uncertainties.</text>
+<text x="370" y="776" text-anchor="middle" fill="#22AA44" font-size="9.5" font-weight="bold" font-family="DejaVu Sans">→ passes to F02 where all 10 are FIXED and only λ_c, Y_line, B_sci are free</text>
+
+<line x1="370" y1="680" x2="370" y2="700" stroke="#C8D4E8" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>

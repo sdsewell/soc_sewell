@@ -490,14 +490,26 @@ print(f"638 nm fit:  ε_638 = {ep_638:.4f} ± {ep_638_2s:.4f}  (2σ)")
 # ── Tolansky etalon gap calculation ─────────────────────────────────────────
 LA_NM  = 640.2248    # λₐ
 LB_NM  = 638.2991    # λᵦ
-T_MM   = 20.008      # nominal etalon gap (mm)
+
+
+T_MM = 20.008   # ICOS as-built gap (mm) — used ONLY to compute N_delta integer.
+                # Do NOT replace with the Tolansky-recovered gap D_25C_MM here:
+                # D_25C_MM = 20.0006 mm sits only 0.3 um from the N_delta
+                # rounding boundary and will flip N_delta from -189 to -188.
+                # The ICOS nominal value sits 7.1 um inside the correct window.
+                # Physical consistency: N_delta=-189 → d=20.0006 mm (78 nm
+                # pre-load compression of 20.008 mm). N_delta=-190 would imply
+                # a 99 um expansion — physically impossible. Locked 2026-04-22.
 
 N_delta = round(2.0 * T_MM * 1e6 * (1.0 / LA_NM - 1.0 / LB_NM))
-d_nm    = (N_delta + ep_640 - ep_638) * LA_NM * LB_NM / (2.0 * (LB_NM - LA_NM))
+C_nm    = LA_NM * LB_NM / (2.0 * (LB_NM - LA_NM))   # negative (λb < λa)
+d_nm    = (N_delta + ep_640 - ep_638) * C_nm
 d_mm    = d_nm * 1e-6
+two_sigma_d_nm = abs(C_nm) * np.sqrt(ep_640_2s**2 + ep_638_2s**2)
+two_sigma_d_mm = two_sigma_d_nm * 1e-6
 
 print(f"N_Δ  = {N_delta}")
-print(f"d    = {d_mm:.4f} mm")
+print(f"d    = {d_mm:.4f} ± {two_sigma_d_mm:.4f} mm  (2σ)")
 
 fig4, ax4 = plt.subplots(figsize=(9, 6))
 
@@ -617,12 +629,44 @@ d_body = (
     f"d = (N_Δ + ε_640nm − ε_638nm) · λa·λb / [2(λb − λa)]\n"
     f"  = ({N_delta} + {ep_640:.4f} − {ep_638:.4f})\n"
     f"    · {LA_NM}·{LB_NM} / [2·({LB_NM}−{LA_NM})] nm\n"
-    f"  = {d_mm:.4f} mm"
+    f"  = {d_mm:.4f} ± {two_sigma_d_mm:.4f} mm  (Benoit Gap, 2σ)"
 )
-_two_part_box(ax4, 0.03, y_after_yellow - 0.02,
-              d_heading, d_body, n_body_lines=4,
-              fc="#F0F8FF", ec="#4472C4",
-              heading_fc="#C8DEFF")
+y_after_blue = _two_part_box(ax4, 0.03, y_after_yellow - 0.02,
+                             d_heading, d_body, n_body_lines=4,
+                             fc="#F0F8FF", ec="#4472C4",
+                             heading_fc="#C8DEFF")
+
+# ── Green box (plate scale α) — placed below blue box ────────────────────────
+alpha_mean   = (sl_640 + sl_638) / 2.0
+alpha_2s     = np.sqrt(sl_640_2s ** 2 + sl_638_2s ** 2) / 2.0
+
+print(f"α_640  = {sl_640:.6f} ± {sl_640_2s:.6f}  orders/px²  (2σ)")
+print(f"α_638  = {sl_638:.6f} ± {sl_638_2s:.6f}  orders/px²  (2σ)")
+print(f"α_mean = {alpha_mean:.6f} ± {alpha_2s:.6f}  orders/px²  (2σ)")
+
+alpha_heading = "Plate Scale  α  (P vs r² slope)"
+alpha_body = (
+    f"α_640  = {sl_640:.6f} ± {sl_640_2s:.6f}  orders/px²\n"
+    f"α_638  = {sl_638:.6f} ± {sl_638_2s:.6f}  orders/px²\n"
+    f"α_mean = {alpha_mean:.6f} ± {alpha_2s:.6f}  orders/px²"
+)
+_two_part_box(ax4, 0.03, y_after_blue - 0.02,
+              alpha_heading, alpha_body, n_body_lines=3,
+              fc="#F5FFF5", ec="#3A7D44",
+              heading_fc="#B8FFB8")
 
 plt.tight_layout()
 plt.show()
+
+# ── Save annular profile CSV ──────────────────────────────────────────────────
+import pandas as pd
+
+csv_path = pathlib.Path(cal_path).with_suffix("").parent / (
+    pathlib.Path(cal_path).stem + "_annular_profile.csv"
+)
+pd.DataFrame({
+    "r_grid":        fp.r_grid,
+    "profile":       fp.profile,
+    "sigma_profile": fp.sigma_profile,
+}).to_csv(csv_path, index=False)
+print(f"\nAnnular profile saved → {csv_path}")

@@ -1,0 +1,13 @@
+# F01 Step 4b CalibrationResult
+# parameter,value,sigma_1,note
+d_mm,20.0006,0,fixed
+R_refl,0.1,0,fitted
+alpha_radpx,0.00032142,0,fitted
+I0_adu,617.93974,153.1611,fitted
+I1,-0.5,0,fitted
+I2,-0.5,0,fitted
+sigma0_px,0.01,0,fitted
+sigma1_px,-3,0,fitted
+sigma2_px,-3,0,fitted
+B_adu,6380.3603,149.95256,fitted
+chi2_red,450.86217,nan,diagnostic
