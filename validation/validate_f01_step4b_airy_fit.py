@@ -346,7 +346,7 @@ def estimate_initial_params(r_grid, profile, sigma_prof, d_m, alpha_init, r_max,
     bounds = dict(
         R       = (0.10,               0.95),
         alpha   = (0.5*alpha_init,     2.0*alpha_init),
-        I0      = (1.0,                float("inf")),
+        I0      = (1.0,                2**14 - 1),
         I1      = (-0.5,               0.5),
         I2      = (-0.5,               0.5),
         sigma0  = (0.01,               5.0),
@@ -389,7 +389,7 @@ def _run_staged_lm(r_good, profile_good, sigma_good, d, r_max, p0, alpha_init,
     r_fine = np.linspace(r_good[0], r_good[-1], 500)
     param_names = ["R","alpha","I0","I1","I2","sigma0","sigma1","sigma2","B"]
     bounds_lo = np.array([0.10, 0.5*alpha_init, 1.0, -0.5, -0.5, 0.01, -3., -3., 0.])
-    bounds_hi = np.array([0.95, 2.0*alpha_init, np.inf, 0.5, 0.5, 5.0, 3., 3., np.inf])
+    bounds_hi = np.array([0.95, 2.0*alpha_init, 2**14-1, 0.5, 0.5, 5.0, 3., 3., np.inf])
 
     def _pack(p_dict): return np.array([p_dict[k] for k in param_names])
     def _unpack(arr):  return dict(zip(param_names, arr))
@@ -903,10 +903,26 @@ def main():
     # ── File dialog ───────────────────────────────────────────────────────────
     csv_path = _prompt_csv_dialog()
 
+    # ── Quick metadata peek (α default comes from CSV header if present) ────────
+    _meta_peek: dict = {}
+    if csv_path:
+        with open(csv_path) as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line.startswith("#"):
+                    break
+                if ":" in _line:
+                    _k, _, _v = _line.lstrip("#").partition(":")
+                    _meta_peek[_k.strip()] = _v.strip()
+    _alpha_default = (
+        f"{float(_meta_peek['alpha_rad_px']):.4e}"
+        if "alpha_rad_px" in _meta_peek else f"{PLATE_SCALE_RPX:.4e}"
+    )
+
     # ── Numerical parameters ──────────────────────────────────────────────────
     print("\n  Fit parameters (press Enter to accept default):\n")
-    d_mm      = float(_ask("Benoit gap  d",    f"{D_25C_MM*1e3:.6f}", "mm"))
-    alpha_init = float(_ask("Plate scale α",   f"{PLATE_SCALE_RPX:.4e}", "rad/px"))
+    d_mm       = float(_ask("Benoit gap  d",  f"{D_25C_MM*1e3:.6f}", "mm"))
+    alpha_init = float(_ask("Plate scale α",  _alpha_default,         "rad/px"))
     r_max_val  = float(_ask("r_max",           str(R_MAX_PX),            "px"))
     binning    = int(_ask("Binning",           "2",                      "1 or 2"))
 

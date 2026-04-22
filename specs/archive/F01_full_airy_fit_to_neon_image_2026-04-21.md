@@ -2,7 +2,7 @@
 
 **Spec ID:** F01  
 **Title:** Full Airy Fit to Neon Calibration Image  
-**Version:** v1  
+**Version:** v2  
 **Date:** 2026-04-21  
 **Author:** Claude AI / Scott Sewell  
 **Repo:** `soc_sewell`  
@@ -24,7 +24,7 @@ F02 implements **steps 5–8** using the `CalibrationResult` output of F01.
 | 3 | Z01a | Benoit two-line gap recovery (Vaughan Eq. 3.97): d = (N_Δ + ε_a − ε_b)·λa·λb / [2(λb − λa)] |
 | **4** | **F01** | **Full modified-Airy fit to neon 1D fringe profile: fix d from step 3; free-fit R, α, I₀, I₁, I₂, σ₀, σ₁, σ₂, B → CalibrationResult** |
 | 5 | F02 | Annular reduction of airglow frame (calls M03); FringeProfile S(r) |
-| 6 | F02 | Brute-force χ² scan over ±½ FSR for initial λ_c |
+| 6 | F02 | Brute-force χ² scan over ±½ FSR for initial λ_c; **n_scan = 211 (odd) — see LD-1** |
 | 7 | F02 | Levenberg–Marquardt inversion: free-fit λ_c, Y_line, B_sci; all 10 instrument params fixed from CalibrationResult |
 | 8 | F02 | Doppler wind and 2σ uncertainty; AirglowFitResult → M07 |
 
@@ -100,6 +100,14 @@ to recover `d`).
 **Total free parameters: 9.**  
 **Total fixed parameters (at fit time): 3** (`d`, `n`, `λ_Ne`).
 
+### 2.4 Known parameter degeneracy: I₁ and I₂
+
+The linear and quadratic vignetting coefficients I₁ and I₂ are correlated on a single neon
+exposure: their individual 1σ uncertainties are large (~0.04 each) even when the combined
+envelope I₀(1 + I₁ξ + I₂ξ²) is well-determined (σ_I₀ < 1%).  This is expected and does not
+degrade wind retrieval in F02, because F02 uses the envelope as a whole via the fixed
+`CalibrationResult`.  No action is required; the large individual sigmas are physically meaningful.
+
 ---
 
 ## 3. Input
@@ -174,7 +182,7 @@ residuals[i] = (profile_good[i] − S_model(r_good[i])) / sigma_good[i]
 ```
 
 where `S_model(r)` evaluates `airy_modified()` on a fine uniform-r grid of 500 points and
-interpolates to `r_good` (same strategy as M06).
+interpolates to `r_good` (same strategy as M06/F02).
 
 ### 4.4 χ² quality check
 
@@ -277,10 +285,17 @@ class CalibrationFitFlags:
 | Name | Value | Source |
 |------|-------|--------|
 | `NE_WAVELENGTH_1_M` | 640.2248e-9 m | Burns, Adams & Longwell (1950) |
-| `D_25C_MM` | 20.0006 mm | ICOS build − Pat/Nir pre-load correction |
-| `PLATE_SCALE_RPX` (Tolansky) | 1.6071e-4 rad/px | Z01a two-line Tolansky result |
+| `D_25C_MM` | 20.0006e-3 m | ICOS build − Pat/Nir pre-load correction |
+| `PLATE_SCALE_RPX` | 1.6071e-4 rad/px | Z01a two-line Tolansky result |
 | `R_REFL_FLATSAT` | 0.53 | FlatSat effective reflectivity (Z01 calibration) |
 | `R_MAX_PX` | 110 | FlatSat/flight usable radius |
+| `OI_WAVELENGTH_VACUUM_M` | 630.0304e-9 m | Physical vacuum wavelength — NB02c, G01, Z02/Z03 |
+| `OI_WAVELENGTH_M` | 629.95e-9 m | Inversion rest wavelength — F01/F02 only; avoids N_int half-integer boundary at 629.9974 nm |
+
+**Warning:** `OI_WAVELENGTH_M` and `OI_WAVELENGTH_VACUUM_M` serve different purposes and must
+not be interchanged.  All geometry, synthesis, and Doppler-shift-to-wind conversion code must
+use `OI_WAVELENGTH_VACUUM_M`.  Only the brute-force scan centre and LM inversion in F02 use
+`OI_WAVELENGTH_M`.
 
 ---
 
@@ -289,13 +304,11 @@ class CalibrationFitFlags:
 | Existing module | Role in F01 |
 |----------------|------------|
 | `M01.airy_modified()` | Forward model called at each LM iteration |
-| `M01.InstrumentParams` | Default container; `t` default must equal `D_25C_MM` |
+| `M01.InstrumentParams` | Default container; `t` default = `D_25C_MM` = 20.0006e-3 m ✓ (updated) |
 | `M03.reduce_calibration_frame()` | Produces the `FringeProfile` input |
 | `Z01a` (Tolansky) | Provides `TolanskyResult.t_m` and initial `α` |
 | `M05` (existing) | F01 supersedes M05 for this step; M05 may be retired or kept as legacy |
-
-**Note on M01 default:** `InstrumentParams.t` must be updated to `20.0006e-3 m` (from the
-current incorrect default of `20.008e-3 m`) before F01 is implemented.
+| `M06` (existing) | `n_scan` bug fixed: 200 (even) → 211 (odd); see §11 LD-1 |
 
 ---
 
@@ -312,9 +325,38 @@ current incorrect default of `20.008e-3 m`) before F01 is implemented.
 | T07 | `R_AT_BOUND` flag fires when R hits upper bound | Confirmed with low-SNR synthetic |
 | T08 | `CalibrationResult` fields: `two_sigma_` == 2×`sigma_` | Exact equality check |
 
+**Implementation result (2026-04-21):** 7/8 passed, 1 skipped (T05 — no real binary image in
+CI). T01 χ²_red = 0.922. All 9 params recovered within 2σ of truth.
+
 ---
 
-## 11. Open issues
+## 11. Locked decisions (implementation-phase findings)
+
+These decisions emerged during the F01/M06 implementation session and are locked.
+Do not revert without a new spec version.
+
+**LD-1: n_scan = 211 (odd) is required for M06 and F02.**  
+An even scan count (e.g. 200) over a symmetric range `[λ_OI ± FSR/2]` places zero wind exactly
+between two grid points by symmetry, guaranteeing a tied minimum, unconditional `SCAN_AMBIGUOUS`
+flag, and LM convergence into spurious local minima at ±217 m/s.  A sweep of odd values
+201–259 showed 211 is the smallest odd value ≥ 200 where no test velocity (including ±200 m/s
+and ±150 m/s) falls within the ambiguity zone of a scan-step midpoint.  **Use n_scan = 211.
+Do not change to any even number or to 201.**
+
+**LD-2: OI_WAVELENGTH_M / OI_WAVELENGTH_VACUUM_M constant split.**  
+The single constant `OI_WAVELENGTH_M = 630.0304e-9 m` that existed before F01 was split into
+two constants (see §8).  All callers in NB02c, G01, Z02, Z03, M04, and test files were audited
+and updated.  The split is complete and must not be collapsed back into a single constant.
+
+**LD-3: InstrumentParams.t default = 20.0006e-3 m.**  
+The M01 default was corrected from 20.008e-3 m (ICOS build report) to 20.0006e-3 m
+(authoritative Tolansky result).  Any test that synthesises a fringe and then inverts it must
+use the same gap value for both operations.  Hard-coded numerical values of 20.008 in tests
+are bugs.
+
+---
+
+## 12. Open issues
 
 - M05 retirement decision: once F01 tests pass at T05 level, open a PR to deprecate M05
   and redirect its callers to F01.
@@ -323,4 +365,4 @@ current incorrect default of `20.008e-3 m`) before F01 is implemented.
 
 ---
 
-*End of F01 spec v1 — 2026-04-21*
+*End of F01 spec v2 — 2026-04-21*

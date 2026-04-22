@@ -661,12 +661,21 @@ plt.show()
 # ── Save annular profile CSV ──────────────────────────────────────────────────
 import pandas as pd
 
+# Convert Tolansky slope (orders/px²) to the rad/px convention used by step4b:
+#   |slope| = (d/λ) · α_rad²  →  α_rad = sqrt(alpha_mean · λa / d)
+alpha_rad_px = np.sqrt(alpha_mean * LA_NM * 1e-9 / (d_mm * 1e-3))
+
 csv_path = pathlib.Path(cal_path).with_suffix("").parent / (
     pathlib.Path(cal_path).stem + "_annular_profile.csv"
 )
-pd.DataFrame({
+_df = pd.DataFrame({
     "r_grid":        fp.r_grid,
     "profile":       fp.profile,
     "sigma_profile": fp.sigma_profile,
-}).to_csv(csv_path, index=False)
+})
+with open(csv_path, "w", newline="") as _fh:
+    _fh.write(f"# alpha_rad_px: {alpha_rad_px:.6e}\n")
+    _fh.write(f"# d_mm: {d_mm:.6f}\n")
+    _df.to_csv(_fh, index=False)
 print(f"\nAnnular profile saved → {csv_path}")
+print(f"  α_rad written to header: {alpha_rad_px:.6e} rad/px")

@@ -2,12 +2,12 @@
 # parameter,value,sigma_1,note
 d_mm,20.0006,0,fixed
 R_refl,0.1,0,fitted
-alpha_radpx,0.00032142,0,fitted
-I0_adu,617.93974,153.1611,fitted
+alpha_radpx,0.00032266,0,fitted
+I0_adu,640.07514,160.23853,fitted
 I1,-0.5,0,fitted
 I2,-0.5,0,fitted
-sigma0_px,0.01,0,fitted
-sigma1_px,-3,0,fitted
+sigma0_px,5,0,fitted
+sigma1_px,3,0,fitted
 sigma2_px,-3,0,fitted
-B_adu,6380.3603,149.95256,fitted
-chi2_red,450.86217,nan,diagnostic
+B_adu,6361.0925,155.69211,fitted
+chi2_red,451.78609,nan,diagnostic
