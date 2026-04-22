@@ -222,11 +222,16 @@ def _classify_img_type(lamp_ch_array: list, gpio_pwr_on: list) -> str:
 # ---------------------------------------------------------------------------
 
 def _instrument_state(frame_type: str) -> tuple:
-    """Returns (gpio_pwr_on, lamp_ch_array)."""
+    """Returns (gpio_pwr_on, lamp_ch_array).
+
+    GPIO bit layout: [0]=shutter_closed, [1]=unused, [2]=shutter_open, [3]=pwr_on
+    Shutter closed (cal/dark): gpio[0]=1, gpio[2]=0  → [1,0,0,1]
+    Shutter open   (science) : gpio[0]=0, gpio[2]=1  → [1,0,1,0]
+    """
     if frame_type == "science":
-        return [0, 0, 0, 0], [0, 0, 0, 0, 0, 0]
+        return [1, 0, 1, 0], [0, 0, 0, 0, 0, 0]
     elif frame_type == "cal":
-        return [1, 1, 1, 1], [1, 1, 1, 1, 1, 1]
+        return [1, 0, 0, 1], [1, 1, 1, 1, 1, 1]
     elif frame_type == "dark":
         return [1, 0, 0, 1], [0, 0, 0, 0, 0, 0]
     else:
