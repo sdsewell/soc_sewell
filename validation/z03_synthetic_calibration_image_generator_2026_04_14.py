@@ -28,6 +28,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from scipy.signal import find_peaks
 
 # Allow running as a script from any working directory.
 # validation/ is one level below repo root, so parents[1] is correct here.
@@ -432,6 +434,303 @@ def make_diagnostic_figure(
 
 
 # ---------------------------------------------------------------------------
+# Radial profile from 2-D image
+# ---------------------------------------------------------------------------
+
+def compute_radial_profile_from_image(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    r_max: float,
+    n_bins: int = 350,
+    exclude_rows: int = N_META_ROWS,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute a radially averaged profile from a 2-D image.
+
+    Pixels in the first `exclude_rows` rows are ignored (S19 metadata header).
+    Each bin spans r_max / n_bins pixels in radius.
+
+    Returns
+    -------
+    r_centers : (n_bins,) float64 — bin centre radii in pixels
+    means     : (n_bins,) float64 — per-bin mean ADU (NaN for empty bins)
+    sems      : (n_bins,) float64 — per-bin SEM  (NaN if n < 2)
+    counts    : (n_bins,) int     — number of pixels per bin
+    """
+    nrows, ncols = image.shape
+    col_idx = np.arange(ncols)
+    row_idx = np.arange(exclude_rows, nrows)
+    col_grid, row_grid = np.meshgrid(col_idx, row_idx)
+
+    r_flat = np.sqrt((col_grid - cx) ** 2 + (row_grid - cy) ** 2).ravel()
+    v_flat = image[exclude_rows:, :].astype(np.float64).ravel()
+
+    bin_edges = np.linspace(0.0, r_max, n_bins + 1)
+    r_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    in_range = r_flat <= r_max
+    r_in = r_flat[in_range]
+    v_in = v_flat[in_range]
+
+    bin_idx = np.searchsorted(bin_edges[1:], r_in)   # 0-based, clipped at n_bins-1
+    bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+
+    counts = np.bincount(bin_idx, minlength=n_bins).astype(int)
+    sums   = np.bincount(bin_idx, weights=v_in,      minlength=n_bins)
+    sum2s  = np.bincount(bin_idx, weights=v_in ** 2, minlength=n_bins)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = np.where(counts > 0, sums / counts, np.nan)
+        var   = np.where(
+            counts > 1,
+            (sum2s - sums ** 2 / np.where(counts > 0, counts, 1)) / np.maximum(counts - 1, 1),
+            np.nan,
+        )
+        sems  = np.where(
+            counts > 1,
+            np.sqrt(np.maximum(var, 0.0) / counts),
+            np.nan,
+        )
+
+    return r_centers, means, sems, counts
+
+
+# ---------------------------------------------------------------------------
+# Peak finding and 640 / 638 nm labelling
+# ---------------------------------------------------------------------------
+
+def _theoretical_peak_radii(inst_params: "InstrumentParams", lam: float) -> np.ndarray:
+    """
+    Return r-positions (px) of Airy brightness maxima for a single wavelength.
+
+    Evaluates airy_modified on a fine grid and detects peaks with find_peaks.
+    """
+    r_fine = np.linspace(0.0, inst_params.r_max, 8000)
+    profile = airy_modified(
+        r_fine, lam,
+        inst_params.t, inst_params.R_refl, inst_params.alpha, inst_params.n,
+        inst_params.r_max, inst_params.I0, inst_params.I1, inst_params.I2,
+        inst_params.sigma0, inst_params.sigma1, inst_params.sigma2,
+    )
+    p_range = profile.max() - profile.min()
+    pks, _ = find_peaks(
+        profile,
+        height=profile.min() + 0.30 * p_range,
+        distance=len(r_fine) // 60,
+    )
+    return r_fine[pks]
+
+
+def find_labeled_peaks(
+    r_centers: np.ndarray,
+    means: np.ndarray,
+    inst_params: "InstrumentParams",
+    rel_638: float,
+) -> list:
+    """
+    Detect peaks in the binned radial profile and label each as 640 or 638 nm.
+
+    Each peak is assigned to whichever wavelength's nearest theoretical ring
+    is closer in radius.
+
+    Returns a list of dicts with keys:
+        r_px, adu, amplitude, wavelength_nm, dist_theory_px
+    """
+    valid = np.isfinite(means)
+    if valid.sum() < 10:
+        return []
+
+    bg = float(np.nanpercentile(means[valid], 5))
+    p_range = float(np.nanpercentile(means[valid], 98)) - bg
+    if p_range <= 0:
+        return []
+
+    min_dist = max(2, len(r_centers) // 100)
+    pk_idx, _ = find_peaks(
+        np.where(valid, means, bg),
+        height=bg + 0.08 * p_range,
+        distance=min_dist,
+        prominence=0.04 * p_range,
+    )
+    if len(pk_idx) == 0:
+        return []
+
+    r_640 = _theoretical_peak_radii(inst_params, LAM_640)
+    r_638 = _theoretical_peak_radii(inst_params, LAM_638)
+
+    labeled = []
+    for i in pk_idx:
+        r_obs = float(r_centers[i])
+        adu   = float(means[i])
+        amp   = adu - bg
+
+        d640 = float(np.abs(r_640 - r_obs).min()) if len(r_640) else np.inf
+        d638 = float(np.abs(r_638 - r_obs).min()) if len(r_638) else np.inf
+
+        wl_nm = 640.2248 if d640 <= d638 else 638.2991
+        labeled.append(
+            dict(
+                r_px=r_obs,
+                adu=adu,
+                amplitude=amp,
+                wavelength_nm=wl_nm,
+                dist_theory_px=min(d640, d638),
+            )
+        )
+
+    return labeled
+
+
+# ---------------------------------------------------------------------------
+# Radial profile diagnostic figure
+# ---------------------------------------------------------------------------
+
+def make_radial_profile_figure(
+    r_centers: np.ndarray,
+    means: np.ndarray,
+    sems: np.ndarray,
+    labeled_peaks: list,
+    inst_params: "InstrumentParams",
+    params: "SynthParams",
+    derived: "DerivedParams",
+    out_dir: pathlib.Path,
+    stem: str,
+) -> pathlib.Path:
+    """
+    Save a radial-profile diagnostic figure with SEM band and peak table.
+
+    Layout (tall figure):
+      top 65%   — profile line + SEM band + theoretical curve + peak markers
+      bottom 35% — table of detected peaks coloured by wavelength
+    """
+    fig = plt.figure(figsize=(16, 12))
+    gs  = gridspec.GridSpec(
+        2, 1, figure=fig,
+        height_ratios=[2.2, 1.0],
+        hspace=0.40,
+        left=0.08, right=0.97, top=0.93, bottom=0.04,
+    )
+    ax_prof = fig.add_subplot(gs[0])
+    ax_tbl  = fig.add_subplot(gs[1])
+
+    # ── Profile panel ────────────────────────────────────────────────────────
+    valid = np.isfinite(means)
+    r_v   = r_centers[valid]
+    m_v   = means[valid]
+    s_v   = np.where(np.isfinite(sems[valid]), sems[valid], 0.0)
+
+    # SEM band first (behind the line)
+    ax_prof.fill_between(r_v, m_v - s_v, m_v + s_v,
+                         color="#4488CC", alpha=0.30, label="±1 SEM")
+    ax_prof.plot(r_v, m_v, color="#1155AA", lw=1.2, label="Radial average")
+
+    # Theoretical noise-free profile for reference
+    r_fine = np.linspace(0.0, inst_params.r_max, 6000)
+    A640t = airy_modified(
+        r_fine, LAM_640,
+        inst_params.t, inst_params.R_refl, inst_params.alpha, inst_params.n,
+        inst_params.r_max, inst_params.I0, inst_params.I1, inst_params.I2,
+        inst_params.sigma0, inst_params.sigma1, inst_params.sigma2,
+    )
+    A638t = airy_modified(
+        r_fine, LAM_638,
+        inst_params.t, inst_params.R_refl, inst_params.alpha, inst_params.n,
+        inst_params.r_max, inst_params.I0, inst_params.I1, inst_params.I2,
+        inst_params.sigma0, inst_params.sigma1, inst_params.sigma2,
+    )
+    theory = A640t + params.rel_638 * A638t + inst_params.B
+    ax_prof.plot(r_fine, theory, color="#FF8800", lw=0.9, ls="--",
+                 alpha=0.65, label="Theory (noise-free)")
+
+    # Vertical peak markers coloured by wavelength
+    clr_640 = "#2266EE"; clr_638 = "#DD3333"
+    seen_640 = seen_638 = False
+    for pk in labeled_peaks:
+        is_640 = pk["wavelength_nm"] > 639.0   # 640.2248 > 639; 638.2991 < 639
+        c = clr_640 if is_640 else clr_638
+        lbl = None
+        if is_640 and not seen_640:
+            lbl = "640.2 nm peaks"; seen_640 = True
+        elif not is_640 and not seen_638:
+            lbl = "638.3 nm peaks"; seen_638 = True
+        ax_prof.axvline(pk["r_px"], color=c, lw=0.9, ls=":", alpha=0.70, label=lbl)
+
+    ax_prof.set_xlabel("Radius  r  (px)", fontsize=11)
+    ax_prof.set_ylabel("Counts  (ADU)", fontsize=11)
+    n_640 = sum(1 for p in labeled_peaks if p["wavelength_nm"] > 639.0)
+    n_638 = len(labeled_peaks) - n_640
+    ax_prof.set_title(
+        f"Radial Profile  |  d={params.d_mm} mm, R={params.R}, "
+        f"rel_638={params.rel_638}, SNR={params.snr_peak}\n"
+        f"α={derived.alpha_rad_per_px:.4e} rad/px,  I₀={derived.I0:.0f} ADU  "
+        f"|  {len(labeled_peaks)} peaks detected "
+        f"({n_640} × 640 nm,  {n_638} × 638 nm)",
+        fontsize=9,
+    )
+    ax_prof.legend(fontsize=8, loc="upper right")
+    ax_prof.grid(True, lw=0.4, alpha=0.5)
+
+    # ── Peak table ────────────────────────────────────────────────────────────
+    ax_tbl.axis("off")
+
+    MAX_ROWS = 40
+    display_peaks = labeled_peaks[:MAX_ROWS]
+    truncated = len(labeled_peaks) > MAX_ROWS
+
+    if display_peaks:
+        col_labels = ["#", "r (px)", "Mean (ADU)", "Amplitude (ADU)",
+                      "λ (nm)", "Δr vs theory (px)"]
+        table_data = []
+        row_colors = []
+        for k, pk in enumerate(display_peaks, start=1):
+            is_640 = pk["wavelength_nm"] > 639.0
+            table_data.append([
+                str(k),
+                f"{pk['r_px']:.2f}",
+                f"{pk['adu']:.1f}",
+                f"{pk['amplitude']:.1f}",
+                f"{pk['wavelength_nm']:.4f}",
+                f"{pk['dist_theory_px']:.3f}",
+            ])
+            row_colors.append("#DDEEFF" if is_640 else "#FFDDDD")
+
+        tbl = ax_tbl.table(
+            cellText=table_data,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="center",
+        )
+        tbl.auto_set_font_size(False)
+        font_size = 7.5 if len(display_peaks) > 25 else 8.5
+        tbl.set_fontsize(font_size)
+        row_h = 1.6 / max(len(display_peaks) + 1, 5)
+        tbl.scale(1.0, max(0.9, row_h * len(display_peaks)))
+
+        for ri, col in enumerate(row_colors):
+            for ci in range(len(col_labels)):
+                tbl[ri + 1, ci].set_facecolor(col)
+
+        note = f"  (first {MAX_ROWS} of {len(labeled_peaks)} shown)" if truncated else ""
+        ax_tbl.set_title(
+            f"Detected peaks: {len(labeled_peaks)} total  "
+            f"({n_640} × 640.2 nm   {n_638} × 638.3 nm){note}  "
+            f"|  blue rows = 640 nm, red rows = 638 nm",
+            fontsize=8.5,
+        )
+    else:
+        ax_tbl.text(0.5, 0.5, "No peaks detected in radial profile.",
+                    ha="center", va="center", fontsize=11,
+                    transform=ax_tbl.transAxes)
+
+    fig.suptitle(f"Z03 Radial Profile Diagnostic — {stem}", fontsize=11)
+    out_path = out_dir / f"{stem}_radial_profile.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Interactive prompt helpers
 # ---------------------------------------------------------------------------
 
@@ -629,19 +928,61 @@ def main(argv=None):
     truth_path = out_dir / f"{stem}_truth.json"
     write_truth_json(params, derived, seed, path_cal, path_dark, truth_path)
 
-    # Diagnostic figure
+    # Diagnostic figure (images + histograms)
     try:
         diag_path = make_diagnostic_figure(image_cal, image_dark, params, out_dir, stem)
     except Exception:
         diag_path = None
 
-    print("Wrote:")
+    # Radial profile from the noisy calibration image
+    # cy in the trimmed image: CY_DEFAULT was set in the 276×276 square image;
+    # after removing row_start=(276-260)//2=8 rows from the top, the centre row shifts.
+    cy_trimmed = float(CY_DEFAULT - (NCOLS - NROWS) // 2)
+    r_centers, r_means, r_sems, r_counts = compute_radial_profile_from_image(
+        image_cal,
+        cx=float(CX_DEFAULT),
+        cy=cy_trimmed,
+        r_max=float(R_MAX_PX),
+        n_bins=350,
+    )
+
+    inst_params = build_instrument_params(params, derived)
+    labeled_peaks = find_labeled_peaks(r_centers, r_means, inst_params, params.rel_638)
+
+    n_640 = sum(1 for p in labeled_peaks if p["wavelength_nm"] > 639.0)
+    n_638 = len(labeled_peaks) - n_640
+    print(f"\n  Radial profile: {len(r_centers)} bins, "
+          f"{len(labeled_peaks)} peaks detected "
+          f"({n_640} × 640 nm, {n_638} × 638 nm)")
+    if labeled_peaks:
+        print(f"  {'#':>3}  {'r (px)':>8}  {'ADU':>8}  {'Amp':>8}  {'λ (nm)':>10}  "
+              f"{'Δr_theory':>10}")
+        for k, pk in enumerate(labeled_peaks, start=1):
+            print(f"  {k:>3}  {pk['r_px']:>8.2f}  {pk['adu']:>8.1f}  "
+                  f"{pk['amplitude']:>8.1f}  {pk['wavelength_nm']:>10.4f}  "
+                  f"{pk['dist_theory_px']:>10.3f}")
+
+    try:
+        rad_path = make_radial_profile_figure(
+            r_centers, r_means, r_sems, labeled_peaks,
+            inst_params, params, derived, out_dir, stem,
+        )
+    except Exception as exc:
+        rad_path = None
+        print(f"  [WARN] Radial profile figure failed: {exc}")
+
+    print("\nWrote:")
     print("  ", path_cal)
     print("  ", path_dark)
     print("  ", truth_path)
     if diag_path:
         print("  ", diag_path)
+    if rad_path:
+        print("  ", rad_path)
+    if diag_path:
         os.startfile(str(diag_path))
+    if rad_path:
+        os.startfile(str(rad_path))
     print("Done.")
 
 
