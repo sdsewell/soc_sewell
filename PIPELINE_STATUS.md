@@ -27,6 +27,7 @@
 | Z03  | cal-gen     | impl   | passing  | 2026-04-10    |
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 7/7+skip | 2026-04-21    |
+| F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
 
 ## Known pre-existing test failures (not introduced by current work)
 
