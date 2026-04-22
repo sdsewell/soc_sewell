@@ -2,7 +2,7 @@
 
 **Spec ID:** F01  
 **Title:** Two-Line Airy Fit to Neon Calibration Profile  
-**Version:** v3.1  
+**Version:** v3  
 **Date:** 2026-04-22  
 **Author:** Claude AI / Scott Sewell  
 **Repo:** `soc_sewell`  
@@ -18,8 +18,7 @@
 |---------|------|---------|
 | v1 | 2026-04-21 | Initial spec (single-line model) |
 | v2 | 2026-04-21 | Locked decisions from implementation (n_scan, constant split) |
-| v3 | 2026-04-22 | Rewritten: two-line forward model required; Y_B free parameter; scope restricted to Step 4b only (Tolansky seeding moved to Z01a spec) |
-| **v3.1** | **2026-04-22** | **Implementation housekeeping: records two bug fixes from Claude Code as LD-6 and LD-7; updates test result to 10/11 pass (T05 skips). No algorithm changes.** |
+| **v3** | **2026-04-22** | **Rewritten: two-line forward model required; Y_B free parameter; scope restricted to Step 4b only (Tolansky seeding moved to Z01a spec)** |
 
 ---
 
@@ -477,10 +476,6 @@ implementation passes T05 on real data.
 **T05 is the primary acceptance test.** The v2 spec never passed T05 on real data
 because the single-line model could not fit the two-line calibration spectrum.
 
-**Implementation result (2026-04-22, commit `1d0c322`):** 10/11 passed, T05 skipped
-(no real binary image in CI). Two bugs found and fixed during implementation — see
-LD-6 and LD-7 in §12.
-
 ---
 
 ## 12. Locked decisions (carried forward from v2, plus new)
@@ -506,34 +501,6 @@ The single-line approximation is invalid for the WindCube FlatSat lamp/filter/et
 combination. The intensity ratio Y_B/Y_A ≈ 0.58 from real data analysis. This ratio
 must be fitted as a free parameter, not hardcoded.
 
-**LD-6: Jacobian column-norm threshold must use `col_norms > 0.0`, not a relative threshold.**  
-The v3 spec §5.6 described column-scaling the Jacobian before inverting JᵀJ, but the
-implementation initially used `col_norms < 1e-8 * col_norms.max()` to identify
-near-zero columns. This threshold is **incorrect**: α has a Jacobian column norm of
-approximately 52 million (because α is ≈ 1.6 × 10⁻⁴ and the phase derivative is
-very large), which makes the relative threshold 0.52 — large enough to incorrectly
-flag I₀ (legitimate norm ≈ 0.07) as a zero column and assign it the sentinel
-uncertainty of 10.0. The correct threshold is `col_norms > 0.0` (strict positivity
-only). Any column with a norm of exactly zero is analytically unidentifiable and
-receives the sentinel; all other columns, regardless of relative magnitude, receive
-their proper scaled uncertainty.  
-**In `f01_full_airy_fit_to_neon_image_2026_04_22.py`, the zero-column mask must be
-`zero_mask = (col_norms == 0.0)`, not a relative comparison.**
-
-**LD-7: R_init from fringe contrast must fall back to the prior (0.53) when the
-background pedestal exceeds the fringe amplitude.**  
-The data-driven R_init formula in spec §5.2 computes contrast C from bright peak
-amplitudes. On real calibration data the CCD background B ≈ 6100 ADU dominates the
-profile (the fringe amplitude is ≈ 2400 ADU above background). The trough-corrected
-contrast formula can produce a negative or near-unity C when the estimated B is
-slightly too high, driving R_init to the upper bound of 0.95 before fitting even
-begins. This mis-starts Stage D with R at its bound and prevents convergence.  
-**Implementation rule:** After computing R_init from contrast, check:
-`if B_init >= 0.5 * median(bright_peak_heights): use R_init = 0.53 (fallback prior)`.
-The fallback condition identifies profiles where the background pedestal dominates the
-fringe — a characteristic of high-finesse etalons at low emission intensity where the
-contrast estimator is unreliable. The value 0.53 is the FlatSat prior from Z01 calibration.
-
 ---
 
 ## 13. Open issues
@@ -547,7 +514,7 @@ contrast estimator is unreliable. The value 0.53 is the FlatSat prior from Z01 c
 
 ---
 
-*End of F01 spec v3.1 — 2026-04-22*
+*End of F01 spec v3 — 2026-04-22*
 
 ---
 
@@ -559,9 +526,6 @@ contrast estimator is unreliable. The value 0.53 is the FlatSat prior from Z01 c
 > Read this entire file first. Then execute the tasks below in order.
 > Gate each task on pytest passing before proceeding to the next.
 > Do not implement anything not described in this spec.
-> **Two known implementation bugs are documented in LD-6 and LD-7 (§12).
-> Read those locked decisions carefully before writing any covariance or
-> R_init code — the bugs are easy to reintroduce.**
 
 ```
 cat PIPELINE_STATUS.md
@@ -674,15 +638,7 @@ cat src/constants.py | grep -E "NE_WAVELENGTH|D_25C|PLATE_SCALE|R_MAX|R_REFL"
 #             F_est = 2*C/(1-C)
 #             x = 2*(sqrt(1+F_est)-1)/F_est
 #             R_init = clip(1-x, 0.1, 0.95)
-#
-#          CRITICAL — LD-7: after computing R_init from contrast, apply the
-#          fallback check:
-#            if B_init >= 0.5 * median(bright_amps + B_init):
-#                R_init = 0.53   # background-dominated profile; contrast
-#                                # estimator unreliable; use FlatSat prior
-#          This prevents R_init from being driven to 0.95 (upper bound) on
-#          high-finesse profiles where B dominates the fringe amplitude.
-#          Use the R_init override argument if provided by the caller.
+#          Use R_init directly (not the hardcoded 0.53).
 #       10. sigma0_init = 0.5 (default; FWHM estimation is in the validation
 #           script, not in the core fit module).
 #       11. All other params: I1=-0.1, I2=0.005, sigma1=0.0, sigma2=0.0
@@ -696,15 +652,7 @@ cat src/constants.py | grep -E "NE_WAVELENGTH|D_25C|PLATE_SCALE|R_MAX|R_REFL"
 #
 #   (i) Covariance extraction — apply the column-scaled Jacobian method
 #       (identical logic to v2) but with 11 columns using _STAGE_E_ORDER.
-#
-#       CRITICAL — LD-6: the zero-column mask must be:
-#         zero_mask = (col_norms == 0.0)
-#       NOT a relative threshold like col_norms < 1e-8 * col_norms.max().
-#       The relative threshold incorrectly flags I0 as zero because alpha's
-#       column norm (~52M) makes the threshold (~0.52) larger than I0's
-#       legitimate norm (~0.07). Use strict zero only.
-#
-#       After covariance, set YB ratio flags:
+#       The YB_RATIO_LOW and YB_RATIO_HIGH flags are set after covariance:
 #         ratio = curr["Y_B"] / curr["Y_A"]
 #         if ratio < 0.3:  quality_flags |= CalibrationFitFlags.YB_RATIO_LOW
 #         if ratio > 1.0:  quality_flags |= CalibrationFitFlags.YB_RATIO_HIGH
@@ -788,14 +736,12 @@ git add src/fpi/f01_full_airy_fit_to_neon_image_2026_04_22.py \
         src/constants.py \
         validation/test_f01_two_line_airy_fit.py \
         PIPELINE_STATUS.md
-git commit -m "feat: implement F01 v3.1 — two-line Airy fit to neon profile
+git commit -m "feat: implement F01 v3 — two-line Airy fit to neon profile
 
 Replaces single-line model with two-line forward model (640+638 nm).
-Y_B added as 11th free parameter; data-driven R_init from contrast
-with LD-7 fallback to 0.53 when background-dominated.
-5-stage LM scheme (A-E). Column-norm covariance uses strict zero
-threshold per LD-6 (not relative threshold). 10/11 tests pass
-(T05 skipped, no real binary). Old v2 module kept as DEPRECATED.
+Y_B added as 11th free parameter; data-driven R_init from contrast.
+5-stage LM scheme (A-E). 10/11 tests pass (T05 skipped, no real bin).
+Old v2 module kept as f01_..._2026_04_21.py (DEPRECATED).
 
 Also updates PIPELINE_STATUS.md"
 
