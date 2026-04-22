@@ -2,58 +2,63 @@
 validate_f01_neon_airy_fit.py
 ─────────────────────────────────────────────────────────────────────────────
 Standalone interactive validation of the F01 full Airy fit to a neon
-calibration image.  Implements pipeline steps 1–4 (and step 4 only via
-the F01 module).
+calibration image.  Implements the complete pipeline steps 1–4, including
+a full two-line Tolansky analysis to seed the TolanskyResult.
 
 Usage
 ─────
-    python validate/validate_f01_neon_airy_fit.py
+    python validation/validate_f01_neon_airy_fit.py
 
-The script will prompt for:
-  (1) Calibration image  — real .bin file OR press Enter for synthetic
-  (2) Dark image         — real .bin file OR press Enter for synthetic dark
+Prompts
+───────
+  (1) Calibration image  — real WindCube .bin  OR  Enter → synthetic
+  (2) Dark image         — real WindCube .bin  OR  Enter → synthetic dark
+  (3) Binning (1 or 2)   — asked only when using synthetic images
 
-Supports 1×1 and 2×2 binning (auto-detected from the binary header or
-from image shape for synthetic images).
+Supports 1×1 and 2×2 binning; auto-detected from binary header for real files.
 
 Pipeline steps executed
 ───────────────────────
-  Step 1  Load and display calibration + dark images
-  Step 2  Dark subtract; find fringe centre (threshold + circle fits)
-  Step 3  Annular reduction → 1D FringeProfile (500 equal-pixel bins)
-  Step 4a Tolansky WLS to seed TolanskyResult (ε₆₄₀, α from slope)
-          NOTE: full two-line Tolansky requires both Ne lines to be
-          resolved as separate fringe families.  This script applies
-          the single-line Tolansky (slope only) to seed α; ε is set
-          from the known fractional order at 640.2248 nm derived from
-          D_25C_MM.  If you have a real two-line Z01a result, replace
-          the `_build_tolansky_from_image` call with your CalibrationResult.
-  Step 4b F01 staged LM fit (Stages A→B→C→D) → CalibrationResult
-  Output  6-panel diagnostic figure saved alongside this script
+  Step 1   Load calibration + dark images; display header metadata
+  Step 2   Dark subtract; find fringe centre via thresholding + circle fits
+  Step 3   Annular reduction → 1D FringeProfile (500 equal-pixel-count bins)
+  Step 4a  TWO-LINE TOLANSKY (Benoit/Vaughan gap recovery)
+             • Find all peaks in annular profile (adaptive distance floor)
+             • Separate the two neon families by amplitude
+               (640.2248 nm family = brighter peaks; 638.2991 nm = dimmer)
+             • WLS fit of ring-order P vs r² for each family independently
+             • Recover ε₆₄₀, ε₆₃₈ from WLS intercept/slope ratio
+             • Compute N_Δ from ICOS prior gap d₀
+             • Apply Benoit eq. (Vaughan 3.97) to recover d
+             • α from slope of the 640 nm family
+  Step 4b  F01 staged LM fit (Stages A→B→C→D) → CalibrationResult
 
-Output figure panels
-────────────────────
-  [0,0] Raw calibration image (log stretch)
-  [0,1] Dark-subtracted image (linear stretch)
-  [1,0] Detected fringe centre overlay
-  [1,1] 1D annular-reduced fringe profile + Tolansky peak positions
-  [2,0] F01 best-fit model vs data with residuals
-  [2,1] Fit summary table: all 9 recovered parameters with 1σ errors
+Output
+──────
+  8-panel diagnostic figure saved as PNG alongside this script:
+    [0,0]  Raw calibration image (log stretch) with r_max circle
+    [0,1]  Dark-subtracted image (linear stretch)
+    [1,0]  Fringe centre detection overlay
+    [1,1]  Annular profile with TWO-LINE TOLANSKY peak family annotations
+    [2,0]  Tolansky P vs r² WLS fits — both families on same axes
+    [2,1]  Benoit gap recovery annotation box + α, ε values
+    [3,0]  F01 best-fit model vs data with residuals in σ
+    [3,1]  CalibrationResult parameter table (all 9 params + 1σ)
 
 Place this file in:  soc_sewell/validation/
 ─────────────────────────────────────────────────────────────────────────────
 Author:  Claude AI / Scott Sewell  (NCAR/HAO)
 Date:    2026-04-22
 Spec:    docs/specs/F01_full_airy_fit_to_neon_image_2026-04-21.md  v2
+         docs/specs/F02_full_airy_fit_to_airglow_image_2026-04-21.md  v2
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import struct
 import pathlib
-import textwrap
+from types import SimpleNamespace
 from typing import Optional, Tuple
 
 import numpy as np
@@ -62,15 +67,17 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Circle
 from matplotlib.colors import LogNorm
-from scipy import ndimage, optimize
+from scipy import ndimage
+from scipy.signal import find_peaks
+from scipy.optimize import least_squares
 
-# ── repo root on sys.path so local imports work when run from any cwd ────────
-_HERE = pathlib.Path(__file__).resolve().parent          # validation/
-_REPO = _HERE.parent                                     # soc_sewell/
+# ── repo root on sys.path ────────────────────────────────────────────────────
+_HERE = pathlib.Path(__file__).resolve().parent   # validation/
+_REPO = _HERE.parent                              # soc_sewell/
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-# ── pipeline imports (graceful degradation if not yet installed) ─────────────
+# ── pipeline imports ─────────────────────────────────────────────────────────
 try:
     from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_21 import (
         fit_neon_fringe,
@@ -78,45 +85,60 @@ try:
         CalibrationResult,
         CalibrationFitFlags,
     )
-    from src.fpi.m01_airy_forward_model_2026_04_05 import (
-        airy_modified,
-        InstrumentParams,
-    )
+    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified
     _F01_AVAILABLE = True
 except ImportError as _e:
     print(f"\n[WARN] F01 module not found ({_e}).")
-    print("       Steps 4a/4b will be skipped — only the diagnostic image is produced.\n")
+    print("       Steps 4b will be skipped — Tolansky + diagnostic plot still produced.\n")
     _F01_AVAILABLE = False
+    TolanskyResult = SimpleNamespace      # fallback type alias
 
 # ── constants ────────────────────────────────────────────────────────────────
 try:
     from src.constants import (
-        NE_WAVELENGTH_1_M,
-        D_25C_MM,
-        PLATE_SCALE_RPX,
-        R_MAX_PX,
+        NE_WAVELENGTH_1_M,   # 640.2248e-9 m  primary neon line
+        D_25C_MM,            # 20.0006e-3 m   authoritative gap
+        PLATE_SCALE_RPX,     # 1.6071e-4 rad/px  2×2 binned
+        R_MAX_PX,            # 110 px
     )
+    try:
+        from src.constants import NE_WAVELENGTH_2_M   # 638.2991e-9 m
+    except ImportError:
+        NE_WAVELENGTH_2_M = 638.2991e-9
+    try:
+        from src.constants import NE_INTENSITY_2       # 0.8 relative intensity
+    except ImportError:
+        NE_INTENSITY_2 = 0.8
 except ImportError:
-    NE_WAVELENGTH_1_M = 640.2248e-9   # m
-    D_25C_MM          = 20.0006e-3    # m  (authoritative Tolansky result)
-    PLATE_SCALE_RPX   = 1.6071e-4     # rad/px  (2×2 binned)
-    R_MAX_PX          = 110           # px
+    NE_WAVELENGTH_1_M  = 640.2248e-9
+    NE_WAVELENGTH_2_M  = 638.2991e-9
+    NE_INTENSITY_2     = 0.8
+    D_25C_MM           = 20.0006e-3
+    PLATE_SCALE_RPX    = 1.6071e-4
+    R_MAX_PX           = 110
 
-# Header format from P01 spec (38 bytes ASCII + padding to 1024-byte block)
 _HEADER_BYTES = 1024
-_UINT16_DTYPE = np.dtype(">u2")       # big-endian unsigned 16-bit
+_UINT16_DTYPE = np.dtype(">u2")   # big-endian uint16
+
+# ── colour palette (NCAR brand) ───────────────────────────────────────────────
+_NAVY  = "#003479"
+_BLUE  = "#0057C2"
+_TEAL  = "#009999"
+_AMBER = "#C07000"
+_RED   = "#CC2222"
+_GREEN = "#22AA44"
+_LGRAY = "#C8D4E8"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# I/O helpers
+# I/O
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _prompt_file(label: str, required_type: str) -> Optional[pathlib.Path]:
-    """Prompt for a file path; return None if user presses Enter (synthetic)."""
-    print(f"\n{'─'*60}")
+def _prompt_file(label: str, kind: str) -> Optional[pathlib.Path]:
+    print(f"\n{'─'*62}")
     print(f"  {label}")
-    print(f"  Press Enter to use SYNTHETIC {required_type} data instead.")
-    print(f"{'─'*60}")
+    print(f"  Press Enter to use SYNTHETIC {kind} data.")
+    print(f"{'─'*62}")
     raw = input("  Path: ").strip().strip('"').strip("'")
     if not raw:
         return None
@@ -128,92 +150,63 @@ def _prompt_file(label: str, required_type: str) -> Optional[pathlib.Path]:
 
 
 def _parse_header(raw: bytes) -> dict:
-    """
-    Parse the WindCube P01 binary header from the first 1024 bytes.
-    Returns a dict with keys: date, time, exposure_ms, nx, ny, binning,
-    info_type, etalon_temps.
-    Falls back gracefully if header cannot be parsed (synthetic .bin files
-    may omit the header).
-    """
+    import re
     try:
         text = raw[:256].decode("ascii", errors="replace").replace("\x00", " ")
-        fields: dict = {}
-        # Very permissive: just look for tokens we care about
-        import re
-        m = re.search(r"(\d{6})", text)
-        fields["date"] = m.group(1) if m else "unknown"
-        m = re.search(r"(\d{6})ms", text)
-        fields["exposure_ms"] = int(m.group(1)) if m else None
+        h: dict = {}
+        m = re.search(r"(\d{6})", text);         h["date"] = m.group(1) if m else "unknown"
+        m = re.search(r"(\d{6})ms", text);       h["exposure_ms"] = int(m.group(1)) if m else None
         m = re.search(r"(\d{3})px.*?(\d{3})px", text)
-        if m:
-            fields["nx"] = int(m.group(1))
-            fields["ny"] = int(m.group(2))
-        else:
-            fields["nx"] = fields["ny"] = None
-        m = re.search(r"b([12])", text)
-        fields["binning"] = int(m.group(1)) if m else None
-        m = re.search(r"(Cal|Dark|Obs|Test)", text, re.IGNORECASE)
-        fields["info_type"] = m.group(1) if m else "unknown"
-        # Etalon temps: four floats like [XX.XX, XX.XX, XX.XX, XX.XX]C
-        temps = re.findall(r"[-\d]+\.\d+", text)
-        fields["etalon_temps"] = [float(t) for t in temps[:4]] if temps else []
-        return fields
+        if m: h["nx"], h["ny"] = int(m.group(1)), int(m.group(2))
+        else: h["nx"] = h["ny"] = None
+        m = re.search(r"b([12])", text);         h["binning"] = int(m.group(1)) if m else None
+        m = re.search(r"(Cal|Dark|Obs|Test)", text, re.I); h["info_type"] = m.group(1) if m else "unknown"
+        temps = re.findall(r"[-\d]+\.\d+", text); h["etalon_temps"] = [float(t) for t in temps[:4]]
+        return h
     except Exception:
         return {}
 
 
 def _load_bin(path: pathlib.Path) -> Tuple[np.ndarray, dict]:
-    """
-    Load a WindCube .bin file → (image_uint16, header_dict).
-    Strips the 1024-byte header block if present, then reads uint16 pixels.
-    Auto-detects 256×256 (2×2 bin) or 512×512 (1×1 bin).
-    """
     raw = path.read_bytes()
     hdr = _parse_header(raw[:_HEADER_BYTES])
-
-    # Strip header if file is larger than pixel data alone
     for strip in (_HEADER_BYTES, 0):
         payload = raw[strip:]
         n_pixels = len(payload) // 2
-        # Try known sizes: 256*256=65536, 512*512=262144
         for side in (256, 512):
             if n_pixels == side * side:
                 img = np.frombuffer(payload, dtype=_UINT16_DTYPE).reshape(side, side).astype(np.float32)
-                hdr.setdefault("nx", side)
-                hdr.setdefault("ny", side)
+                hdr.setdefault("nx", side); hdr.setdefault("ny", side)
                 hdr.setdefault("binning", 2 if side == 256 else 1)
                 return img, hdr
     raise ValueError(
-        f"Cannot parse {path.name}: {len(raw)} bytes does not match any known "
-        f"WindCube image size (256×256 or 512×512 with/without 1024-byte header)."
+        f"Cannot parse {path.name}: {len(raw)} bytes does not match "
+        "256×256 or 512×512 (with/without 1024-byte header)."
     )
 
 
 def _make_synthetic_cal(binning: int = 2, rng_seed: int = 42) -> Tuple[np.ndarray, dict]:
-    """Generate a synthetic neon calibration image using M01 parameters."""
-    rng = np.random.default_rng(rng_seed)
+    """Two-line synthetic neon calibration image."""
+    rng  = np.random.default_rng(rng_seed)
     side = 256 if binning == 2 else 512
     alpha = PLATE_SCALE_RPX if binning == 2 else PLATE_SCALE_RPX / 2
-    r_max = R_MAX_PX if binning == 2 else R_MAX_PX * 2
+    r_max = float(R_MAX_PX if binning == 2 else R_MAX_PX * 2)
 
     cx = cy = side / 2.0
     y_idx, x_idx = np.mgrid[0:side, 0:side]
     r_px = np.sqrt((x_idx - cx)**2 + (y_idx - cy)**2).astype(np.float32)
 
-    # Build 1D model then broadcast to 2D
-    r1d = np.linspace(0, r_max, 2000)
-    params = dict(
-        t=D_25C_MM, R_refl=0.53, alpha=alpha, n=1.0,
-        r_max=float(r_max), I0=1000.0, I1=-0.1, I2=0.005,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-    )
-    signal1d = airy_modified(r1d, NE_WAVELENGTH_1_M, **params) + 300.0
+    r1d = np.linspace(0, r_max, 3000)
+    kw = dict(t=D_25C_MM, R_refl=0.53, alpha=alpha, n=1.0, r_max=r_max,
+              I0=1000.0, I1=-0.1, I2=0.005, sigma0=0.5, sigma1=0.0, sigma2=0.0)
+    sig_a = airy_modified(r1d, NE_WAVELENGTH_1_M, **kw)            # bright line
+    sig_b = airy_modified(r1d, NE_WAVELENGTH_2_M, **kw) * NE_INTENSITY_2  # dim line
+    signal1d = sig_a + sig_b + 300.0
     signal2d = np.interp(r_px, r1d, signal1d)
-    # Poisson noise + read noise
+
     noisy = rng.poisson(np.maximum(signal2d, 1)).astype(np.float32)
     noisy += rng.normal(0, 5, size=noisy.shape).astype(np.float32)
     noisy = np.clip(noisy, 0, 65535).astype(np.float32)
-
     hdr = {"binning": binning, "nx": side, "ny": side,
            "info_type": "Cal_SYNTHETIC", "exposure_ms": 120000,
            "etalon_temps": [0.0, 0.0, 0.0, 0.0]}
@@ -221,11 +214,10 @@ def _make_synthetic_cal(binning: int = 2, rng_seed: int = 42) -> Tuple[np.ndarra
 
 
 def _make_synthetic_dark(shape: Tuple[int,int]) -> np.ndarray:
-    """Generate a synthetic dark frame (bias + small thermal noise)."""
     rng = np.random.default_rng(99)
-    dark = np.full(shape, 300.0, dtype=np.float32)
-    dark += rng.normal(0, 3, size=shape).astype(np.float32)
-    return np.clip(dark, 0, 65535).astype(np.float32)
+    d = np.full(shape, 300.0, dtype=np.float32)
+    d += rng.normal(0, 3, size=shape).astype(np.float32)
+    return np.clip(d, 0, 65535).astype(np.float32)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -233,50 +225,28 @@ def _make_synthetic_dark(shape: Tuple[int,int]) -> np.ndarray:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _find_centre(image: np.ndarray) -> Tuple[float, float]:
-    """
-    Estimate fringe centre by thresholding bright rings and fitting circles.
-    Returns (cx, cy) in pixel coordinates.
-    Falls back to geometric centre if fitting fails.
-    """
     ny, nx = image.shape
-    cx_fallback, cy_fallback = nx / 2.0, ny / 2.0
-
+    cx0, cy0 = nx / 2.0, ny / 2.0
     try:
-        # Threshold at 80th percentile to isolate bright fringes
-        thresh = np.percentile(image, 80)
-        mask = image > thresh
-
-        # Label connected regions
-        labeled, n_labels = ndimage.label(mask)
-        if n_labels < 3:
-            return cx_fallback, cy_fallback
-
-        # Compute centroid of each region
-        centroids = ndimage.center_of_mass(image, labeled, range(1, n_labels + 1))
-        # Keep only roughly circular regions near image centre
-        cx_est, cy_est = cx_fallback, cy_fallback
-        ring_centres = []
-        for (cy_r, cx_r) in centroids:
-            region = labeled == (centroids.index((cy_r, cx_r)) + 1)
-            pixels = np.argwhere(region)
-            if len(pixels) < 20:
-                continue
-            # Radius estimate from area
-            r_est = np.sqrt(len(pixels) / np.pi)
-            if r_est < 5:
-                continue
-            ring_centres.append((cx_r, cy_r))
-
-        if len(ring_centres) < 2:
-            return cx_fallback, cy_fallback
-
-        # Iterative median centre from ring centroids
-        xs = np.array([c[0] for c in ring_centres])
-        ys = np.array([c[1] for c in ring_centres])
-        return float(np.median(xs)), float(np.median(ys))
-
+        thresh   = np.percentile(image, 80)
+        mask     = image > thresh
+        labeled, n = ndimage.label(mask)
+        if n < 3:
+            return cx0, cy0
+        props = ndimage.center_of_mass(image, labeled, range(1, n + 1))
+        xs = [p[1] for p in props if p is not None]
+        ys = [p[0] for p in props if p is not None]
+        # Filter to regions within 30% of image half-diagonal from centre
+        half_diag = 0.3 * np.sqrt(nx**2 + ny**2) / 2
+        keep_x, keep_y = [], []
+        for x, y in zip(xs, ys):
+            if np.sqrt((x-cx0)**2 + (y-cy0)**2) < half_diag:
+                keep_x.append(x); keep_y.append(y)
+        if len(keep_x) < 2:
+            return cx0, cy0
+        return float(np.median(keep_x)), float(np.median(keep_y))
     except Exception:
-        return cx_fallback, cy_fallback
+        return cx0, cy0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -285,160 +255,247 @@ def _find_centre(image: np.ndarray) -> Tuple[float, float]:
 
 def _annular_reduce(image: np.ndarray, cx: float, cy: float,
                     r_max: float, n_bins: int = 500):
-    """
-    Sort pixels by radius from (cx,cy), bin into n_bins equal-pixel-count
-    annuli up to r_max.  Returns (r_grid, profile, sigma_profile).
-    """
     ny, nx = image.shape
     y_idx, x_idx = np.mgrid[0:ny, 0:nx]
     r_all = np.sqrt((x_idx - cx)**2 + (y_idx - cy)**2).ravel()
     v_all = image.ravel()
-
-    # Keep only pixels inside r_max
     inside = r_all <= r_max
-    r_in = r_all[inside]
-    v_in  = v_all[inside]
+    r_s = r_all[inside][np.argsort(r_all[inside])]
+    v_s = v_all[inside][np.argsort(r_all[inside])]
+    edges = np.linspace(0, len(r_s), n_bins + 1, dtype=int)
 
-    # Sort by radius
-    order = np.argsort(r_in)
-    r_sorted = r_in[order]
-    v_sorted = v_in[order]
-
-    # Split into n_bins equal-count bins
-    n_total = len(r_sorted)
-    bin_edges = np.linspace(0, n_total, n_bins + 1, dtype=int)
-
-    r_grid      = np.zeros(n_bins, dtype=np.float32)
-    profile     = np.zeros(n_bins, dtype=np.float32)
-    sigma_prof  = np.zeros(n_bins, dtype=np.float32)
-
+    r_grid     = np.zeros(n_bins, dtype=np.float32)
+    profile    = np.zeros(n_bins, dtype=np.float32)
+    sigma_prof = np.zeros(n_bins, dtype=np.float32)
     for i in range(n_bins):
-        lo, hi = bin_edges[i], bin_edges[i+1]
+        lo, hi = edges[i], edges[i+1]
         if hi <= lo:
             continue
-        chunk_r = r_sorted[lo:hi]
-        chunk_v = v_sorted[lo:hi]
-        r_grid[i]     = np.mean(chunk_r)
-        profile[i]    = np.mean(chunk_v)
-        std            = np.std(chunk_v, ddof=1) if (hi - lo) > 1 else np.nan
-        sigma_prof[i] = std / np.sqrt(hi - lo) if np.isfinite(std) else np.nan
+        cr, cv = r_s[lo:hi], v_s[lo:hi]
+        r_grid[i]    = np.mean(cr)
+        profile[i]   = np.mean(cv)
+        std = np.std(cv, ddof=1) if (hi-lo) > 1 else np.nan
+        sigma_prof[i] = std / np.sqrt(hi-lo) if np.isfinite(std) else np.nan
 
-    # Replace NaNs with a floor
-    floor = max(1.0, np.nanmedian(profile) * 0.005)
+    floor = max(1.0, float(np.nanmedian(profile)) * 0.005)
     sigma_prof = np.where(np.isfinite(sigma_prof), sigma_prof, floor)
     sigma_prof = np.maximum(sigma_prof, floor)
-
     return r_grid, profile, sigma_prof
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 4a — build TolanskyResult from the 1D profile
+# Step 4a — FULL TWO-LINE TOLANSKY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_tolansky_from_profile(r_grid: np.ndarray,
-                                  profile: np.ndarray,
-                                  binning: int) -> "TolanskyResult":
+def _two_line_tolansky(
+    r_grid: np.ndarray,
+    profile: np.ndarray,
+    binning: int,
+    d_prior: float = D_25C_MM,
+    lam_a: float   = NE_WAVELENGTH_1_M,   # 640.2248 nm  bright
+    lam_b: float   = NE_WAVELENGTH_2_M,   # 638.2991 nm  dim
+    intensity_ratio_b: float = NE_INTENSITY_2,
+) -> dict:
     """
-    Seed a TolanskyResult from the annular-reduced calibration profile.
+    Full two-line Tolansky analysis following the Z01a algorithm.
 
-    This is a single-line Tolansky: we find peak radii, fit P vs r² to get
-    the plate scale α from the slope, and compute ε₆₄₀ from D_25C_MM.
-
-    For a full two-line Tolansky (ε₆₄₀ and ε₆₃₈ separately), use the Z01a
-    interactive notebook.  The result here is sufficient to seed F01's
-    staged LM with a good α prior.
+    Returns a dict with keys:
+        epsilon_a, epsilon_b  — fractional fringe orders at lam_a, lam_b
+        alpha                 — plate scale, rad/px (from lam_a WLS slope)
+        d_recovered           — Benoit gap recovery, metres
+        N_delta               — integer order difference
+        r2_a, P_a             — ring data for lam_a family
+        r2_b, P_b             — ring data for lam_b family
+        slope_a, intercept_a  — WLS fit coefficients for lam_a
+        slope_b, intercept_b  — WLS fit coefficients for lam_b
+        n_peaks_a, n_peaks_b  — number of peaks found per family
+        warnings              — list of warning strings
     """
-    # Detect ring peaks (local maxima in the profile above median)
-    from scipy.signal import find_peaks
+    warnings_list: list[str] = []
 
-    median_val = np.median(profile)
-    min_sep = max(5, int(len(profile) / 20))
-    peaks_idx, _ = find_peaks(profile, height=median_val, distance=min_sep)
+    # ── 1. Adaptive peak finding ──────────────────────────────────────────────
+    # Minimum separation: ~half the expected ring spacing in r-space.
+    # For d ≈ 20 mm, α ≈ 1.6e-4 rad/px, FSR ≈ λ²/2d ≈ 10 pm.
+    # Ring spacing Δr ≈ sqrt(FSR / (α²·d)) ≈ 10–20 bins for 500-bin profile.
+    # Use adaptive floor: largest gap between consecutive profile maxima / 3.
+    min_sep = max(5, int(len(profile) / 25))
 
-    r_peaks = r_grid[peaks_idx]
-    r2_peaks = r_peaks ** 2
+    # Baseline-subtracted profile for peak finding
+    baseline = np.percentile(profile, 20)
+    prof_bs  = profile - baseline
 
-    # Integer orders: assign starting from order 1 at smallest radius
-    n_peaks = len(r_peaks)
-    if n_peaks < 2:
-        # Fall back to defaults
-        alpha = PLATE_SCALE_RPX if binning == 2 else PLATE_SCALE_RPX / 2
-    else:
-        P_int = np.arange(1, n_peaks + 1, dtype=float)
-        # WLS fit: P = (1/FSR_r2) * r² + ε  where FSR_r2 = λ/(2nd·α²)
-        # Equivalently: r² = (FSR_r2) * (P - ε)
-        # Simple linear: r² = slope * P + intercept
-        A = np.column_stack([P_int, np.ones(n_peaks)])
-        result = np.linalg.lstsq(A, r2_peaks, rcond=None)
-        slope, intercept = result[0]
-        # slope ≈ λ / (2nd·α²)  →  α = sqrt(λ / (2nd·slope))
-        alpha_sq = NE_WAVELENGTH_1_M / (2.0 * 1.0 * D_25C_MM * slope) if slope > 0 else 0
-        alpha = float(np.sqrt(max(alpha_sq, 0))) if alpha_sq > 0 else (
+    # Find peaks with adaptive distance; require height > 30% of peak range
+    pk_height = float(np.percentile(prof_bs, 85))
+    peak_idx, peak_props = find_peaks(
+        prof_bs,
+        height   = pk_height * 0.3,
+        distance = min_sep,
+    )
+
+    if len(peak_idx) < 4:
+        # Fall back to a lower threshold
+        peak_idx, peak_props = find_peaks(
+            prof_bs,
+            height   = float(np.percentile(prof_bs, 60)) * 0.3,
+            distance = max(3, min_sep // 2),
+        )
+        warnings_list.append(
+            f"Low peak count with primary threshold — relaxed to {len(peak_idx)} peaks"
+        )
+
+    if len(peak_idx) < 2:
+        warnings_list.append("FATAL: fewer than 2 peaks found; Tolansky cannot proceed")
+        alpha_fallback = PLATE_SCALE_RPX if binning == 2 else PLATE_SCALE_RPX / 2
+        return {
+            "epsilon_a": 0.0, "epsilon_b": 0.0, "alpha": alpha_fallback,
+            "d_recovered": d_prior, "N_delta": 0,
+            "r2_a": np.array([]), "P_a": np.array([]),
+            "r2_b": np.array([]), "P_b": np.array([]),
+            "slope_a": 0.0, "intercept_a": 0.0,
+            "slope_b": 0.0, "intercept_b": 0.0,
+            "n_peaks_a": 0, "n_peaks_b": 0,
+            "warnings": warnings_list,
+        }
+
+    peak_r   = r_grid[peak_idx]
+    peak_val = profile[peak_idx]   # raw profile amplitudes at peaks
+
+    # ── 2. Separate families by amplitude ────────────────────────────────────
+    # The 640.2248 nm line is stronger; 638.2991 nm has relative intensity ~0.8.
+    # Sort all peaks by amplitude and split at the median amplitude.
+    # This is the Z01a locked approach: bright half → family A (640 nm),
+    # dim half → family B (638 nm).
+    # When an odd number of peaks, the extra goes to family A.
+    n_peaks = len(peak_idx)
+    n_a = (n_peaks + 1) // 2   # larger half goes to bright family
+    n_b = n_peaks - n_a
+
+    amp_order = np.argsort(peak_val)[::-1]   # descending amplitude
+    idx_a = np.sort(amp_order[:n_a])         # bright peaks → 640 nm family
+    idx_b = np.sort(amp_order[n_a:])         # dim  peaks → 638 nm family
+
+    r_a  = peak_r[idx_a];   r2_a = r_a ** 2
+    r_b  = peak_r[idx_b];   r2_b = r_b ** 2
+
+    # ── 3. Assign integer orders P starting at 1 from innermost ring ─────────
+    P_a = np.arange(1, len(r_a) + 1, dtype=float)
+    P_b = np.arange(1, len(r_b) + 1, dtype=float)
+
+    # ── 4. WLS fit: r² = slope·P + intercept  for each family ────────────────
+    # Weights: uniform (each ring equally trusted)
+    def _wls_fit(P: np.ndarray, r2: np.ndarray):
+        if len(P) < 2:
+            return np.nan, np.nan, np.nan, np.nan
+        A  = np.column_stack([P, np.ones_like(P)])
+        ATA = A.T @ A
+        ATb = A.T @ r2
+        try:
+            coeffs = np.linalg.solve(ATA, ATb)
+        except np.linalg.LinAlgError:
+            coeffs = np.linalg.lstsq(A, r2, rcond=None)[0]
+        slope, intercept = float(coeffs[0]), float(coeffs[1])
+        # Residuals for quality estimate
+        resid = r2 - (slope * P + intercept)
+        rms = float(np.sqrt(np.mean(resid**2)))
+        return slope, intercept, rms, resid
+
+    slope_a, intercept_a, rms_a, resid_a = _wls_fit(P_a, r2_a)
+    slope_b, intercept_b, rms_b, resid_b = _wls_fit(P_b, r2_b)
+
+    # ── 5. Recover fractional orders ε ────────────────────────────────────────
+    # From the Tolansky equation:  r² = (λ / (2nd·α²)) · (P − ε)
+    # Therefore:  ε = −intercept / slope
+    epsilon_a = float(-intercept_a / slope_a) if (slope_a and np.isfinite(slope_a) and abs(slope_a) > 1e-6) else 0.0
+    epsilon_b = float(-intercept_b / slope_b) if (slope_b and np.isfinite(slope_b) and abs(slope_b) > 1e-6) else 0.0
+
+    # Keep ε in (0, 1) — Tolansky fractional orders are defined mod 1
+    epsilon_a = epsilon_a % 1.0
+    epsilon_b = epsilon_b % 1.0
+
+    # ── 6. Plate scale α from lam_a slope ─────────────────────────────────────
+    # slope = λ_a / (2·n·d·α²)  →  α = sqrt(λ_a / (2·n·d·slope))
+    if np.isfinite(slope_a) and slope_a > 0:
+        alpha_sq = lam_a / (2.0 * 1.0 * d_prior * slope_a)
+        alpha    = float(np.sqrt(alpha_sq)) if alpha_sq > 0 else (
             PLATE_SCALE_RPX if binning == 2 else PLATE_SCALE_RPX / 2
         )
-
-    # Compute ε₆₄₀ from authoritative D_25C_MM:
-    # N_int = round(2nd / λ);  ε = (2nd/λ) - N_int
-    frac_order = (2.0 * 1.0 * D_25C_MM) / NE_WAVELENGTH_1_M
-    N_int = round(frac_order)
-    epsilon_640 = frac_order - N_int
-
-    # epsilon_cal at OI 630 nm (extrapolated; Z01a gives this more precisely)
-    frac_oi = (2.0 * 1.0 * D_25C_MM) / 629.95e-9
-    N_oi    = round(frac_oi)
-    epsilon_cal = frac_oi - N_oi
-
-    if _F01_AVAILABLE:
-        return TolanskyResult(
-            t_m          = float(D_25C_MM),
-            alpha_rpx    = float(alpha),
-            epsilon_640  = float(epsilon_640),
-            epsilon_638  = 0.0,          # not available from single-line
-            epsilon_cal  = float(epsilon_cal),
-        )
     else:
-        # Return a plain namespace so the rest of the script can still run
-        from types import SimpleNamespace
-        return SimpleNamespace(
-            t_m=D_25C_MM, alpha_rpx=alpha,
-            epsilon_640=epsilon_640, epsilon_638=0.0, epsilon_cal=epsilon_cal,
+        alpha = PLATE_SCALE_RPX if binning == 2 else PLATE_SCALE_RPX / 2
+        warnings_list.append("α fell back to default: slope_a not positive")
+
+    # ── 7. Benoit gap recovery (Vaughan Eq. 3.97) ────────────────────────────
+    # N_Δ = round(2·d₀ · (1/λ_a − 1/λ_b))
+    N_delta = int(round(2.0 * d_prior * (1.0 / lam_a - 1.0 / lam_b)))
+
+    # d = (N_Δ + ε_a − ε_b) · λ_a·λ_b / [2·(λ_b − λ_a)]
+    numerator   = (N_delta + epsilon_a - epsilon_b) * lam_a * lam_b
+    denominator = 2.0 * (lam_b - lam_a)
+    if abs(denominator) > 0:
+        d_recovered = float(numerator / denominator)
+    else:
+        d_recovered = d_prior
+        warnings_list.append("Benoit denominator near zero — using prior gap")
+
+    # Sanity check: recovered d should be within ±5 µm of prior
+    if abs(d_recovered - d_prior) > 5e-6:
+        warnings_list.append(
+            f"Recovered d={d_recovered*1e3:.6f} mm deviates >5 µm from prior "
+            f"{d_prior*1e3:.6f} mm — check family separation"
         )
 
+    return {
+        "epsilon_a":   epsilon_a,
+        "epsilon_b":   epsilon_b,
+        "alpha":       alpha,
+        "d_recovered": d_recovered,
+        "N_delta":     N_delta,
+        "r2_a": r2_a, "P_a": P_a,
+        "r2_b": r2_b, "P_b": P_b,
+        "slope_a":     slope_a,    "intercept_a": intercept_a,
+        "slope_b":     slope_b,    "intercept_b": intercept_b,
+        "n_peaks_a":   len(r_a),   "n_peaks_b":   len(r_b),
+        "rms_a":       rms_a,      "rms_b":       rms_b,
+        "peak_r":      peak_r,     "peak_val":    peak_val,
+        "idx_a":       idx_a,      "idx_b":       idx_b,
+        "warnings":    warnings_list,
+    }
+
+
+def _build_tolansky_result(tol: dict, binning: int) -> object:
+    """Wrap the Tolansky dict into a TolanskyResult (or SimpleNamespace fallback)."""
+    # epsilon_cal at OI 629.95 nm (inversion rest wavelength)
+    frac_oi = (2.0 * 1.0 * tol["d_recovered"]) / 629.95e-9
+    epsilon_cal = frac_oi % 1.0
+
+    kwargs = dict(
+        t_m         = float(tol["d_recovered"]),
+        alpha_rpx   = float(tol["alpha"]),
+        epsilon_640 = float(tol["epsilon_a"]),
+        epsilon_638 = float(tol["epsilon_b"]),
+        epsilon_cal = float(epsilon_cal),
+    )
+    if _F01_AVAILABLE:
+        return TolanskyResult(**kwargs)
+    else:
+        return SimpleNamespace(**kwargs)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Plotting helpers
+# Plotting
 # ═══════════════════════════════════════════════════════════════════════════════
-
-_NAVY  = "#003479"
-_BLUE  = "#0057C2"
-_TEAL  = "#008080"
-_AMBER = "#C07000"
-_RED   = "#C02020"
-_LGRAY = "#D0D8E8"
 
 def _fig_style():
     plt.rcParams.update({
-        "figure.facecolor":  _NAVY,
-        "axes.facecolor":    "#001A40",
-        "axes.edgecolor":    _LGRAY,
-        "axes.labelcolor":   _LGRAY,
-        "xtick.color":       _LGRAY,
-        "ytick.color":       _LGRAY,
-        "text.color":        _LGRAY,
-        "grid.color":        "#1A3060",
-        "grid.linewidth":    0.5,
-        "font.family":       "DejaVu Sans",
-        "font.size":         9,
-        "axes.titlesize":    10,
-        "axes.titleweight":  "bold",
+        "figure.facecolor": _NAVY, "axes.facecolor": "#001A40",
+        "axes.edgecolor": _LGRAY, "axes.labelcolor": _LGRAY,
+        "xtick.color": _LGRAY, "ytick.color": _LGRAY,
+        "text.color": _LGRAY, "grid.color": "#1A3060",
+        "grid.linewidth": 0.5, "font.family": "DejaVu Sans",
+        "font.size": 9, "axes.titlesize": 10, "axes.titleweight": "bold",
     })
 
 
-def _panel_title(ax, txt):
-    ax.set_title(txt, color="white", pad=6)
-
-
-def _colorbar(fig, im, ax, label="counts"):
+def _cb(fig, im, ax, label="ADU"):
     cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cb.ax.yaxis.set_tick_params(color=_LGRAY)
     cb.outline.set_edgecolor(_LGRAY)
@@ -446,226 +503,278 @@ def _colorbar(fig, im, ax, label="counts"):
     cb.set_label(label, color=_LGRAY)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main diagnostic figure
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def _make_figure(cal_raw, dark_img, cal_sub, cx, cy,
                  r_grid, profile, sigma_prof,
-                 tolansky, cal_result, binning, hdr):
+                 tol_dict, tolansky, cal_result,
+                 binning, hdr):
     _fig_style()
-
-    fig = plt.figure(figsize=(18, 14), facecolor=_NAVY)
+    fig = plt.figure(figsize=(20, 22), facecolor=_NAVY)
     fig.suptitle(
-        "F01 — Full Airy Fit to Neon Calibration Image\n"
-        f"WindCube FPI Pipeline  ·  NCAR/HAO  ·  Binning: {binning}×{binning}  ·  "
-        f"Source: {hdr.get('info_type','unknown')}",
-        color="white", fontsize=13, fontweight="bold", y=0.98
+        "F01 — Full Airy Fit to Neon Calibration Image  |  WindCube FPI  ·  NCAR/HAO\n"
+        f"Source: {hdr.get('info_type','?')}   "
+        f"Binning: {binning}×{binning}   "
+        f"Exposure: {hdr.get('exposure_ms','?')} ms   "
+        f"Etalon temps: {hdr.get('etalon_temps',[])} °C",
+        color="white", fontsize=12, fontweight="bold", y=0.995,
     )
 
-    gs = gridspec.GridSpec(3, 2, figure=fig,
+    gs = gridspec.GridSpec(4, 2, figure=fig,
                            left=0.06, right=0.97,
-                           top=0.93, bottom=0.05,
-                           hspace=0.38, wspace=0.32)
+                           top=0.965, bottom=0.04,
+                           hspace=0.42, wspace=0.30)
 
-    side = cal_raw.shape[0]
-    r_max = R_MAX_PX if binning == 2 else R_MAX_PX * 2
+    side  = cal_raw.shape[0]
+    r_max = float(R_MAX_PX if binning == 2 else R_MAX_PX * 2)
 
-    # ── Panel [0,0] Raw calibration image ────────────────────────────────────
-    ax00 = fig.add_subplot(gs[0, 0])
-    vmin = np.percentile(cal_raw, 1)
-    vmax = np.percentile(cal_raw, 99.5)
-    im = ax00.imshow(cal_raw, cmap="inferno", origin="lower",
-                     norm=LogNorm(vmin=max(vmin, 1), vmax=vmax))
-    _panel_title(ax00, "Step 1 — Raw Calibration Image (log stretch)")
-    ax00.set_xlabel("x (px)"); ax00.set_ylabel("y (px)")
-    _colorbar(fig, im, ax00, "ADU")
-    # Mark image centre region
-    circle_outer = Circle((cx, cy), r_max, color=_TEAL, fill=False, lw=1.2, ls="--")
-    ax00.add_patch(circle_outer)
-    ax00.plot(cx, cy, "+", color=_TEAL, ms=10, mew=1.5)
+    # ── [0,0]  Raw calibration image ─────────────────────────────────────────
+    ax = fig.add_subplot(gs[0, 0])
+    v1 = max(np.percentile(cal_raw, 1), 1)
+    v2 = np.percentile(cal_raw, 99.5)
+    im = ax.imshow(cal_raw, cmap="inferno", origin="lower",
+                   norm=LogNorm(vmin=v1, vmax=v2))
+    ax.set_title("Step 1 — Raw Calibration Image (log)", color="white", pad=5)
+    ax.set_xlabel("x (px)"); ax.set_ylabel("y (px)")
+    _cb(fig, im, ax)
+    ax.add_patch(Circle((cx, cy), r_max, color=_TEAL, fill=False, lw=1.2, ls="--"))
+    ax.plot(cx, cy, "+", color=_TEAL, ms=10, mew=1.5)
 
-    # ── Panel [0,1] Dark-subtracted image ────────────────────────────────────
-    ax01 = fig.add_subplot(gs[0, 1])
-    vmin2 = max(np.percentile(cal_sub, 0.5), 1)
-    vmax2 = np.percentile(cal_sub, 99.8)
-    im2 = ax01.imshow(cal_sub, cmap="inferno", origin="lower",
-                      vmin=vmin2, vmax=vmax2)
-    _panel_title(ax01, "Step 2 — Dark-Subtracted Image (linear stretch)")
-    ax01.set_xlabel("x (px)"); ax01.set_ylabel("y (px)")
-    _colorbar(fig, im2, ax01, "ADU")
+    # ── [0,1]  Dark-subtracted image ─────────────────────────────────────────
+    ax = fig.add_subplot(gs[0, 1])
+    v1 = max(np.percentile(cal_sub, 0.5), 1)
+    v2 = np.percentile(cal_sub, 99.8)
+    im2 = ax.imshow(cal_sub, cmap="inferno", origin="lower", vmin=v1, vmax=v2)
+    ax.set_title("Step 2 — Dark-Subtracted Image (linear)", color="white", pad=5)
+    ax.set_xlabel("x (px)"); ax.set_ylabel("y (px)")
+    _cb(fig, im2, ax)
 
-    # ── Panel [1,0] Centre overlay ────────────────────────────────────────────
-    ax10 = fig.add_subplot(gs[1, 0])
-    ax10.imshow(cal_sub, cmap="gray", origin="lower",
-                vmin=np.percentile(cal_sub, 5),
-                vmax=np.percentile(cal_sub, 99))
-    _panel_title(ax10, "Step 2 — Fringe Centre Detection")
-    ax10.set_xlabel("x (px)"); ax10.set_ylabel("y (px)")
-    # Draw concentric ring guides at r = 30, 60, 90, 110 px (scaled for binning)
+    # ── [1,0]  Centre detection ───────────────────────────────────────────────
+    ax = fig.add_subplot(gs[1, 0])
+    ax.imshow(cal_sub, cmap="gray", origin="lower",
+              vmin=np.percentile(cal_sub, 5),
+              vmax=np.percentile(cal_sub, 99))
+    ax.set_title("Step 2 — Fringe Centre Detection", color="white", pad=5)
+    ax.set_xlabel("x (px)"); ax.set_ylabel("y (px)")
     scale = 1 if binning == 2 else 2
-    for r_guide in [30*scale, 60*scale, 90*scale, int(r_max)]:
-        c = Circle((cx, cy), r_guide, color=_BLUE, fill=False,
-                   lw=0.8, alpha=0.6)
-        ax10.add_patch(c)
-    ax10.plot(cx, cy, "x", color="red", ms=12, mew=2,
-              label=f"Centre ({cx:.1f}, {cy:.1f})")
-    ax10.legend(fontsize=8, loc="upper right",
-                facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
+    for r_g in [int(30*scale), int(60*scale), int(90*scale), int(r_max)]:
+        ax.add_patch(Circle((cx, cy), r_g, color=_BLUE, fill=False, lw=0.8, alpha=0.6))
+    ax.plot(cx, cy, "x", color="red", ms=12, mew=2,
+            label=f"Centre ({cx:.1f}, {cy:.1f})")
+    ax.legend(fontsize=8, loc="upper right",
+              facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
 
-    # ── Panel [1,1] Annular profile + Tolansky peaks ──────────────────────────
-    ax11 = fig.add_subplot(gs[1, 1])
-    ax11.plot(r_grid, profile, color=_BLUE, lw=1.2, label="Annular profile")
-    ax11.fill_between(r_grid,
-                       profile - sigma_prof,
-                       profile + sigma_prof,
-                       color=_BLUE, alpha=0.25)
-    ax11.set_xlabel("Radius r (px)")
-    ax11.set_ylabel("Mean counts (ADU)")
-    _panel_title(ax11, "Step 3 — 1D Annular-Reduced Fringe Profile")
-    ax11.grid(True)
+    # ── [1,1]  Annular profile with peak family annotations ──────────────────
+    ax = fig.add_subplot(gs[1, 1])
+    ax.plot(r_grid, profile, color=_LGRAY, lw=1.0, alpha=0.7, label="Profile")
+    ax.fill_between(r_grid, profile - sigma_prof, profile + sigma_prof,
+                    color=_LGRAY, alpha=0.12)
 
-    # Mark Tolansky alpha info
-    ax11.text(0.97, 0.97,
-              f"α = {tolansky.alpha_rpx:.4e} rad/px\n"
-              f"ε₆₄₀ = {tolansky.epsilon_640:.4f}\n"
-              f"d = {tolansky.t_m*1e3:.4f} mm",
-              transform=ax11.transAxes,
-              ha="right", va="top", fontsize=8,
-              color=_AMBER,
-              bbox=dict(boxstyle="round,pad=0.4", facecolor="#001A40",
-                        edgecolor=_AMBER, alpha=0.9))
-    ax11.legend(fontsize=8, loc="upper left",
-                facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
+    if tol_dict and "peak_r" in tol_dict and len(tol_dict["peak_r"]) > 0:
+        pr   = tol_dict["peak_r"]
+        pv   = tol_dict["peak_val"]
+        ia   = tol_dict["idx_a"]
+        ib   = tol_dict["idx_b"]
+        # Family A — bright (640 nm)
+        ax.scatter(pr[ia], pv[ia], s=55, marker="o", color=_AMBER, zorder=5,
+                   label="640.2248 nm family (bright)")
+        # Family B — dim (638 nm)
+        ax.scatter(pr[ib], pv[ib], s=40, marker="s", color=_BLUE, zorder=5,
+                   label="638.2991 nm family (dim)")
+        # Label P orders for family A
+        for k, (r_k, v_k, p_k) in enumerate(zip(pr[ia], pv[ia], tol_dict["P_a"])):
+            ax.annotate(f"P={int(p_k)}", (r_k, v_k),
+                        textcoords="offset points", xytext=(0, 6),
+                        fontsize=6.5, color=_AMBER, ha="center")
 
-    # ── Panel [2,0] F01 fit vs data + residuals ───────────────────────────────
-    ax20 = fig.add_subplot(gs[2, 0])
+    ax.set_xlabel("Radius r (px)"); ax.set_ylabel("Mean counts (ADU)")
+    ax.set_title("Step 3 — Annular Profile + Tolansky Peak Families", color="white", pad=5)
+    ax.grid(True)
+    ax.legend(fontsize=8, loc="upper right",
+              facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
+
+    # ── [2,0]  Tolansky P vs r² WLS fits ─────────────────────────────────────
+    ax = fig.add_subplot(gs[2, 0])
+    ax.set_title("Step 4a — Tolansky P vs r²  (two-line WLS)", color="white", pad=5)
+    ax.set_xlabel("r²_fit  (px²)"); ax.set_ylabel("Ring order  P")
+    ax.grid(True)
+
+    if tol_dict and len(tol_dict["r2_a"]) >= 2:
+        r2_a = tol_dict["r2_a"]; P_a = tol_dict["P_a"]
+        r2_b = tol_dict["r2_b"]; P_b = tol_dict["P_b"]
+        sa   = tol_dict["slope_a"]; ia_ = tol_dict["intercept_a"]
+        sb   = tol_dict["slope_b"]; ib_ = tol_dict["intercept_b"]
+        eps_a = tol_dict["epsilon_a"]; eps_b = tol_dict["epsilon_b"]
+
+        # Data points
+        ax.scatter(r2_a, P_a, s=60, marker="o", color=_AMBER, zorder=5,
+                   label=f"640.2248 nm  ε = {eps_a:.4f}")
+        ax.scatter(r2_b, P_b, s=50, marker="s", color=_BLUE, zorder=5,
+                   label=f"638.2991 nm  ε = {eps_b:.4f}")
+
+        # Fit lines
+        all_r2 = np.concatenate([r2_a, r2_b])
+        r2_line = np.linspace(0, all_r2.max() * 1.05, 200)
+        ax.plot(r2_line, sa * r2_line + ia_, color=_AMBER, lw=1.5, ls="--", alpha=0.8)
+        ax.plot(r2_line, sb * r2_line + ib_, color=_BLUE,  lw=1.5, ls="--", alpha=0.8)
+
+        ax.legend(fontsize=8.5, loc="upper left",
+                  facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
+    else:
+        ax.text(0.5, 0.5, "Insufficient peaks for WLS fit",
+                transform=ax.transAxes, ha="center", va="center",
+                color=_AMBER, fontsize=11)
+
+    # ── [2,1]  Benoit recovery + Tolansky summary ─────────────────────────────
+    ax = fig.add_subplot(gs[2, 1])
+    ax.axis("off")
+    ax.set_title("Step 4a — Tolansky / Benoit Summary", color="white", pad=5)
+
+    if tol_dict:
+        d_rec   = tol_dict["d_recovered"]
+        N_delta = tol_dict["N_delta"]
+        eps_a   = tol_dict["epsilon_a"]
+        eps_b   = tol_dict["epsilon_b"]
+        alpha   = tol_dict["alpha"]
+        na      = tol_dict["n_peaks_a"]
+        nb      = tol_dict["n_peaks_b"]
+
+        lines = [
+            ("Two-Line Tolansky Results", "", "header"),
+            ("─"*28, "", "rule"),
+            ("λ_a  (640.2248 nm)",      f"ε_a  = {eps_a:.5f}", "data"),
+            ("λ_b  (638.2991 nm)",      f"ε_b  = {eps_b:.5f}", "data"),
+            ("N_Δ  (integer diff)",     f"{N_delta}", "data"),
+            ("─"*28, "", "rule"),
+            ("Benoit  d  =", "", "subhead"),
+            ("  (N_Δ + ε_a − ε_b)·λ_a·λ_b", "", "formula"),
+            ("  ─────────────────────────", "", "formula"),
+            ("      2·(λ_b − λ_a)", "", "formula"),
+            ("─"*28, "", "rule"),
+            ("d  recovered",            f"{d_rec*1e3:.6f} mm", "result"),
+            ("d  prior (ICOS)",         f"{D_25C_MM*1e3:.6f} mm", "data"),
+            ("Δd  (rec − prior)",       f"{(d_rec-D_25C_MM)*1e6:+.1f} nm", "data"),
+            ("─"*28, "", "rule"),
+            ("α  (from λ_a slope)",     f"{alpha:.5e} rad/px", "result"),
+            ("α  prior (Tolansky)",     f"{PLATE_SCALE_RPX:.5e} rad/px", "data"),
+            ("─"*28, "", "rule"),
+            (f"Peaks: λ_a={na}  λ_b={nb}", "", "data"),
+        ]
+        if tol_dict["warnings"]:
+            lines.append(("─"*28, "", "rule"))
+            for w in tol_dict["warnings"]:
+                lines.append((f"⚠ {w[:45]}", "", "warn"))
+
+        y0 = 0.97; dy = 0.047
+        for i, (left, right, style) in enumerate(lines):
+            y = y0 - i * dy
+            col = {"header": "white", "rule": "#3050A0", "subhead": _AMBER,
+                   "formula": "#90AACC", "result": _GREEN,
+                   "data": _LGRAY, "warn": _RED}.get(style, _LGRAY)
+            fw  = "bold" if style in ("header", "subhead", "result") else "normal"
+            ax.text(0.02, y, left,  transform=ax.transAxes,
+                    ha="left", va="top", fontsize=8.3,
+                    color=col, fontweight=fw, fontfamily="monospace")
+            if right:
+                ax.text(0.60, y, right, transform=ax.transAxes,
+                        ha="left", va="top", fontsize=8.3,
+                        color=col, fontweight=fw, fontfamily="monospace")
+
+    # ── [3,0]  F01 fit vs data + residuals ───────────────────────────────────
+    ax = fig.add_subplot(gs[3, 0])
+    ax.set_xlabel("Radius r (px)"); ax.set_ylabel("Counts (ADU)")
+    ax.grid(True)
 
     if cal_result is not None and _F01_AVAILABLE:
-        # Evaluate best-fit model on fine grid
         r_fine = np.linspace(r_grid[0], r_grid[-1], 1000)
         model_fine = airy_modified(
             r_fine, NE_WAVELENGTH_1_M,
             t=cal_result.t_m, R_refl=cal_result.R_refl,
-            alpha=cal_result.alpha, n=1.0,
-            r_max=float(r_max),
+            alpha=cal_result.alpha, n=1.0, r_max=r_max,
             I0=cal_result.I0, I1=cal_result.I1, I2=cal_result.I2,
             sigma0=cal_result.sigma0, sigma1=cal_result.sigma1,
             sigma2=cal_result.sigma2,
         ) + cal_result.B
 
-        ax20.plot(r_grid, profile, color=_LGRAY, lw=1.0, alpha=0.7,
-                  label="Data")
-        ax20.fill_between(r_grid, profile - sigma_prof, profile + sigma_prof,
-                           color=_LGRAY, alpha=0.15)
-        ax20.plot(r_fine, model_fine, color=_AMBER, lw=1.8,
-                  label=f"F01 fit  (χ²_red = {cal_result.chi2_reduced:.3f})")
+        ax.plot(r_grid, profile, color=_LGRAY, lw=1.0, alpha=0.7, label="Data")
+        ax.fill_between(r_grid, profile-sigma_prof, profile+sigma_prof,
+                        color=_LGRAY, alpha=0.12)
+        ax.plot(r_fine, model_fine, color=_AMBER, lw=2.0,
+                label=f"F01 fit  χ²_red = {cal_result.chi2_reduced:.3f}")
 
-        # Inset residuals as a secondary axis
-        model_at_bins = np.interp(r_grid, r_fine, model_fine)
-        residuals = (profile - model_at_bins) / sigma_prof
-        ax20_r = ax20.twinx()
-        ax20_r.plot(r_grid, residuals, color=_RED, lw=0.7, alpha=0.6)
-        ax20_r.axhline(0, color=_RED, lw=0.8, ls="--", alpha=0.5)
-        ax20_r.set_ylabel("Residual (σ)", color=_RED, fontsize=8)
-        ax20_r.tick_params(axis="y", colors=_RED)
-        ax20_r.set_ylim(-6, 6)
+        ax_r = ax.twinx()
+        model_bins = np.interp(r_grid, r_fine, model_fine)
+        resid = (profile - model_bins) / sigma_prof
+        ax_r.plot(r_grid, resid, color=_RED, lw=0.7, alpha=0.5)
+        ax_r.axhline(0, color=_RED, lw=0.8, ls="--", alpha=0.4)
+        ax_r.set_ylabel("Residual (σ)", color=_RED, fontsize=8)
+        ax_r.tick_params(axis="y", colors=_RED); ax_r.set_ylim(-6, 6)
 
-        ax20.legend(fontsize=8, loc="upper right",
-                    facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
+        ax.legend(fontsize=8, loc="upper right",
+                  facecolor="#001A40", edgecolor=_LGRAY, labelcolor=_LGRAY)
         converge_str = "✓ Converged" if cal_result.converged else "✗ Did not converge"
-        ax20.set_title(f"Step 4b — F01 Airy Fit  |  {converge_str}",
-                       color="white", pad=6, fontsize=10, fontweight="bold")
+        ax.set_title(f"Step 4b — F01 Staged Airy Fit  |  {converge_str}",
+                     color="white", pad=5)
     else:
-        ax20.plot(r_grid, profile, color=_BLUE, lw=1.2)
-        _panel_title(ax20, "Step 4b — F01 Fit (module not available)")
-        ax20.text(0.5, 0.5, "F01 module not imported\nProfile shown only",
-                  transform=ax20.transAxes, ha="center", va="center",
-                  color=_AMBER, fontsize=11)
+        ax.plot(r_grid, profile, color=_BLUE, lw=1.2)
+        ax.set_title("Step 4b — F01 Fit (module not available)", color="white", pad=5)
+        ax.text(0.5, 0.5, "Install F01 module to enable full fit",
+                transform=ax.transAxes, ha="center", va="center",
+                color=_AMBER, fontsize=11)
 
-    ax20.set_xlabel("Radius r (px)")
-    ax20.set_ylabel("Counts (ADU)")
-    ax20.grid(True)
-
-    # ── Panel [2,1] Fit parameter table ──────────────────────────────────────
-    ax21 = fig.add_subplot(gs[2, 1])
-    ax21.axis("off")
-    _panel_title(ax21, "Step 4b — CalibrationResult Summary")
+    # ── [3,1]  CalibrationResult table ───────────────────────────────────────
+    ax = fig.add_subplot(gs[3, 1])
+    ax.axis("off")
+    ax.set_title("Step 4b — CalibrationResult Summary", color="white", pad=5)
 
     if cal_result is not None:
         rows = [
-            ("Parameter", "Fitted value", "1σ", "Unit"),
-            ("─"*14, "─"*14, "─"*8, "─"*6),
-            ("d  (fixed)",    f"{cal_result.t_m*1e3:.6f}",
-             "(Tolansky)", "mm"),
-            ("R_refl",  f"{cal_result.R_refl:.5f}",
-             f"±{cal_result.sigma_R_refl:.5f}", "—"),
-            ("α",       f"{cal_result.alpha:.5e}",
-             f"±{cal_result.sigma_alpha:.2e}", "rad/px"),
-            ("I₀",      f"{cal_result.I0:.1f}",
-             f"±{cal_result.sigma_I0:.1f}", "ADU"),
-            ("I₁",      f"{cal_result.I1:.4f}",
-             f"±{cal_result.sigma_I1:.4f}", "—"),
-            ("I₂",      f"{cal_result.I2:.4f}",
-             f"±{cal_result.sigma_I2:.4f}", "—"),
-            ("σ₀",      f"{cal_result.sigma0:.4f}",
-             f"±{cal_result.sigma_sigma0:.4f}", "px"),
-            ("σ₁",      f"{cal_result.sigma1:.4f}",
-             f"±{cal_result.sigma_sigma1:.4f}", "px"),
-            ("σ₂",      f"{cal_result.sigma2:.4f}",
-             f"±{cal_result.sigma_sigma2:.4f}", "px"),
-            ("B",       f"{cal_result.B:.1f}",
-             f"±{cal_result.sigma_B:.2f}", "ADU"),
-            ("─"*14, "─"*14, "─"*8, "─"*6),
-            ("χ²_red",  f"{cal_result.chi2_reduced:.4f}", "", ""),
-            ("N bins",  f"{cal_result.n_bins_used}", "", ""),
-            ("Flags",
-             hex(cal_result.quality_flags),
-             "0x000=GOOD", ""),
+            ("Parameter",        "Fitted",                        "1σ",                           "Unit"),
+            ("─"*13,             "─"*13,                          "─"*9,                           "─"*5),
+            ("d  (fixed)",       f"{cal_result.t_m*1e3:.6f}",     "(Tolansky)",                    "mm"),
+            ("R_refl",           f"{cal_result.R_refl:.5f}",      f"±{cal_result.sigma_R_refl:.5f}", "—"),
+            ("α",                f"{cal_result.alpha:.4e}",        f"±{cal_result.sigma_alpha:.2e}", "rad/px"),
+            ("I₀",               f"{cal_result.I0:.1f}",           f"±{cal_result.sigma_I0:.1f}",   "ADU"),
+            ("I₁",               f"{cal_result.I1:.4f}",           f"±{cal_result.sigma_I1:.4f}",   "—"),
+            ("I₂",               f"{cal_result.I2:.4f}",           f"±{cal_result.sigma_I2:.4f}",   "—"),
+            ("σ₀",               f"{cal_result.sigma0:.4f}",       f"±{cal_result.sigma_sigma0:.4f}", "px"),
+            ("σ₁",               f"{cal_result.sigma1:.4f}",       f"±{cal_result.sigma_sigma1:.4f}", "px"),
+            ("σ₂",               f"{cal_result.sigma2:.4f}",       f"±{cal_result.sigma_sigma2:.4f}", "px"),
+            ("B",                f"{cal_result.B:.1f}",            f"±{cal_result.sigma_B:.2f}",    "ADU"),
+            ("─"*13,             "─"*13,                          "─"*9,                           "─"*5),
+            ("χ²_red",           f"{cal_result.chi2_reduced:.4f}", "",                             ""),
+            ("N bins",           f"{cal_result.n_bins_used}",      "",                             ""),
+            ("Flags",            hex(cal_result.quality_flags),    "0x000=GOOD",                    ""),
         ]
+        cx_ = [0.02, 0.36, 0.63, 0.88]
+        y0_ = 0.97; dy_ = 0.058
+        for ri, row in enumerate(rows):
+            y = y0_ - ri * dy_
+            is_header = (ri == 0); is_rule = row[0].startswith("─")
+            col = "white" if is_header else (_AMBER if is_rule else _LGRAY)
+            fw  = "bold" if is_header else "normal"
+            for ci, cell in enumerate(row):
+                ax.text(cx_[ci], y, cell, transform=ax.transAxes,
+                        ha="left", va="top", fontsize=8.2,
+                        color=col, fontweight=fw, fontfamily="monospace")
 
-        col_x = [0.02, 0.34, 0.62, 0.88]
-        header_y = 0.97
-        row_h    = 0.061
-
-        for row_i, row in enumerate(rows):
-            y = header_y - row_i * row_h
-            color = "white" if row_i == 0 else (
-                _AMBER if row[0].startswith("─") else _LGRAY
-            )
-            fw = "bold" if row_i == 0 else "normal"
-            for col_i, cell in enumerate(row):
-                ax21.text(col_x[col_i], y, cell,
-                          transform=ax21.transAxes,
-                          ha="left", va="top",
-                          fontsize=8.2, color=color, fontweight=fw,
-                          fontfamily="monospace")
-
-        # Flag annotation
+        # Flag decode
         flag_names = []
         f = cal_result.quality_flags
-        flag_map = {
-            0x001: "FIT_FAILED", 0x002: "CHI2_HIGH",
-            0x004: "CHI2_VERY_HIGH", 0x008: "CHI2_LOW",
-            0x010: "STDERR_NONE", 0x020: "R_AT_BOUND",
-            0x040: "ALPHA_AT_BOUND", 0x080: "FEW_BINS",
-        }
-        for bit, name in flag_map.items():
+        for bit, name in [(0x001,"FIT_FAILED"),(0x002,"CHI2_HIGH"),
+                          (0x004,"CHI2_VERY_HIGH"),(0x008,"CHI2_LOW"),
+                          (0x010,"STDERR_NONE"),(0x020,"R_AT_BOUND"),
+                          (0x040,"ALPHA_AT_BOUND"),(0x080,"FEW_BINS")]:
             if f & bit:
                 flag_names.append(name)
-        flag_str = ", ".join(flag_names) if flag_names else "GOOD"
-        ax21.text(0.02, header_y - len(rows) * row_h - 0.01,
-                  f"Quality: {flag_str}",
-                  transform=ax21.transAxes,
-                  ha="left", va="top",
-                  fontsize=8.5,
-                  color=_TEAL if not flag_names else _AMBER,
-                  fontweight="bold")
+        qstr = ", ".join(flag_names) if flag_names else "GOOD"
+        ax.text(0.02, y0_ - len(rows)*dy_ - 0.02,
+                f"Quality: {qstr}",
+                transform=ax.transAxes, ha="left", va="top",
+                fontsize=8.5, fontweight="bold",
+                color=_GREEN if not flag_names else _RED)
     else:
-        ax21.text(0.5, 0.5, "No CalibrationResult\n(F01 module not available)",
-                  transform=ax21.transAxes,
-                  ha="center", va="center",
-                  color=_AMBER, fontsize=11)
+        ax.text(0.5, 0.5, "F01 not run — no CalibrationResult",
+                transform=ax.transAxes, ha="center", va="center",
+                color=_AMBER, fontsize=11)
 
     return fig
 
@@ -675,120 +784,112 @@ def _make_figure(cal_raw, dark_img, cal_sub, cx, cy,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═"*60)
-    print("  F01 — Full Airy Fit to Neon Calibration Image")
-    print("  WindCube FPI Pipeline  |  NCAR/HAO")
-    print("  Steps 1–4 interactive validation")
-    print("═"*60)
+    print("\n" + "═"*64)
+    print("  F01  Full Airy Fit to Neon Calibration Image")
+    print("  WindCube FPI Pipeline  ·  NCAR/HAO  ·  Steps 1–4")
+    print("═"*64)
 
-    # ── File prompts ─────────────────────────────────────────────────────────
+    # ── Prompts ───────────────────────────────────────────────────────────────
     cal_path  = _prompt_file("CALIBRATION IMAGE (.bin)", "calibration")
     dark_path = _prompt_file("DARK IMAGE (.bin)", "dark")
 
-    # ── Step 1: Load images ───────────────────────────────────────────────────
+    # ── Step 1: Load ──────────────────────────────────────────────────────────
     print("\n[Step 1] Loading images...")
-
     if cal_path is not None:
         cal_raw, hdr = _load_bin(cal_path)
         binning = hdr.get("binning", 2)
         print(f"  Calibration: {cal_path.name}  "
-              f"({cal_raw.shape[0]}×{cal_raw.shape[1]}, "
-              f"binning={binning}×{binning})")
+              f"({cal_raw.shape[0]}×{cal_raw.shape[1]}, {binning}×{binning} bin)")
     else:
-        # Ask for binning preference
-        b_str = input("\n  Binning for synthetic image (1 or 2) [2]: ").strip()
+        b_str = input("\n  Binning for synthetic images (1 or 2) [2]: ").strip()
         binning = int(b_str) if b_str in ("1", "2") else 2
-        print(f"  Generating synthetic calibration ({binning}×{binning} binning)...")
+        print(f"  Generating synthetic two-line neon image ({binning}×{binning} binning)...")
         cal_raw, hdr = _make_synthetic_cal(binning=binning)
-        print(f"  Synthetic image shape: {cal_raw.shape}")
 
-    r_max = R_MAX_PX if binning == 2 else R_MAX_PX * 2
+    r_max = float(R_MAX_PX if binning == 2 else R_MAX_PX * 2)
 
     if dark_path is not None:
         dark_img, _ = _load_bin(dark_path)
-        print(f"  Dark:  {dark_path.name}  ({dark_img.shape[0]}×{dark_img.shape[1]})")
         if dark_img.shape != cal_raw.shape:
-            print(f"  [WARN] Dark shape {dark_img.shape} ≠ cal shape {cal_raw.shape}. "
-                  f"Using synthetic dark.")
+            print(f"  [WARN] Dark/cal shape mismatch — using synthetic dark.")
             dark_img = _make_synthetic_dark(cal_raw.shape)
+        else:
+            print(f"  Dark: {dark_path.name}  ({dark_img.shape[0]}×{dark_img.shape[1]})")
     else:
-        print("  Using synthetic dark frame (bias=300 ADU + σ=3 ADU read noise).")
+        print("  Using synthetic dark (bias=300 ADU, σ_read=3 ADU).")
         dark_img = _make_synthetic_dark(cal_raw.shape)
 
-    # ── Step 2: Dark subtract + find centre ──────────────────────────────────
-    print("\n[Step 2] Dark-subtracting and finding fringe centre...")
+    # ── Step 2: Dark subtract + centre ───────────────────────────────────────
+    print("\n[Step 2] Dark subtract + fringe centre...")
     cal_sub = np.clip(cal_raw - dark_img, 0, None).astype(np.float32)
-    cx, cy = _find_centre(cal_sub)
-    print(f"  Fringe centre: ({cx:.2f}, {cy:.2f}) px")
+    cx, cy  = _find_centre(cal_sub)
+    print(f"  Centre: ({cx:.2f}, {cy:.2f}) px")
 
     # ── Step 3: Annular reduction ─────────────────────────────────────────────
-    print("\n[Step 3] Annular reduction (500 equal-pixel bins)...")
+    print("\n[Step 3] Annular reduction (500 bins)...")
     r_grid, profile, sigma_prof = _annular_reduce(
-        cal_sub, cx, cy, r_max=r_max, n_bins=500
-    )
-    print(f"  Profile range: [{profile.min():.0f}, {profile.max():.0f}] ADU")
-    print(f"  Median σ per bin: {np.median(sigma_prof):.1f} ADU")
+        cal_sub, cx, cy, r_max=r_max, n_bins=500)
+    print(f"  Profile: [{profile.min():.0f}, {profile.max():.0f}] ADU  "
+          f"(median σ = {np.median(sigma_prof):.1f} ADU)")
 
-    # ── Step 4a: Build TolanskyResult ────────────────────────────────────────
-    print("\n[Step 4a] Building TolanskyResult from profile (single-line Tolansky)...")
-    tolansky = _build_tolansky_from_profile(r_grid, profile, binning)
-    print(f"  α  = {tolansky.alpha_rpx:.5e} rad/px")
-    print(f"  ε₆₄₀ = {tolansky.epsilon_640:.5f}")
-    print(f"  d  = {tolansky.t_m*1e3:.6f} mm  (fixed from D_25C_MM)")
+    # ── Step 4a: Two-line Tolansky ────────────────────────────────────────────
+    print("\n[Step 4a] Two-line Tolansky analysis (Benoit gap recovery)...")
+    tol_dict = _two_line_tolansky(r_grid, profile, binning)
+
+    print(f"  Peaks found: λ_a={tol_dict['n_peaks_a']}  λ_b={tol_dict['n_peaks_b']}")
+    print(f"  ε_640 = {tol_dict['epsilon_a']:.5f}   ε_638 = {tol_dict['epsilon_b']:.5f}")
+    print(f"  N_Δ   = {tol_dict['N_delta']}")
+    print(f"  d (Benoit) = {tol_dict['d_recovered']*1e3:.6f} mm   "
+          f"(prior = {D_25C_MM*1e3:.6f} mm, "
+          f"Δ = {(tol_dict['d_recovered']-D_25C_MM)*1e6:+.1f} nm)")
+    print(f"  α     = {tol_dict['alpha']:.5e} rad/px  "
+          f"(prior = {PLATE_SCALE_RPX:.5e})")
+    for w in tol_dict["warnings"]:
+        print(f"  [WARN] {w}")
+
+    tolansky = _build_tolansky_result(tol_dict, binning)
 
     # ── Step 4b: F01 staged LM fit ────────────────────────────────────────────
     cal_result = None
     if _F01_AVAILABLE:
-        print("\n[Step 4b] Running F01 staged Airy fit (A→B→C→D)...")
-        print("  This may take 10–30 seconds on a real image.\n")
+        print("\n[Step 4b] F01 staged Airy fit (A→B→C→D)...")
 
-        # Build a minimal FringeProfile-compatible object
-        from types import SimpleNamespace
         fringe_profile = SimpleNamespace(
             r_grid        = r_grid,
             r2_grid       = r_grid**2,
             profile       = profile,
             sigma_profile = sigma_prof,
             masked        = np.zeros(len(r_grid), dtype=bool),
-            r_max_px      = float(r_max),
+            r_max_px      = r_max,
             quality_flags = 0,
         )
-
         try:
             cal_result = fit_neon_fringe(fringe_profile, tolansky)
-            print(f"\n  ✓ Fit converged: {cal_result.converged}")
-            print(f"  χ²_red = {cal_result.chi2_reduced:.4f}")
+            print(f"  Converged: {cal_result.converged}   χ²_red = {cal_result.chi2_reduced:.4f}")
             print(f"  R_refl = {cal_result.R_refl:.5f} ± {cal_result.sigma_R_refl:.5f}")
             print(f"  α      = {cal_result.alpha:.5e} ± {cal_result.sigma_alpha:.2e} rad/px")
             print(f"  σ₀     = {cal_result.sigma0:.4f} ± {cal_result.sigma_sigma0:.4f} px")
             print(f"  B      = {cal_result.B:.1f} ± {cal_result.sigma_B:.2f} ADU")
-            flag_str = hex(cal_result.quality_flags)
-            print(f"  Flags  = {flag_str}  ({'GOOD' if cal_result.quality_flags == 0 else 'see legend'})")
+            print(f"  Flags  = {hex(cal_result.quality_flags)}")
         except Exception as exc:
-            print(f"\n  [ERROR] F01 fit raised an exception: {exc}")
+            print(f"  [ERROR] {exc}")
             import traceback; traceback.print_exc()
-            cal_result = None
     else:
         print("\n[Step 4b] Skipped — F01 module not available.")
 
-    # ── Output figure ─────────────────────────────────────────────────────────
-    print("\n[Output] Generating 6-panel diagnostic figure...")
+    # ── Figure ────────────────────────────────────────────────────────────────
+    print("\n[Output] Generating 8-panel diagnostic figure...")
     fig = _make_figure(
-        cal_raw, dark_img, cal_sub,
-        cx, cy,
+        cal_raw, dark_img, cal_sub, cx, cy,
         r_grid, profile, sigma_prof,
-        tolansky, cal_result,
+        tol_dict, tolansky, cal_result,
         binning, hdr,
     )
 
-    # Save alongside this script
-    out_stem = "F01_neon_airy_fit_result"
-    if cal_path is not None:
-        out_stem = f"F01_{cal_path.stem}_result"
-    out_path = _HERE / f"{out_stem}.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor=_NAVY)
-    print(f"  Saved: {out_path}")
-
+    stem = f"F01_{cal_path.stem}_result" if cal_path else "F01_synthetic_result"
+    out  = _HERE / f"{stem}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=_NAVY)
+    print(f"  Saved: {out}")
     plt.show()
     print("\nDone.\n")
 
