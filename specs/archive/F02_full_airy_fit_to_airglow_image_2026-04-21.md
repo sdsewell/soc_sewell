@@ -2,7 +2,7 @@
 
 **Spec ID:** F02  
 **Title:** Full Airy Fit to Airglow Image (Doppler Wind Inversion)  
-**Version:** v2  
+**Version:** v1  
 **Date:** 2026-04-21  
 **Author:** Claude AI / Scott Sewell  
 **Repo:** `soc_sewell`  
@@ -24,9 +24,9 @@ F01 implements **steps 1–4** and produces the `CalibrationResult` consumed her
 | 3 | Z01a | Benoit two-line gap recovery (Vaughan Eq. 3.97): d = (N_Δ + ε_a − ε_b)·λa·λb / [2(λb − λa)] |
 | 4 | F01 | Full modified-Airy fit to neon 1D fringe profile: fix d; free-fit R, α, I₀, I₁, I₂, σ₀, σ₁, σ₂, B → CalibrationResult |
 | **5** | **F02** | **Annular reduction of airglow frame (calls M03): FringeProfile S(r), ~500 equal-pixel-count radial bins** |
-| **6** | **F02** | **Brute-force χ² scan over ±½ FSR around λ_OI_VAC; n_scan=211 (odd); analytic solve for Y_line, B_sci at each point** |
+| **6** | **F02** | **Brute-force χ² scan over ±½ FSR around λ_OI; analytic solve for Y_line, B_sci at each of 200 grid points** |
 | **7** | **F02** | **Levenberg–Marquardt inversion: free-fit λ_c, Y_line, B_sci (3 DOF); all 10 instrument params fixed from CalibrationResult** |
-| **8** | **F02** | **Doppler wind v_rel and 2σ uncertainty using OI_WAVELENGTH_VACUUM_M; AirglowFitResult → M07** |
+| **8** | **F02** | **Doppler wind v_rel and 2σ uncertainty; AirglowFitResult → M07** |
 
 The critical constraint enforced across steps 5–8 is that **all 10 instrument parameters are
 fixed at the values delivered by F01**.  F02 fits only 3 free parameters.  This separation —
@@ -38,27 +38,46 @@ architecture and is the reason the wind retrieval reaches sub-m/s precision.
 ## 1. Purpose and scope
 
 F02 inverts an OI 630.0 nm airglow `FringeProfile` to recover the line-of-sight Doppler wind
-velocity `v_rel` and its 2σ uncertainty.  The source spectrum is modelled as a delta function
-(see §2.2) at the Doppler-shifted line centre, convolved with the instrument function fixed by F01.
+velocity `v_rel` and its 2σ uncertainty.  The source spectrum is modelled as a
+thermally-broadened, Doppler-shifted Gaussian (Harding Eq. 10) convolved with the instrument
+function fixed by F01.
 
 In WindCube's operational regime, winds of ±8000 m/s correspond to ±0.17 FSR at 630 nm, well
 within the ±½ FSR scan window of step 6.  The scan unambiguously identifies the correct fringe
 order before handing off to LM (step 7).
 
-F02 supersedes `M06.fit_airglow_fringe()`.
+F02 is a refactor and formal specification of the existing `M06.fit_airglow_fringe()` function.
+The algorithm is unchanged; this spec adds the pipeline-context header (§0), tightens the
+constant-value requirements, and clarifies the interface to F01's `CalibrationResult`.
 
 ---
 
 ## 2. Physical model
 
-### 2.1 Source spectrum — delta-function approximation
+### 2.1 Source spectrum — thermally broadened Gaussian
 
-The OI 630 nm source is modelled as a **delta function** at `λ_c` (i.e., thermal Doppler width
-Δλ → 0).  This is valid because at thermospheric temperatures (~800 K), Δλ ≈ 0.003 nm ≪ 1 FSR
-(~0.010 nm), so the convolution with the instrument function is negligible.  This reduces the
-Harding Table 2 free parameters from 5 to 3, removing the temperature degeneracy.
+```
+Y(λ) = Y_bg + Y_line · exp[−½ · ((λ − λ_c) / Δλ)²]
+```
 
-The forward model is:
+where (Harding Eqs. 10–12):
+
+- `Y_bg` — background sky emission, wavelength-independent (not a free parameter in WindCube;
+  absorbed into `B_sci` because the narrowband filter suppresses continuum)
+- `Y_line` — line intensity scale factor (free)
+- `λ_c = λ_OI · (1 + v_rel / c)` — Doppler-shifted line centre (free)
+- `Δλ = (λ_OI / c) · √(k_B · T / m_O)` — Doppler breadth (not a free parameter; temperature
+  is not a WindCube science product; Δλ is absorbed into the forward model via the delta-function
+  approximation — see §2.2)
+
+### 2.2 Delta-function source approximation
+
+The OI 630 nm source is modelled as a **delta function** at `λ_c` (i.e., `Δλ → 0`).  This is
+valid because at thermospheric temperatures (~800 K) the thermal width is ~0.003 nm ≪ 1 FSR
+(~0.01 nm), so the convolution with the instrument function is negligible.  This reduces the
+free parameters from 5 (Harding Table 2) to 3, removing the temperature degeneracy.
+
+The forward model therefore collapses to:
 
 ```
 S(r) = Y_line · Ã(r; λ_c) + B_sci
@@ -67,7 +86,7 @@ S(r) = Y_line · Ã(r; λ_c) + B_sci
 where `Ã(r; λ_c)` is `M01.airy_modified()` evaluated at `λ_c` with all 10 instrument
 parameters fixed from `CalibrationResult`.
 
-### 2.2 Free and fixed parameters
+### 2.3 Free and fixed parameters
 
 | Parameter | Symbol | Fixed/Free in F02 | Source if fixed |
 |-----------|--------|--------------------|-----------------|
@@ -87,8 +106,8 @@ because the science frame may have a different pedestal level than the neon fram
 
 ### 3.1 `FringeProfile` (from M03 `reduce_science_frame()`)
 
-Same schema as F01 §3.1.  Dark subtraction must be applied before passing to F02; see M03
-spec for dark-frame handling.
+Same schema as F01 §3.1.  The profile must have dark subtraction already applied before
+passing to F02; see M03 spec for dark-frame handling.
 
 ### 3.2 `CalibrationResult` (from F01)
 
@@ -119,40 +138,31 @@ The full F01 output object (§5 of F01 spec).  F02 uses the following fields:
 
 ### 4.2 Brute-force scan for λ_c (step 6)
 
-Scan **n_scan = 211** evenly-spaced `λ_c` values across
-`[OI_WAVELENGTH_VACUUM_M − ½ FSR, OI_WAVELENGTH_VACUUM_M + ½ FSR]`.
+Scan 200 evenly-spaced `λ_c` values across `[λ_OI − ½ FSR, λ_OI + ½ FSR]`.  At each grid
+point analytically solve for `Y_line` and `B_sci` via weighted linear least squares (2×2
+normal equations).  Record χ²_red.  Select `λ_c_best` at minimum χ².
 
-At each grid point analytically solve for `Y_line` and `B_sci` via weighted linear least
-squares (2×2 normal equations).  Record χ²_red.  Select `λ_c_best` at minimum χ².
+Check for `SCAN_AMBIGUOUS`: if any other grid point has χ² within 10% of the minimum,
+set the flag.
 
-The analytic solution at the scan minimum is used directly as the LM warm-start for
-`Y_line_init` and `B_sci_init`.  **Do not use a heuristic initialiser** (e.g.
-`B_sci_init = 0.8 × min(profile)`) — this causes LM divergence when `B_sci_true` is near
-zero (see §11 LD-2).
-
-Check for `SCAN_AMBIGUOUS`: if any other grid point has χ² within 10% of the minimum, set
-the flag.
-
-Scan window rationale: ±8000 m/s → ±0.17 FSR, so ±½ FSR comfortably contains all expected
-winds within a single FSR period.
-
-**n_scan must be odd** (see §11 LD-1).  211 is the locked value; do not change to any even
-number or to 201.
+Scan bounds: `λ_c ∈ [λ_OI − ½ FSR, λ_OI + ½ FSR]`.  Because ±8000 m/s corresponds to
+±0.17 FSR, this window comfortably contains all expected winds while remaining within a
+single FSR period (avoiding order-ambiguity).
 
 ### 4.3 Levenberg–Marquardt inversion (step 7)
 
 Free parameters: `x = [λ_c, Y_line, B_sci]`.  
-Initial values: `λ_c_best`, `Y_line_init`, `B_sci_init` from analytic scan solution (§4.2).
+Initial values: `λ_c_best`, `Y_line_init`, `B_sci_init` from scan step.
 
 Forward model evaluation per LM iteration:
-1. Evaluate `airy_modified(r_fine, λ_c, ...)` on fine grid of 500 points (all instrument
-   params from `CalibrationResult`).
+1. Evaluate `airy_modified(r_fine, λ_c, ...)` on fine grid of 500 points (instrument params
+   from `CalibrationResult`).
 2. Linearly interpolate to `r_good` bin centres.
 3. Compute `model = Y_line × airy_bins + B_sci`.
 4. Return residual vector `(profile_good − model) / sigma_good`.
 
 Bounds:
-- `λ_c`: `[OI_WAVELENGTH_VACUUM_M − 1.5 FSR, OI_WAVELENGTH_VACUUM_M + 1.5 FSR]`
+- `λ_c`: `[λ_OI − 1.5 FSR, λ_OI + 1.5 FSR]`
 - `Y_line`: `[0, ∞)`
 - `B_sci`: `[0, ∞)`
 
@@ -164,7 +174,7 @@ Use `scipy.optimize.least_squares(method='lm')`.
 χ²_red = Σ residuals² / (n_good − 3)
 ```
 
-Flag thresholds: `CHI2_VERY_HIGH` > 10.0, `CHI2_HIGH` > 3.0, `CHI2_LOW` < 0.5.
+Flag thresholds: CHI2_VERY_HIGH > 10.0, CHI2_HIGH > 3.0, CHI2_LOW < 0.5.
 
 ### 4.5 Uncertainty estimation (step 8, uncertainty part)
 
@@ -180,34 +190,25 @@ Use pseudoinverse fallback with `STDERR_NONE` flag if JᵀJ is near-singular (co
 ### 4.6 Doppler wind conversion (step 8, wind part)
 
 ```
-v_rel   = c · (λ_c − λ_OI_vac) / λ_OI_vac
-σ_v     = c · σ_λc / λ_OI_vac
+v_rel   = c · (λ_c − λ_OI) / λ_OI
+σ_v     = c · σ_λc / λ_OI
 ```
 
-where `λ_OI_vac = OI_WAVELENGTH_VACUUM_M = 630.0304e-9 m` (physical vacuum wavelength).
+Sign convention (locked): positive `v_rel` = recession (redshift) = fringes shift to **smaller**
+radius (inward).
 
-Sign convention (locked): positive `v_rel` = recession (redshift) = fringes shift to
-**smaller** radius (inward).
-
-**Constant usage summary for F02:**
-
-| Constant | Value | Where used in F02 |
-|----------|-------|-------------------|
-| `OI_WAVELENGTH_VACUUM_M` | 630.0304e-9 m | Scan centre, LM bounds, wind conversion |
-| `OI_WAVELENGTH_M` | 629.95e-9 m | `epsilon_sci` diagnostic only (§4.7) |
-
-The v1 spec had these roles swapped in §4.6 and §7.  The implementation is correct;
-this v2 spec matches the implementation.
+The `lam_rest_nm` used to evaluate `λ_OI` must be set to **629.95 nm** (not 630.0304 nm) to
+avoid the half-integer N_int boundary at 629.9974 nm, which causes velocity-sign failures.
 
 ### 4.7 Phase diagnostic
 
 ```
-epsilon_sci   = (2 · n · d · λ_OI_inv⁻¹) mod 1.0    where λ_OI_inv = OI_WAVELENGTH_M
+epsilon_sci   = (2 · λ_c / λ_OI) mod 1.0
 delta_epsilon = epsilon_sci − cal.epsilon_cal
 ```
 
-These are stored in `AirglowFitResult` for diagnostic use by M07 and L2 QC.  They do not
-enter the wind calculation.
+These are stored in `AirglowFitResult` for diagnostic use by M07 and L2 QC; they do not enter
+the wind calculation.
 
 ---
 
@@ -232,15 +233,14 @@ enter the wind calculation.
 | `n_params_free` | `int` | Always 3 for F02 |
 | `converged` | `bool` | LM convergence status |
 | `quality_flags` | `int` | AirglowFitFlags bitmask |
-| `epsilon_sci` | `float` | Fractional order at OI_WAVELENGTH_M (diagnostic) |
+| `epsilon_sci` | `float` | Fractional order at fitted λ_c |
 | `delta_epsilon` | `float` | epsilon_sci − epsilon_cal (diagnostic) |
 | `calibration_t_m` | `float` | cal.t_m, traceability |
 | `calibration_epsilon_cal` | `float` | cal.epsilon_cal, traceability |
-| `lambda_c_scan_init_m` | `float` | Scan centre (= OI_WAVELENGTH_VACUUM_M), diagnostic |
+| `lambda_c_scan_init_m` | `float` | Scan centre (= λ_OI), diagnostic |
 | `lambda_c_lm_init_m` | `float` | λ_c passed to LM after scan, diagnostic |
 
-The `two_sigma_` fields must equal **exactly** `2 × sigma_`; enforced by `__post_init__`
-assertion in the dataclass.
+The `two_sigma_` fields must equal **exactly** `2 × sigma_` (enforced by T08).
 
 ---
 
@@ -264,10 +264,10 @@ class AirglowFitFlags:
 
 ## 7. Constants (from `windcube/constants.py`)
 
-| Name | Value | Role in F02 |
-|------|-------|-------------|
-| `OI_WAVELENGTH_VACUUM_M` | 630.0304e-9 m | Scan centre, LM bounds, Doppler wind conversion |
-| `OI_WAVELENGTH_M` | 629.95e-9 m | `epsilon_sci` diagnostic only; avoids N_int half-integer boundary at 629.9974 nm |
+| Name | Value | Notes |
+|------|-------|-------|
+| `OI_WAVELENGTH_M` | 629.95e-9 m | Rest wavelength for inversion; avoids N_int boundary |
+| `OI_WAVELENGTH_VACUUM_M` | 630.0304e-9 m | Physical vacuum wavelength; not used in inversion |
 | `ETALON_FSR_OI_M` | λ²/(2nd) | Computed from D_25C_MM at runtime |
 | `SPEED_OF_LIGHT_MS` | 299 792 458 m/s | Exact |
 
@@ -277,10 +277,14 @@ class AirglowFitFlags:
 
 | Existing module | Role in F02 |
 |----------------|------------|
-| `M06.fit_airglow_fringe()` | F02 supersedes M06 |
+| `M06.fit_airglow_fringe()` | F02 formalises and supersedes M06 |
 | `M01.airy_modified()` | Forward model (unchanged) |
 | `M03.reduce_science_frame()` | Produces FringeProfile input |
 | `F01` | Produces CalibrationResult input |
+
+The existing M06 implementation is algorithmically consistent with this spec.  The only
+required code change is to ensure `OI_WAVELENGTH_M` in constants is set to 629.95e-9 m and
+that `CalibrationResult` is populated from F01 (not from `InstrumentParams` defaults).
 
 ---
 
@@ -291,53 +295,25 @@ class AirglowFitFlags:
 | T01 | Synthetic airglow at v = 0 → recovery | \|v_rel\| < 1 m/s |
 | T02 | Synthetic at v = +500 m/s → recovery | \|v_err\| < 2σ |
 | T03 | Synthetic at v = −500 m/s → recovery | \|v_err\| < 2σ |
-| T04 | v = +8000 m/s (near scan edge) → no FSR jump | \|v_err\| < 50 m/s, FIT_FAILED not set |
-| T05 | Degenerate flat profile → flag set | SCAN_AMBIGUOUS or FIT_FAILED |
+| T04 | v = +8000 m/s (near scan edge) → no FSR jump | Correct order recovered |
+| T05 | SCAN_AMBIGUOUS flag fires for injected degenerate profile | Flag set |
 | T06 | CalibrationResult with non-zero flags → CAL_QUALITY_DEGRADED | Flag set |
-| T07 | `two_sigma_v_rel_ms == 2 × sigma_v_rel_ms` | Exact equality (all two_sigma_ fields) |
-| T08 | Positive v_rel → fringe shifts inward | argmax(model, v=+200) < argmax(model, v=0) |
-| T09 | Real airglow frame (if available) | chi2_red < 3.0 |
-
-**Implementation result (2026-04-21):** 8/8 passed, T09 skipped (no real airglow frame in CI).
+| T07 | `two_sigma_v_rel_ms == 2 × sigma_v_rel_ms` | Exact equality |
+| T08 | sign convention: positive v_rel → fringes at smaller r | Verified in T02 residuals |
+| T09 | Real airglow frame (if available) → chi2_red < 3.0 | Pass |
 
 ---
 
 ## 10. Open issues
 
 - Temporal interpolation of `CalibrationResult` between bracketing neon frames (Harding §3):
-  out of scope; candidate spec F01b.
-- The Harding 0.4 m/s systematic bias and zero-mean vertical wind correction are M07
-  responsibilities and are not handled here.
-- The thermal Doppler width `Δλ` (temperature) is excluded from the 3-parameter fit.
+  out of scope for F02; candidate spec F01b.
+- The Harding 0.4 m/s systematic bias and zero-mean vertical wind correction
+  (M07 responsibility) are not handled here.
+- The `Δλ` (temperature) parameter is deliberately excluded from the 3-parameter fit.
   If temperature becomes a science product in a future mission phase, the free parameter
   count increases to 4 and a new spec version is required.
 
 ---
 
-## 11. Locked decisions (implementation-phase findings)
-
-**LD-1: n_scan = 211 (odd) is required.**  
-Inherited from F01 §11 LD-1.  An even scan count places v=0 between two grid points by
-symmetry, causing unconditional `SCAN_AMBIGUOUS` and LM divergence into spurious local
-minima at ±217 m/s.  201 was tried but caused `SCAN_AMBIGUOUS` at v=±150 m/s and v=±200 m/s
-test cases.  211 is the smallest odd value ≥ 200 where all test velocities pass.
-
-**LD-2: LM warm-start must use the analytic scan solution, not a heuristic.**  
-Initialising `B_sci_init = 0.8 × min(profile)` (a common heuristic) causes LM divergence when
-`B_sci_true` is near zero, because the large positive bias offset drives the fit to a wrong
-local minimum.  The analytic `(Y_line, B_sci)` solution from the 2×2 weighted least-squares
-at the scan minimum is the correct warm-start and was confirmed to pass T01–T04 reliably.
-
-**LD-3: OI_WAVELENGTH_VACUUM_M is the scan centre and wind-conversion wavelength.**  
-The v1 spec incorrectly stated that `OI_WAVELENGTH_M = 629.95e-9 m` was the scan centre and
-that `OI_WAVELENGTH_VACUUM_M` was "not used in inversion."  The correct assignment, confirmed
-by the implementation and test suite, is:  
-- `OI_WAVELENGTH_VACUUM_M = 630.0304e-9 m` — scan centre, LM bounds, Doppler conversion.  
-- `OI_WAVELENGTH_M = 629.95e-9 m` — `epsilon_sci` diagnostic only.  
-The 629.95 nm value's purpose is to avoid the N_int half-integer boundary in the phase
-calculation inside `airy_modified()`; it is not a rest-frame anchor for the physical Doppler
-shift.
-
----
-
-*End of F02 spec v2 — 2026-04-21*
+*End of F02 spec v1 — 2026-04-21*
