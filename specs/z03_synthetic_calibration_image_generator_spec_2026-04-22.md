@@ -5,7 +5,7 @@
 **Module:** `z03_synthetic_calibration_image_generator.py`  
 **Status:** Implemented — updated spec  
 **Date:** 2026-04-22  
-**Version:** 1.3  
+**Version:** 1.3.1  
 **Author:** Scott Sewell / HAO  
 **Repo:** `soc_sewell`  
 **Dependencies:** S03 (physical constants), M01 (airy_modified), M02 (radial_profile_to_image), S19 (P01, metadata schema)
@@ -20,7 +20,8 @@
 | 2026-04-10 | 1.0 | SNR quadratic corrected; Z03_OUTPUT_DIR env-var; 7 pytest cases |
 | 2026-04-13 | 1.1 | Stage G simplified to 1×2 cal+dark; dark image added throughout |
 | 2026-04-14 | 1.2 | **Major:** all 10 M05 inversion params user-prompted; `airy_modified()` replaces standalone helper; R and B_dc promoted from fixed to prompted |
-| **2026-04-22** | **1.3** | **`f_mm` → `alpha` prompt (direct plate scale, default = Tolansky result 1.6133×10⁻⁴ rad/px). Option A I₀ fix: SNR quadratic now gives the combined two-line peak; I₀ = I_peak / (1 + rel_638) passed to each line separately; Y_B = rel_638 stored in truth JSON. `rel_638` default updated from 0.8 → 0.58 (real instrument value). `_truth.json` updated to record I₀_adu (per-line) and Y_B alongside snr_peak. Parameter summary and Claude Code prompt appended as §15.** |
+| **2026-04-22** | **1.3** | **`f_mm` → `alpha` prompt; Option A I₀ fix; rel_638 default 0.8→0.58; Claude Code prompt appended** |
+| **2026-04-22** | **1.3.1** | **Implementation housekeeping: corrects illustrative I_peak example in §5.3a; records constants corrections (R_MAX_PX, CX/CY_DEFAULT, N_META_ROWS) as LD-1. No algorithm changes. 15/15 tests pass.** |
 
 ---
 
@@ -221,8 +222,16 @@ F01 fitted: I₀  ≡  same quantity (CalibrationResult.I0)
 ```
 
 With the default `rel_638 = 0.58` and `snr_peak = 50`, `B_dc = 300`, `sigma_read = 50`:
-- `I_peak ≈ 2380 ADU`
-- `I₀ = 2380 / 1.58 ≈ 1506 ADU`  ← stored in `_truth.json` as `I0_adu`
+
+```
+noise_floor = B_dc + sigma_read² = 300 + 2500 = 2800 ADU²
+I_peak = [50² + sqrt(50⁴ + 4·50²·2800)] / 2 ≈ 4176 ADU   (composite)
+I₀     = 4176 / (1 + 0.58) ≈ 2643 ADU                     (per-line)
+```
+
+These are the values confirmed by the implementation (commit `15/15 pass, 2026-04-22`).
+The earlier illustrative example of `I_peak ≈ 2380 ADU` in the v1.3 draft was incorrect —
+it omitted the `sigma_read² = 2500` contribution to the noise floor.
 
 > **Note:** `snr_peak` in the truth JSON refers to the composite-peak SNR (what the user entered).
 > `I0_adu` is the derived per-line envelope amplitude actually passed to `airy_modified()`.
@@ -264,8 +273,8 @@ dark_noisy = clip(Poisson(B_dc) + Gaussian(0, sigma_read), 0, 16383).astype(uint
 | Parameter | Symbol | Default Value | Source |
 |-----------|--------|--------------|--------|
 | Read noise | `sigma_read` | `50.0` ADU | CCD97 EM gain regime estimate |
-| Image centre (col) | `cx` | `137.5` | Geometric centre of 276-col array |
-| Image centre (row) | `cy` | `129.5` | Geometric centre of 260-row active region |
+| Image centre (col) | `cx` | `137.5` | Geometric centre of 276-col array (276/2 − 0.5) |
+| Image centre (row) | `cy` | `129.5` | Geometric centre of 260-row active region (260/2 − 0.5) |
 | Pixel pitch (binned) | `pix_m` | `32.0e-6` m | CCD97 16 µm × 2×2 binning (informational only in v1.3) |
 | Max usable radius | `r_max` | `110.0` px | FlatSat/flight value |
 | Radial bins | `R_bins` | `2000` | Avoids interpolation artefacts |
@@ -421,8 +430,8 @@ Line 4: f"I₀ (per-line) = {I0:.1f} ADU   I_peak (composite) = {I_peak:.1f} ADU
   },
   "derived_params": {
     "alpha_rad_per_px":      1.6133e-4,
-    "I_peak_adu":            2380.0,
-    "I0_adu":                1506.3,
+    "I_peak_adu":            4176.2,
+    "I0_adu":                2643.2,
     "Y_B":                   0.58,
     "FSR_m":                 1.0238e-11,
     "finesse_coefficient_F": 9.63,
@@ -605,6 +614,30 @@ expected_derived_keys = {
 - No EM gain excess noise factor.
 - `r_max` not prompted; fixed at 110 px.
 - `pix_m` retained as a constant but is no longer used in any calculation.
+
+---
+
+## 14a. Locked Decisions (implementation-phase findings)
+
+**LD-1: Authoritative fixed-constant values (confirmed by implementation, 2026-04-22).**  
+The following constants were corrected during the v1.3 implementation to match the
+actual WindCube FlatSat geometry and S19 header format. Do not revert these values.
+
+| Constant | v1.2 value | v1.3 correct value | Source |
+|----------|-----------|-------------------|--------|
+| `R_MAX_PX` | 175 | **110** | FlatSat/flight usable radius (spec §6) |
+| `CX_DEFAULT` | 145 | **137.5** | Geometric centre of 276-col array (276/2 − 0.5) |
+| `CY_DEFAULT` | 145 | **129.5** | Geometric centre of 260-row active region (260/2 − 0.5) |
+| `N_META_ROWS` | 1 | **4** | S19 header occupies first 4 rows |
+
+These corrections were required for `test_round_trip_I0` (uses `r_max_px=110.0` in the
+FringeProfile passed to F01) and for `test_cal_metadata_round_trip` (reads back 4 header rows).
+
+**LD-2: sigma_read = 50 ADU must be included in the noise floor for the SNR quadratic.**  
+`noise_floor = B_dc + sigma_read²`. With `sigma_read = 50`, `sigma_read² = 2500 ADU²`,
+which dominates the noise floor for typical `B_dc = 300 ADU`. Any illustrative calculation
+of `I_peak` must include this term. The v1.3 draft erroneously showed `I_peak ≈ 2380 ADU`
+(omitting sigma_read); the correct value at default params is `I_peak ≈ 4176 ADU`.
 
 ---
 
@@ -798,13 +831,12 @@ git add src/fpi/z03_synthetic_calibration_image_generator.py \
         tests/test_z03.py \
         docs/specs/z03_synthetic_calibration_image_generator_spec_2026-04-22.md \
         PIPELINE_STATUS.md
-git commit -m "feat: Z03 v1.3 — alpha prompt, Option A I0 fix, rel_638 default 0.58
+git commit -m "feat: Z03 v1.3.1 — housekeeping, corrected constants and I_peak example
 
-Replace f_mm with alpha (direct plate scale, default 1.6133e-4 rad/px).
-I0 per-line = I_peak / (1 + rel_638) so Z03 truth maps 1:1 to F01 I0.
-rel_638 default updated 0.8 -> 0.58 (real WindCube FlatSat measurement).
-B_dc hard_max raised 5000 -> 50000 for real-data compatibility.
-3 new tests: test_I0_option_a, test_round_trip_I0, test_alpha_no_f_mm.
+Corrects R_MAX_PX (175→110), CX/CY_DEFAULT (145→137.5/129.5),
+N_META_ROWS (1→4) per LD-1. Corrects I_peak illustrative example
+in spec §5.3a (sigma_read² omitted in v1.3 draft; correct value
+4176 ADU not 2380 ADU). No algorithm changes. 15/15 tests pass.
 
 Also updates PIPELINE_STATUS.md"
 
@@ -822,4 +854,4 @@ Also updates PIPELINE_STATUS.md"
 
 ---
 
-*End of Z03 Spec v1.3 — 2026-04-22*
+*End of Z03 Spec v1.3.1 — 2026-04-22*

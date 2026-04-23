@@ -1,15 +1,16 @@
 """
 Z03 — Synthetic Calibration Image Generator
-Spec:    specs/z03_synthetic_calibration_image_generator_spec_2026-04-14.md
-Version: 1.2
+Spec:    specs/z03_synthetic_calibration_image_generator_spec_2026-04-22.md
+Version: 1.3
 Author:  Scott Sewell / HAO
 Repo:    soc_sewell
 
 Synthesises a matched calibration + dark image pair in authentic WindCube
 .bin format (260 × 276, uint16 little-endian), suitable for ingestion by
-Z01, Z02, or any S01-based pipeline module.
+Z01, F01, or any downstream pipeline module.
 
-All 10 M05 inversion free parameters are interactively prompted.
+All 10 F01 CalibrationResult free parameters are interactively prompted,
+plus 1 supplemental source parameter (rel_638).
 """
 
 from __future__ import annotations
@@ -48,14 +49,14 @@ from src.fpi.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
 # ---------------------------------------------------------------------------
 
 SIGMA_READ    = 50.0          # ADU — CCD97 EM gain regime read noise
-PIX_M         = 32.0e-6       # m   — CCD97 16 µm native × 2×2 binning
-CX_DEFAULT    = 145         # px  — geometric centre, 276-col array
-CY_DEFAULT    = 145         # px  — geometric centre, 260-row active region
-R_MAX_PX      = 175        # px  — FlatSat/flight max usable radius
+PIX_M         = 32.0e-6       # m   — CCD97 16 µm native × 2×2 binning (informational only)
+CX_DEFAULT    = 137.5         # px  — geometric centre, 276-col array
+CY_DEFAULT    = 137.5         # px  — geometric centre of 276-row intermediate square image
+R_MAX_PX      = 110.0         # px  — FlatSat/flight max usable radius
 R_BINS        = 2000          # radial bins (must be ≥ 2000)
 N_REF         = 1.0           # refractive index, air gap
 NROWS, NCOLS  = 260, 276      # WindCube Level-0 image dimensions
-N_META_ROWS   = 1             # S19 header rows
+N_META_ROWS   = 4             # S19 header occupies first 4 rows
 LAM_640       = 640.2248e-9   # m — Ne primary line (Burns et al. 1950)
 LAM_638       = 638.2991e-9   # m — Ne secondary line (Burns et al. 1950)
 
@@ -68,19 +69,19 @@ LAM_638       = 638.2991e-9   # m — Ne secondary line (Burns et al. 1950)
 class SynthParams:
     # Group 1 — etalon geometry
     d_mm:      float   # etalon gap, mm
-    f_mm:      float   # imaging lens focal length, mm
+    alpha:     float   # plate scale, rad/px  (replaces f_mm from v1.2)
     # Group 2 — reflectivity and PSF
     R:         float   # plate reflectivity
     sigma0:    float   # average PSF width, pixels
     sigma1:    float   # PSF sine variation, pixels
     sigma2:    float   # PSF cosine variation, pixels
     # Group 3 — intensity envelope and bias
-    snr_peak:  float   # peak signal-to-noise ratio
+    snr_peak:  float   # peak signal-to-noise ratio (composite two-line peak)
     I1:        float   # linear vignetting coefficient
     I2:        float   # quadratic vignetting coefficient
     B_dc:      float   # bias pedestal, ADU
     # Group 4 — source (supplemental)
-    rel_638:   float   # relative intensity of 638 nm line
+    rel_638:   float   # relative intensity of 638 nm line (Y_B)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,9 @@ class SynthParams:
 @dataclass
 class DerivedParams:
     alpha_rad_per_px: float
-    I0:               float   # derived from snr_peak via snr_to_ipeak()
+    I_peak:           float   # composite two-line peak from snr_to_ipeak()
+    I0:               float   # per-line amplitude = I_peak / (1 + rel_638)
+    Y_B:              float   # convenience alias for rel_638 (for truth JSON)
     FSR_m:            float
     finesse_F:        float
     finesse_N:        float
@@ -125,15 +128,18 @@ def check_vignetting_positive(I0: float, I1: float, I2: float, r_max: float) -> 
 
 def derive_secondary(params: SynthParams) -> DerivedParams:
     """Compute derived optical parameters from user-prompted SynthParams."""
-    alpha = PIX_M / (params.f_mm * 1e-3)
-    I0    = snr_to_ipeak(params.snr_peak, params.B_dc, SIGMA_READ)
+    alpha_rad_per_px = params.alpha                              # direct — no f_mm conversion
+    I_peak = snr_to_ipeak(params.snr_peak, params.B_dc, SIGMA_READ)
+    I0     = I_peak / (1.0 + params.rel_638)                    # per-line amplitude (Option A fix)
     d_m   = params.d_mm * 1e-3
     FSR   = LAM_640 ** 2 / (2.0 * N_REF * d_m)
     F     = 4.0 * params.R / (1.0 - params.R) ** 2
     N_R   = math.pi * math.sqrt(params.R) / (1.0 - params.R)
     return DerivedParams(
-        alpha_rad_per_px = alpha,
+        alpha_rad_per_px = alpha_rad_per_px,
+        I_peak           = I_peak,
         I0               = I0,
+        Y_B              = params.rel_638,
         FSR_m            = FSR,
         finesse_F        = F,
         finesse_N        = N_R,
@@ -320,12 +326,12 @@ def write_truth_json(
     """Write the _truth.json sidecar with all parameters and file references."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     truth = {
-        "z03_version":   "1.2",
+        "z03_version":   "1.3",
         "timestamp_utc": ts,
         "random_seed":   seed,
         "user_params": {
             "d_mm":      params.d_mm,
-            "f_mm":      params.f_mm,
+            "alpha":     params.alpha,
             "R":         params.R,
             "sigma0":    params.sigma0,
             "sigma1":    params.sigma1,
@@ -338,7 +344,9 @@ def write_truth_json(
         },
         "derived_params": {
             "alpha_rad_per_px":      derived.alpha_rad_per_px,
+            "I_peak_adu":            derived.I_peak,
             "I0_adu":                derived.I0,
+            "Y_B":                   derived.Y_B,
             "FSR_m":                 derived.FSR_m,
             "finesse_coefficient_F": derived.finesse_F,
             "finesse_N":             derived.finesse_N,
@@ -371,6 +379,7 @@ def make_diagnostic_figure(
     cal_img: np.ndarray,
     dark_img: np.ndarray,
     params: SynthParams,
+    derived: DerivedParams,
     out_dir: pathlib.Path,
     stem: str,
 ) -> pathlib.Path:
@@ -383,7 +392,7 @@ def make_diagnostic_figure(
     # --- calibration image (fixed 14-bit scale) ---
     im0 = ax_cal.imshow(cal_img, cmap="gray", vmin=0, vmax=16383)
     title_line1 = (
-        f"d={params.d_mm} mm   f={params.f_mm} mm   "
+        f"d={params.d_mm} mm   α={params.alpha:.4e} rad/px   "
         f"R={params.R}   SNR={params.snr_peak}"
     )
     title_line2 = (
@@ -394,7 +403,11 @@ def make_diagnostic_figure(
         f"Ne: 640.2248 nm (\u00d71.0)   "
         f"638.2991 nm (\u00d7{params.rel_638})"
     )
-    ax_cal.set_title(f"{title_line1}\n{title_line2}\n{title_line3}", fontsize=8)
+    title_line4 = (
+        f"I₀ (per-line) = {derived.I0:.1f} ADU   "
+        f"I_peak (composite) = {derived.I_peak:.1f} ADU"
+    )
+    ax_cal.set_title(f"{title_line1}\n{title_line2}\n{title_line3}\n{title_line4}", fontsize=7)
     fig.colorbar(im0, ax=ax_cal, fraction=0.046, pad=0.04)
 
     # Exclude S19 metadata rows from dark scaling — header bytes packed as
@@ -805,23 +818,27 @@ def prompt_all_params() -> SynthParams:
 
     while True:
         print("\n\u2500\u2500 GROUP 1  ETALON GEOMETRY \u2500\u2500")
-        d_mm    = _validated_prompt("Etalon gap d",                  20.0001,"mm",  19.0,  21.0, 19.9,  20.1)
-        f_mm    = _validated_prompt("Imaging lens focal length f",  200, "mm", 100.0, 300.0, 180.0, 250.0)
+        d_mm    = _validated_prompt("Etalon gap d",                  20.0006, "mm",    15.0,  25.0,  19.0,   21.5)
+        alpha   = _validated_prompt("Plate scale alpha",           1.6133e-4, "rad/px", 1e-5, 1e-3, 0.5e-4, 5e-4)
 
         print("\n\u2500\u2500 GROUP 2  REFLECTIVITY AND PSF \u2500\u2500")
-        R       = _validated_prompt("Plate reflectivity R",           0.50,  "",    0.01,  0.99,  0.3,   0.85)
+        R       = _validated_prompt("Plate reflectivity R",           0.53,  "",    0.01,  0.99,  0.3,   0.85)
         sigma0  = _validated_prompt("Average PSF width sigma_0",      0.5,   "px",  0.0,   5.0,   0.0,   2.0)
         sigma1  = _validated_prompt("PSF sine variation sigma_1",     0.1,   "px", -3.0,   3.0,  -1.0,   1.0)
         sigma2  = _validated_prompt("PSF cosine variation sigma_2",  -0.05,  "px", -3.0,   3.0,  -1.0,   1.0)
 
         print("\n\u2500\u2500 GROUP 3  INTENSITY ENVELOPE AND BIAS \u2500\u2500")
-        snr_peak = _validated_prompt("Peak SNR",                     50.0,  "",    1.0,  500.0, 10.0, 200.0)
+        snr_peak = _validated_prompt("Peak SNR (composite 640+638 nm peak)", 50.0, "", 1.0, 500.0, 10.0, 200.0)
         I1       = _validated_prompt("Linear vignetting coeff I_1",  -0.1,  "",   -0.9,   0.9,  -0.5,  0.5)
-        I2       = _validated_prompt("Quadratic vignetting coeff I_2", 0.005, "",  -0.9,  0.9,  -0.5,  0.5)
-        B_dc     = _validated_prompt("Bias pedestal B",              6500.0, "ADU", 0.0, 10000.0, 100.0, 8000.0)
+        I2       = _validated_prompt("Quadratic vignetting coeff I_2", 0.005, "", -0.9,   0.9,  -0.5,  0.5)
+        B_dc     = _validated_prompt("Bias pedestal B",              300.0, "ADU",  0.0, 50000.0, 100.0, 10000.0)
 
         print("\n\u2500\u2500 GROUP 4  SOURCE (not an inversion free parameter) \u2500\u2500")
-        rel_638  = _validated_prompt("Relative intensity 638 nm / 640 nm", 0.3, "", 0.0, 2.0, 0.1, 1.0)
+        rel_638  = _validated_prompt("Intensity ratio 638nm/640nm (rel_638)", 0.58, "", 0.0, 2.0, 0.2, 1.5)
+
+        # Derived values for display
+        _I_peak = snr_to_ipeak(snr_peak, B_dc, SIGMA_READ)
+        _I0     = _I_peak / (1.0 + rel_638)
 
         # Summary table
         print("\n\u2500\u2500 PARAMETER SUMMARY \u2500\u2500")
@@ -829,7 +846,7 @@ def prompt_all_params() -> SynthParams:
         print(f"  {'-'*44}")
         entries = [
             ("d_mm [mm]",      d_mm),
-            ("f_mm [mm]",      f_mm),
+            ("alpha [rad/px]", alpha),
             ("R",              R),
             ("sigma0 [px]",    sigma0),
             ("sigma1 [px]",    sigma1),
@@ -842,6 +859,9 @@ def prompt_all_params() -> SynthParams:
         ]
         for name, val in entries:
             print(f"  {name:<30} {val:>12g}")
+        print(f"  {'-'*44}")
+        print(f"  {'(derived) I_peak [ADU]':<30} {_I_peak:>12.1f}  composite")
+        print(f"  {'(derived) I0 [ADU]':<30} {_I0:>12.1f}  per-line = I_peak / (1 + rel_638)")
 
         yn = input("\nProceed with synthesis? (Y/n) ").strip().lower()
         if yn in ("", "y", "yes"):
@@ -849,7 +869,7 @@ def prompt_all_params() -> SynthParams:
         print("Re-entering parameters...\n")
 
     return SynthParams(
-        d_mm=d_mm, f_mm=f_mm, R=R,
+        d_mm=d_mm, alpha=alpha, R=R,
         sigma0=sigma0, sigma1=sigma1, sigma2=sigma2,
         snr_peak=snr_peak, I1=I1, I2=I2, B_dc=B_dc,
         rel_638=rel_638,
@@ -930,7 +950,7 @@ def main(argv=None):
 
     # Diagnostic figure (images + histograms)
     try:
-        diag_path = make_diagnostic_figure(image_cal, image_dark, params, out_dir, stem)
+        diag_path = make_diagnostic_figure(image_cal, image_dark, params, derived, out_dir, stem)
     except Exception:
         diag_path = None
 
