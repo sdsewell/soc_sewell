@@ -215,10 +215,19 @@ def _eval_model_components(r_eval, r_fine, d, R, alpha, n, r_max,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def estimate_initial_params(r_grid, profile, sigma_prof, d_m, alpha_init, r_max,
-                             R_prior=0.53):
+                             R_prior=0.53, Y_B_csv=None):
     """
     Derive physically-motivated initial guesses entirely from the 1D profile.
     Prints a detailed explanation of the reasoning for each parameter.
+
+    Y_B_csv : float or None
+        If provided (read from the Z01a CSV header), this value is used
+        directly as Y_B_init and the internal amplitude-sort estimator is
+        skipped.  The Z01a value is authoritative because it uses the
+        Gaussian-fit amplitudes from the correctly-identified ring families,
+        whereas the internal estimator uses a sort-by-amplitude heuristic
+        that can misidentify families when both lines have similar amplitudes.
+
     Returns a dict of initial guesses (including Y_B_init) and a dict of bounds.
     """
     print("\n" + "─"*64)
@@ -239,10 +248,24 @@ def estimate_initial_params(r_grid, profile, sigma_prof, d_m, alpha_init, r_max,
     peaks_idx, _ = find_peaks(profile, distance=win//2,
                                height=np.percentile(profile, 70))
 
-    Y_B_init = 0.6   # reasonable prior
+    Y_B_init = 0.6   # fallback prior if all else fails
     I0_est = max(float(np.percentile(profile - B_est, 90)), 10.0)
 
-    if len(peaks_idx) >= 4:
+    if Y_B_csv is not None:
+        # ── Use the authoritative Z01a CSV value ─────────────────────────────
+        Y_B_init = float(np.clip(Y_B_csv, 0.05, 2.0))
+        print(f"\n  Y_B  (638 nm / 640 nm intensity ratio)")
+        print(f"     Method:  Z01a CSV header  (Gaussian-fit amplitudes, peak 1 excluded)")
+        print(f"     Value:   {Y_B_init:.4f}  ← used directly; internal estimator skipped")
+        # I0 from bright peaks only (peaks that are above median amplitude)
+        if len(peaks_idx) >= 4:
+            peak_amps   = profile[peaks_idx] - B_est
+            sorted_pk   = np.argsort(peak_amps)
+            n_half      = len(sorted_pk) // 2
+            bright_amps = peak_amps[sorted_pk[n_half:]]
+            I0_est = max(float(np.percentile(bright_amps, 80)), 10.0)
+    elif len(peaks_idx) >= 4:
+        # ── Internal amplitude-sort estimator (fallback) ─────────────────────
         peak_amps = profile[peaks_idx] - B_est
         sorted_pk = np.argsort(peak_amps)
         n_half    = len(sorted_pk) // 2
@@ -253,10 +276,11 @@ def estimate_initial_params(r_grid, profile, sigma_prof, d_m, alpha_init, r_max,
             Y_B_init = float(np.clip(
                 np.median(dim_amps) / np.median(bright_amps), 0.1, 1.5))
         print(f"\n  Y_B  (638 nm / 640 nm intensity ratio)")
-        print(f"     Method:  amplitude-ratio of dim vs bright peak families")
+        print(f"     Method:  internal amplitude-sort  "
+              f"[WARN: Z01a CSV Y_B not found — this estimator may be unreliable]")
         print(f"              bright (640 nm) median amp = {np.median(bright_amps):.1f} ADU")
         print(f"              dim   (638 nm) median amp  = {np.median(dim_amps):.1f} ADU")
-        print(f"     Value:   {Y_B_init:.3f}  (fitted freely in Stage A→E)")
+        print(f"     Value:   {Y_B_init:.4f}  (fitted freely in Stage A→E)")
     else:
         print(f"\n  Y_B  — fewer than 4 peaks found; using prior {Y_B_init:.2f}")
 
@@ -929,6 +953,17 @@ def main():
         f"{float(_meta_peek['alpha_rad_px']):.4e}"
         if "alpha_rad_px" in _meta_peek else f"{PLATE_SCALE_RPX:.4e}"
     )
+    # Read Y_B from CSV header if written by Z01a (2026-04-22 or later).
+    # If absent, _yb_from_csv stays None and estimate_initial_params falls
+    # back to its internal amplitude-sort estimator.
+    _yb_from_csv = (
+        float(_meta_peek["Y_B"])
+        if "Y_B" in _meta_peek and _meta_peek["Y_B"] not in ("nan", "")
+        else None
+    )
+    if _yb_from_csv is not None:
+        print(f"  [CSV header] Y_B = {_yb_from_csv:.4f}  "
+              f"(from Z01a amplitude ratio — will override internal estimator)")
 
     print("\n  Fit parameters (press Enter to accept default):\n")
     d_mm       = float(_ask("Benoit gap  d",  f"{D_25C_MM*1e3:.6f}", "mm"))
@@ -980,7 +1015,8 @@ def main():
 
     # ── Step 1: estimate initial params ───────────────────────────────────────
     p0, bounds = estimate_initial_params(
-        r_grid, profile, sigma_prof, d_m, alpha_init, r_max_val)
+        r_grid, profile, sigma_prof, d_m, alpha_init, r_max_val,
+        Y_B_csv=_yb_from_csv)
 
     # ── Figure 1: pre-fit ─────────────────────────────────────────────────────
     _fig_style()
