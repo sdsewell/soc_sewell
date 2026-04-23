@@ -505,18 +505,9 @@ def _fig1_prefit(r_grid, profile, sigma_prof, p0, bounds,
         p0["I0"], p0["I1"], p0["I2"],
         p0["sigma0"], p0["sigma1"], p0["sigma2"],
         p0["Y_B"], p0["B"])
-    model_no_b = _eval_model(
-        r_grid, r_fine, d_m,
-        p0["R"], p0["alpha"], 1.0, r_max,
-        p0["I0"], p0["I1"], p0["I2"],
-        p0["sigma0"], p0["sigma1"], p0["sigma2"],
-        0.0, p0["B"])
-
     ax.plot(r_grid, profile, color=_LGRAY, lw=0.9, alpha=0.7, label="Data")
     ax.plot(r_grid, model_init, color=_AMBER, lw=1.8,
             label=f"Init model (640+638 nm, Y_B={p0['Y_B']:.2f})")
-    ax.plot(r_grid, model_no_b, color=_TEAL,  lw=1.2, ls="--",
-            label="Init model (640 nm only)")
     ax.set_xlabel("Radius  r  (px)"); ax.set_ylabel("Counts  (ADU)")
     ax.set_title("Initial Model vs Data  (BEFORE fitting — d, α, Y_A fixed)",
                  color="white", pad=5)
