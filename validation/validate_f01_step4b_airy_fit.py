@@ -969,11 +969,16 @@ def main():
     d_mm       = float(_ask("Benoit gap  d",  f"{D_25C_MM*1e3:.6f}", "mm"))
     alpha_init = float(_ask("Plate scale α",  _alpha_default,         "rad/px"))
     r_max_val  = float(_ask("r_max",           str(R_MAX_PX),            "px"))
-    binning    = int(_ask("Binning",           "2",                      "1 or 2"))
 
-    if binning == 1 and alpha_init > 1e-4:
-        print(f"  [NOTE] 1×1 binning: α scaled {alpha_init:.4e} → {alpha_init/2:.4e}")
-        alpha_init /= 2.0
+    # Binning prompt kept for display/documentation purposes only.
+    # The alpha_rpx written by Z01a is already in the correct rad/px units
+    # for whatever binning the image has — no scaling is applied here.
+    # (The old auto-halving for binning=1 was wrong: it assumed alpha came from
+    # a 2×2-binned calibration being applied to a 1×1 image, but Z01a now
+    # converts the Tolansky slope to rad/px directly for each image's own pixel
+    # scale.  Halving it again produced a factor-of-2 error in fringe spacing.)
+    binning = int(_ask("Binning (display only — no alpha scaling applied)",
+                       "1", "1 or 2"))
 
     d_m = d_mm * 1e-3
 
