@@ -1,17 +1,17 @@
 # F01 v3 Step 4b CalibrationResult
 # parameter,value,sigma_1,note
 d_mm,20.0006,0,fixed
-R_refl,0.10000029,0.1399923,fitted
-alpha_radpx,0.00016382722,5.1505889e-07,fitted
-I0_adu,2559.7378,8105.5302,fitted
-I1,-0.19418921,0.51150519,fitted
-I2,0.093697565,0.26442134,fitted
-sigma0_px,0.44430258,0,fitted
-sigma1_px,-0.79766661,0,fitted
-sigma2_px,1.2912785,0,fitted
+R_refl,0.1,1.5258166,fitted
+alpha_radpx,0.00016602285,5.482774e-05,fitted
+I0_adu,310.71975,5592.4296,fitted
+I1,-0.5,10.211937,fitted
+I2,-0.5,9.9781576,fitted
+sigma0_px,0.5,1331547.8,fitted
+sigma1_px,0,1961608.9,fitted
+sigma2_px,0,1632135.1,fitted
 Y_A,1,0,fixed
-Y_B,2.3417419,3.1310579,fitted
-intensity_ratio,2.3417419,nan,Y_B/Y_A
-B_adu,421.70628,17628.757,fitted
-chi2_red,192.1551,nan,diagnostic
-quality_flags,566,nan,bitmask
+Y_B,0.97106169,3.0619535,fitted
+intensity_ratio,0.97106169,nan,Y_B/Y_A
+B_adu,6612.6767,9942.0999,fitted
+chi2_red,293.22287,nan,diagnostic
+quality_flags,38,nan,bitmask

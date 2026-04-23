@@ -12,8 +12,8 @@ Changes 2026-04-22:
     The raw slope (orders/px²) is kept on the figure for traceability
     but the CSV header now carries alpha_rpx in the correct units.
   - Y_B intensity ratio added: computed as median(amp_638) / median(amp_640)
-    from the Gaussian-fit amplitudes in the peak table (excluding the
-    first 640 nm peak which is unreliable due to the r→0 singularity).
+    from the Gaussian-fit amplitudes in the peak table (all peaks included;
+    peak 1 amplitude is reliable with the global fixed-baseline fit).
     Written to the CSV header and printed to terminal.
   - Both alpha_rpx and Y_B are written to the CSV header so F01 step4b
     can read them directly without re-deriving from scratch.
@@ -376,7 +376,7 @@ NE_LINES = {1: 640.2248, 0: 638.2991}   # keyed by (peak_number - 1) % 2
 col_labels = [
     "#", "Line [nm]", "r_fit [px]", "2σ_r [px]",
     "r²_fit [px²]", "Δ_640 [px²]", "Δ_638 [px²]",
-    "2σ_r² [px²]", "Amp [ADU]", "Width [px]",
+    "2σ_r² [px²]", "Amp [ADU]", "Baseline [ADU]", "Width [px]",
 ]
 
 # Pre-compute r²_fit for every peak so delta look-ahead is simple
@@ -412,9 +412,10 @@ for i, pk in enumerate(fp.peak_fits):
         d638_val = float("nan")
         d638_str = "—"
 
-    two_sr_str  = f"{two_sr:.3f}"  if np.isfinite(two_sr)  else "—"
-    two_sr2_str = f"{two_sr2:.2f}" if np.isfinite(two_sr2) else "—"
-    width_str   = f"{pk.width_px:.3f}" if np.isfinite(pk.width_px) else "—"
+    two_sr_str   = f"{two_sr:.3f}"  if np.isfinite(two_sr)  else "—"
+    two_sr2_str  = f"{two_sr2:.2f}" if np.isfinite(two_sr2) else "—"
+    width_str    = f"{pk.width_px:.3f}"    if np.isfinite(pk.width_px)    else "—"
+    base_str     = f"{pk.baseline_adu:.1f}" if np.isfinite(pk.baseline_adu) else "—"
 
     d640_vals.append(d640_val)
     d638_vals.append(d638_val)
@@ -428,6 +429,7 @@ for i, pk in enumerate(fp.peak_fits):
         d638_str,
         two_sr2_str,
         f"{pk.amplitude_adu:.1f}",
+        base_str,
         width_str,
     ])
 
@@ -439,23 +441,20 @@ mean_row = [
     "",
     f"{mean_640:.2f}" if np.isfinite(mean_640) else "—",
     f"{mean_638:.2f}" if np.isfinite(mean_638) else "—",
-    "", "", "",
+    "", "", "", "",
 ]
 cell_text.append(mean_row)
 
 # ── Y_B intensity ratio from Gaussian-fit amplitudes ─────────────────────────
-# Separate peak amplitudes by family.
-# Skip peak 1 (640 nm) — its Gaussian amplitude is unreliable because the
-# profile rises sharply from r=0 and the fit baseline is ill-defined there.
-amp_640_list = []   # amplitudes of 640 nm peaks (odd peak numbers, skip #1)
+amp_640_list = []   # amplitudes of 640 nm peaks (odd peak numbers)
 amp_638_list = []   # amplitudes of 638 nm peaks (even peak numbers)
 for i, pk in enumerate(fp.peak_fits):
     peak_num = i + 1
     if not pk.fit_ok or not np.isfinite(pk.amplitude_adu):
         continue
-    if peak_num % 2 == 1 and peak_num > 1:   # odd, skip first
+    if peak_num % 2 == 1:   # odd → 640 nm
         amp_640_list.append(pk.amplitude_adu)
-    elif peak_num % 2 == 0:                   # even
+    else:                    # even → 638 nm
         amp_638_list.append(pk.amplitude_adu)
 
 if amp_640_list and amp_638_list:
@@ -468,7 +467,7 @@ else:
     Y_B_estimate   = float("nan")
 
 print(f"\nIntensity ratio (Y_B = 638nm / 640nm amplitudes):")
-print(f"  median amp 640nm = {median_amp_640:.1f} ADU  (n={len(amp_640_list)}, peak 1 excluded)")
+print(f"  median amp 640nm = {median_amp_640:.1f} ADU  (n={len(amp_640_list)})")
 print(f"  median amp 638nm = {median_amp_638:.1f} ADU  (n={len(amp_638_list)})")
 print(f"  Y_B = {Y_B_estimate:.4f}")
 
@@ -760,7 +759,7 @@ with open(csv_path, "w", newline="") as _fh:
     _fh.write(f"# epsilon_640: {ep_640:.6f}\n")
     _fh.write(f"# epsilon_638: {ep_638:.6f}\n")
     _fh.write(f"# Y_B: {Y_B_estimate:.6f}\n")
-    _fh.write(f"# Y_B_note: median(amp_638)/median(amp_640), peak_1_excluded\n")
+    _fh.write(f"# Y_B_note: median(amp_638)/median(amp_640), all peaks included\n")
     _fh.write(f"# slope_orders_per_px2: {alpha_mean:.6f}\n")
     _fh.write(f"# cx: {cx_fine:.4f}\n")
     _fh.write(f"# cy: {cy_fine:.4f}\n")

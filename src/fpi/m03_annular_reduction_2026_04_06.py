@@ -146,6 +146,7 @@ class PeakFit:
     r_fit_px:       float  # Gaussian centroid (px); falls back to r_raw if failed
     sigma_r_fit_px: float  # 1σ uncertainty on centroid (px); nan if failed
     amplitude_adu:  float  # Gaussian amplitude above background (ADU)
+    baseline_adu:   float  # Gaussian baseline (B parameter, ADU)
     width_px:       float  # Gaussian sigma (px); nan if failed
     fit_ok:         bool
 
@@ -200,6 +201,11 @@ class FringeProfile:
 def _gaussian(x, A, mu, sigma, B):
     """Gaussian + constant background: A*exp(-(x-mu)²/(2σ²)) + B."""
     return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2) + B
+
+
+def _gaussian3(x, A, mu, sigma):
+    """Gaussian with no free background (baseline pre-subtracted)."""
+    return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +588,7 @@ def _find_and_fit_peaks(
     profile: np.ndarray,
     sigma_profile: np.ndarray,
     masked: np.ndarray,
+    baseline: float,
     distance: int       = 5,
     prominence: float   = 100.0,
     fit_half_window: int = 8,
@@ -659,6 +666,7 @@ def _find_and_fit_peaks(
                 r_fit_px       = r_raw,
                 sigma_r_fit_px = float("nan"),
                 amplitude_adu  = prof_raw,
+                baseline_adu   = float("nan"),
                 width_px       = float("nan"),
                 fit_ok         = False,
             ))
@@ -668,10 +676,11 @@ def _find_and_fit_peaks(
         wp = win_prof[win_good]
         ws = win_sigma[win_good]
 
-        # Background = 20th percentile of window (not minimum)
-        B0  = float(np.percentile(wp, 20))
-        A0  = float(prof_raw) - B0
-        sig0 = max(median_dr_px, 0.3 * median_dr_px) if median_dr_px > 0 else 1.0
+        B_fixed = baseline
+        wp_corr = wp - B_fixed
+
+        A0      = max(float(prof_raw) - B_fixed, 1.0)
+        sig0    = median_dr_px if median_dr_px > 0 else 1.0
         sig_low = 0.3 * median_dr_px if median_dr_px > 0 else 0.1
 
         # Safe sigma weights (avoid division by zero)
@@ -679,29 +688,31 @@ def _find_and_fit_peaks(
 
         try:
             popt, pcov = curve_fit(
-                _gaussian,
-                wr, wp,
-                p0=[max(A0, 1.0), r_raw, sig0, B0],
+                _gaussian3,
+                wr, wp_corr,
+                p0=[A0, r_raw, sig0],
                 sigma=ws_safe,
                 absolute_sigma=True,
                 bounds=(
-                    [0.0,        float(wr[0]),  sig_low, -np.inf],
-                    [np.inf,     float(wr[-1]), np.inf,   np.inf],
+                    [0.0,     float(wr[0]),  sig_low],
+                    [np.inf,  float(wr[-1]), np.inf ],
                 ),
                 maxfev=2000,
             )
-            perr           = np.sqrt(np.diag(pcov))
-            r_fit          = float(popt[1])
-            sigma_r_fit    = float(perr[1])
-            amplitude      = float(popt[0])
-            width          = float(popt[2])
-            fit_ok         = True
+            perr        = np.sqrt(np.diag(pcov))
+            r_fit       = float(popt[1])
+            sigma_r_fit = float(perr[1])
+            amplitude   = float(popt[0])
+            baseline    = B_fixed
+            width       = float(popt[2])
+            fit_ok      = True
         except Exception:
-            r_fit          = r_raw
-            sigma_r_fit    = float("nan")
-            amplitude      = max(A0, 0.0)
-            width          = float("nan")
-            fit_ok         = False
+            r_fit       = r_raw
+            sigma_r_fit = float("nan")
+            amplitude   = A0
+            baseline    = B_fixed
+            width       = float("nan")
+            fit_ok      = False
 
         results.append(PeakFit(
             peak_idx       = int(peak_orig),
@@ -710,6 +721,7 @@ def _find_and_fit_peaks(
             r_fit_px       = r_fit,
             sigma_r_fit_px = sigma_r_fit,
             amplitude_adu  = amplitude,
+            baseline_adu   = baseline,
             width_px       = width,
             fit_ok         = fit_ok,
         ))
@@ -841,9 +853,15 @@ def annular_reduce(
     n_sparse    = int(np.sum(n_pixels_out < min_pixels_per_bin))
     sparse_bins = n_sparse > 0.1 * n_bins
 
+    # Global baseline: mean of the 20 lowest good-bin profile values.
+    good_vals = profile_out[~masked_out & np.isfinite(profile_out)]
+    n_base    = min(20, len(good_vals))
+    baseline  = float(np.mean(np.sort(good_vals)[:n_base])) if n_base > 0 else 0.0
+
     # Peak finding on completed profile
     peak_fits = _find_and_fit_peaks(
         r_grid, profile_out, sigma_out, masked_out,
+        baseline        = baseline,
         distance        = peak_distance,
         prominence      = peak_prominence,
         fit_half_window = peak_fit_half_window,
