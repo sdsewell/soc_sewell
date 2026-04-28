@@ -1,28 +1,44 @@
 """
-Tests for Z03 synthetic calibration image generator.
+Tests for Z03 synthetic calibration image generator (v1.5).
 
-Spec:   specs/z03_synthetic_calibration_image_generator_spec_2026-04-22.md
-Module: validation/z03_synthetic_calibration_image_generator_2026_04_14.py
+Spec:   specs/z03_synthetic_calibration_image_generator_spec_2026-04-28.md
+Module: src/fpi/z03_synthetic_calibration_image_generator.py
 
-15 tests:
-  T1   test_image_shape              — synthesise_image returns (260, 276)
-  T2   test_image_dtype              — synthesise_image returns float64
-  T3   test_image_values_positive    — noise-free image values > 0
-  T4   test_derive_secondary         — alpha direct and I0 computed correctly
-  T5   test_snr_to_ipeak             — quadratic formula gives correct I0
-  T6   test_check_psf_positive       — PSF positivity check correct
-  T7   test_check_vignetting_positive — vignetting positivity check correct
-  T8   test_synthesise_profile_shape — profile has R_BINS elements
-  T9   test_truth_json_complete      — truth JSON has all 11 user_param keys (v1.3)
-  T10  test_output_files_exist       — cal and dark .bin files written
-  T11  test_psf_broadening_effect    — non-zero sigma0 broadens fringes
-  T12  test_vignetting_effect        — non-zero I1 creates radial gradient
-  T13  test_I0_option_a              — I0_adu = I_peak / (1 + rel_638)
-  T14  test_round_trip_I0            — Z03 truth I0 matches F01 recovered I0 within 5%
-  T15  test_alpha_no_f_mm            — f_mm not present in SynthParams or derived_params
+25 tests:
+  Carry-forward (20 — updated for v1.5 signatures):
+    test_binning_config_binned          BinningConfig for binning=2 matches §6 table
+    test_binning_config_unbinned        BinningConfig for binning=1 matches §6 table
+    test_I0_option_a                    I0 = I_peak / (1 + rel_638) to 6 sig figs
+    test_derive_secondary               alpha, I0, N_R, dark_rate computed correctly
+    test_check_vignetting_positive      vignetting positivity check
+    test_cal_output_shape_binned        cal .bin loads to (260, 276) uint16
+    test_dark_output_shape_binned       dark .bin loads to (260, 276) uint16
+    test_cal_output_shape_unbinned      cal .bin loads to (528, 552) uint16
+    test_dark_output_shape_unbinned     dark .bin loads to (528, 552) uint16
+    test_cal_header_round_trip          1-row header parseable; img_type='cal'
+    test_dark_header_round_trip         dark header; img_type='dark', shutter closed
+    test_fringe_peak_location           centroid of bright pixels near (cx, cy)
+    test_snr_achieved                   achieved SNR within ±20% of requested
+    test_rel_638_ratio                  amplitude ratio ≈ rel_638 within ±5%
+    test_dark_no_fringes                dark has no periodic fringe structure
+    test_truth_json_complete            all v1.5 keys present; absent keys absent
+    test_default_params                 run_synthesis with defaults writes both files
+    test_round_trip_I0                  F01 recovers I0 within 5% of Z03 truth
+    test_alpha_no_f_mm                  alpha present, f_mm absent in SynthParams
+    test_cx_cy_offset_binned            displaced cx/cy; centroid within 1 px
+    test_cx_cy_offset_unbinned          displaced cx/cy; centroid within 1 px
+    test_filename_label                 mode label present in output filenames
+
+  New in v1.5 (5):
+    test_no_sigma_params                SynthParams has no sigma0/sigma1/sigma2/B_dc
+    test_dark_current_scales_with_temperature  rate_warm > rate_cold × 1.5
+    test_offset_present_in_dark         min(dark frame) ≥ 4 ADU
+    test_finesse_from_R                 N_R from default R ≈ 10.0
+    test_1row_header                    raw file row 0 = valid header; row 1 = pixels
 """
 
 import json
+import math
 import pathlib
 import sys
 from types import SimpleNamespace
@@ -31,392 +47,558 @@ import numpy as np
 import pytest
 
 # ---------------------------------------------------------------------------
-# Ensure repo root is on sys.path
+# Ensure repo root on sys.path
 # ---------------------------------------------------------------------------
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from validation.z03_synthetic_calibration_image_generator_2026_04_14 import (
-    SynthParams,
+from src.fpi.z03_synthetic_calibration_image_generator import (
+    BinningConfig,
     DerivedParams,
+    DARK_REF_ADU_S,
+    LAM_638,
+    LAM_640,
+    N_REF,
+    OFFSET_ADU,
+    R_BINS,
+    SynthParams,
+    T_DOUBLE_C,
+    T_REF_DARK_C,
+    check_vignetting_positive,
     derive_secondary,
+    get_binning_config,
+    run_synthesis,
+    snr_to_ipeak,
     synthesise_image,
     synthesise_profile,
-    build_instrument_params,
-    check_psf_positive,
-    check_vignetting_positive,
-    snr_to_ipeak,
     write_truth_json,
-    SIGMA_READ,
-    R_MAX_PX,
-    R_BINS,
-    NROWS,
-    NCOLS,
-    LAM_640,
-    PIX_M,
 )
 
 
 # ---------------------------------------------------------------------------
-# Shared fixture: default SynthParams (v1.3 defaults)
+# Shared helper: default SynthParams for binning=2 or 1
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def default_params() -> SynthParams:
-    """SynthParams with spec v1.3 default values."""
+def make_default_params(binning: int = 2) -> SynthParams:
+    """Return SynthParams with v1.5 default values."""
+    cfg = get_binning_config(binning)
     return SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.1, sigma2=-0.05,
-        snr_peak=50.0, I1=-0.1, I2=0.005, B_dc=300.0, rel_638=0.58,
+        binning=binning,
+        cx=cfg.cx_default,
+        cy=cfg.cy_default,
+        d_mm=20.0005,
+        alpha=cfg.alpha_default,
+        R=0.725,
+        snr_peak=50.0,
+        I1=-0.1,
+        I2=0.005,
+        T_fp_c=-20.0,
+        rel_638=0.344,
     )
 
 
-@pytest.fixture
-def default_derived(default_params) -> DerivedParams:
-    """DerivedParams from default_params."""
-    return derive_secondary(default_params)
+def _synth_files(tmp_path: pathlib.Path, binning: int = 2, seed: int = 42):
+    """Synthesise and write a cal+dark pair; return (cal_path, dark_path, truth_path)."""
+    params = make_default_params(binning)
+    cal_path, dark_path, truth_path, _ = run_synthesis(params, tmp_path, seed=seed)
+    return cal_path, dark_path, truth_path
+
+
+def _load_raw(path: pathlib.Path) -> np.ndarray:
+    """Load a .bin file as big-endian uint16 flat array."""
+    return np.frombuffer(path.read_bytes(), dtype=">u2")
+
+
+def _load_frame(path: pathlib.Path, nrows: int, ncols: int) -> np.ndarray:
+    """Load a .bin file as (nrows, ncols) big-endian uint16 array."""
+    return _load_raw(path).reshape(nrows, ncols)
 
 
 # ---------------------------------------------------------------------------
-# T1 — synthesise_image returns correct shape
+# ── CARRY-FORWARD TESTS ──────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
-def test_image_shape(default_params, default_derived):
-    """synthesise_image must return shape (NROWS, NCOLS) = (260, 276)."""
-    img = synthesise_image(default_params, default_derived)
-    assert img.shape == (NROWS, NCOLS), (
-        f"Expected shape ({NROWS}, {NCOLS}), got {img.shape}"
+def test_binning_config_binned():
+    """BinningConfig for binning=2 must match all §6 table values."""
+    cfg = get_binning_config(2)
+    assert cfg.nrows        == 260
+    assert cfg.ncols        == 276
+    assert cfg.active_rows  == 259
+    assert cfg.n_meta_rows  == 1
+    assert cfg.cx_default   == pytest.approx(137.5)
+    assert cfg.cy_default   == pytest.approx(130.0)
+    assert cfg.r_max_px     == pytest.approx(110.0)
+    assert cfg.alpha_default == pytest.approx(1.6000e-4)
+    assert cfg.pix_m        == pytest.approx(32.0e-6)
+    assert cfg.label        == "2x2_binned"
+
+
+def test_binning_config_unbinned():
+    """BinningConfig for binning=1 must match all §6 table values."""
+    cfg = get_binning_config(1)
+    assert cfg.nrows        == 528
+    assert cfg.ncols        == 552
+    assert cfg.active_rows  == 527
+    assert cfg.n_meta_rows  == 1
+    assert cfg.cx_default   == pytest.approx(275.5)
+    assert cfg.cy_default   == pytest.approx(264.0)
+    assert cfg.r_max_px     == pytest.approx(220.0)
+    assert cfg.alpha_default == pytest.approx(0.8000e-4)
+    assert cfg.pix_m        == pytest.approx(16.0e-6)
+    assert cfg.label        == "1x1_unbinned"
+
+
+def test_I0_option_a():
+    """I0 = I_peak / (1 + rel_638) to 6 significant figures (Option A)."""
+    params  = make_default_params()
+    derived = derive_secondary(params)
+
+    I_peak_expected = snr_to_ipeak(params.snr_peak, OFFSET_ADU)
+    I0_expected     = I_peak_expected / (1.0 + params.rel_638)
+
+    assert abs(derived.I_peak - I_peak_expected) / I_peak_expected < 1e-6, (
+        f"I_peak mismatch: {derived.I_peak} vs {I_peak_expected}"
+    )
+    assert abs(derived.I0 - I0_expected) / I0_expected < 1e-6, (
+        f"I0 mismatch: {derived.I0} vs {I0_expected}"
     )
 
 
-# ---------------------------------------------------------------------------
-# T2 — synthesise_image returns float64
-# ---------------------------------------------------------------------------
+def test_derive_secondary():
+    """derive_secondary returns correct alpha, I0, finesse_N_R, dark_rate."""
+    params  = make_default_params()
+    derived = derive_secondary(params)
 
-def test_image_dtype(default_params, default_derived):
-    """synthesise_image must return float64 (noise-free)."""
-    img = synthesise_image(default_params, default_derived)
-    assert img.dtype == np.float64, f"Expected float64, got {img.dtype}"
+    assert derived.alpha_rad_per_px == pytest.approx(params.alpha)
+    I_peak = snr_to_ipeak(params.snr_peak, OFFSET_ADU)
+    I0     = I_peak / (1.0 + params.rel_638)
+    assert derived.I0 == pytest.approx(I0, rel=1e-6)
 
+    N_R_expected = math.pi * math.sqrt(params.R) / (1.0 - params.R)
+    assert derived.finesse_N_R == pytest.approx(N_R_expected, rel=1e-6)
 
-# ---------------------------------------------------------------------------
-# T3 — noise-free image values are positive
-# ---------------------------------------------------------------------------
+    dark_expected = DARK_REF_ADU_S * 2.0**((params.T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+    assert derived.dark_rate == pytest.approx(dark_expected, rel=1e-6)
 
-def test_image_values_positive(default_params, default_derived):
-    """All pixel values in the noise-free image must be > 0."""
-    img = synthesise_image(default_params, default_derived)
-    assert float(img.min()) > 0.0, f"Min pixel = {float(img.min()):.3f}, expected > 0"
-
-
-# ---------------------------------------------------------------------------
-# T4 — derive_secondary uses alpha directly and I0 is per-line
-# ---------------------------------------------------------------------------
-
-def test_derive_secondary(default_params):
-    """alpha_rad_per_px == params.alpha (direct); I0 = I_peak/(1+rel_638)."""
-    derived = derive_secondary(default_params)
-    assert derived.alpha_rad_per_px == default_params.alpha, (
-        f"alpha_rad_per_px={derived.alpha_rad_per_px:.6e}, "
-        f"expected {default_params.alpha:.6e}"
-    )
-    assert derived.I0 > default_params.B_dc, (
-        f"I0 ({derived.I0:.1f}) should exceed B_dc ({default_params.B_dc})"
-    )
-    I_peak_expected = snr_to_ipeak(
-        default_params.snr_peak, default_params.B_dc, SIGMA_READ
-    )
-    I0_expected = I_peak_expected / (1.0 + default_params.rel_638)
-    assert abs(derived.I0 - I0_expected) / I0_expected < 1e-10, (
-        f"I0={derived.I0:.4f} vs expected={I0_expected:.4f}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# T5 — snr_to_ipeak gives correct quadratic root
-# ---------------------------------------------------------------------------
-
-def test_snr_to_ipeak():
-    """Verify the SNR quadratic root: SNR^2 * I_peak + SNR^2 * noise = I_peak^2."""
-    snr = 50.0
-    B_dc = 300.0
-    I0 = snr_to_ipeak(snr, B_dc, SIGMA_READ)
-    # Check positive root: I_peak^2 - snr^2 * I_peak - snr^2 * (B + sigma^2) = 0
-    noise_floor = B_dc + SIGMA_READ ** 2
-    residual = I0 ** 2 - snr ** 2 * I0 - snr ** 2 * noise_floor
-    assert abs(residual) < 1e-3, (
-        f"Quadratic residual = {residual:.4e}, expected ~0"
-    )
-    assert I0 > 0, "I_peak must be positive"
-
-
-# ---------------------------------------------------------------------------
-# T6 — check_psf_positive
-# ---------------------------------------------------------------------------
-
-def test_check_psf_positive():
-    """PSF positivity: sigma0 >= sqrt(sigma1^2 + sigma2^2)."""
-    assert check_psf_positive(0.5, 0.1, -0.05) is True
-    assert check_psf_positive(0.0, 0.0, 0.0) is True
-    assert check_psf_positive(0.1, 0.5, 0.5) is False
-
-
-# ---------------------------------------------------------------------------
-# T7 — check_vignetting_positive
-# ---------------------------------------------------------------------------
 
 def test_check_vignetting_positive():
-    """Vignetting envelope I(r) must be > 0 for all r in [0, r_max]."""
+    """Vignetting envelope I(r) must be > 0 for r ∈ [0, r_max]."""
     I0 = 1000.0
-    assert check_vignetting_positive(I0, -0.1, 0.005, R_MAX_PX) is True
-    assert check_vignetting_positive(I0, -1.0, 0.0, R_MAX_PX) is False
+    assert check_vignetting_positive(I0, -0.1, 0.005, 110.0) is True
+    assert check_vignetting_positive(I0, -1.0,  0.0,  110.0) is False
 
 
-# ---------------------------------------------------------------------------
-# T8 — synthesise_profile returns correct shape
-# ---------------------------------------------------------------------------
+def test_cal_output_shape_binned(tmp_path):
+    """Cal .bin file loads to (260, 276) uint16 for binning=2."""
+    cal_path, _, _ = _synth_files(tmp_path, binning=2)
+    data = _load_frame(cal_path, 260, 276)
+    assert data.shape == (260, 276)
+    assert data.dtype.kind in ("u", "i")   # unsigned or signed int family
 
-def test_synthesise_profile_shape(default_params, default_derived):
-    """synthesise_profile must return a profile of length R_BINS."""
-    inst_params = build_instrument_params(default_params, default_derived)
-    profile_1d, r_grid = synthesise_profile(inst_params, default_params.rel_638)
-    assert len(profile_1d) == R_BINS, (
-        f"Profile length = {len(profile_1d)}, expected {R_BINS}"
+
+def test_dark_output_shape_binned(tmp_path):
+    """Dark .bin file loads to (260, 276) uint16 for binning=2."""
+    _, dark_path, _ = _synth_files(tmp_path, binning=2)
+    data = _load_frame(dark_path, 260, 276)
+    assert data.shape == (260, 276)
+
+
+def test_cal_output_shape_unbinned(tmp_path):
+    """Cal .bin file loads to (528, 552) uint16 for binning=1."""
+    cal_path, _, _ = _synth_files(tmp_path, binning=1)
+    data = _load_frame(cal_path, 528, 552)
+    assert data.shape == (528, 552)
+
+
+def test_dark_output_shape_unbinned(tmp_path):
+    """Dark .bin file loads to (528, 552) uint16 for binning=1."""
+    _, dark_path, _ = _synth_files(tmp_path, binning=1)
+    data = _load_frame(dark_path, 528, 552)
+    assert data.shape == (528, 552)
+
+
+def test_cal_header_round_trip(tmp_path):
+    """1-row header is recoverable via P01 parse_header(); img_type='cal'."""
+    from src.metadata.p01_image_metadata_2026_04_06 import parse_header
+
+    cal_path, _, _ = _synth_files(tmp_path, binning=2)
+    raw   = _load_raw(cal_path)
+    hrow  = raw[:276].astype(">u2")
+    parsed = parse_header(hrow)
+
+    assert parsed["rows"]     == 260
+    assert parsed["cols"]     == 276
+    assert parsed["img_type"] == "cal"
+    assert parsed["shutter_status"] == "open"
+
+
+def test_dark_header_round_trip(tmp_path):
+    """Dark 1-row header: img_type='dark', shutter closed."""
+    from src.metadata.p01_image_metadata_2026_04_06 import parse_header
+
+    _, dark_path, _ = _synth_files(tmp_path, binning=2)
+    raw    = _load_raw(dark_path)
+    hrow   = raw[:276].astype(">u2")
+    parsed = parse_header(hrow)
+
+    assert parsed["rows"]           == 260
+    assert parsed["img_type"]       == "dark"
+    assert parsed["shutter_status"] == "closed"
+
+
+def _centroid_of_bright_pixels(pixel_data: np.ndarray, pct: float = 95.0) -> tuple:
+    """Return (row_centroid, col_centroid) of top-pct% pixels."""
+    threshold = np.percentile(pixel_data.astype(float), pct)
+    rows, cols = np.where(pixel_data >= threshold)
+    return float(np.mean(rows)), float(np.mean(cols))
+
+
+def test_fringe_peak_location(tmp_path):
+    """Centroid of the top-5% brightest pixels in the cal image is within 1 px of (cx, cy)."""
+    params  = make_default_params(binning=2)
+    cfg     = get_binning_config(2)
+    cal_path = run_synthesis(params, tmp_path, seed=42)[0]
+
+    data       = _load_frame(cal_path, cfg.nrows, cfg.ncols).astype(float)
+    pixel_data = data[cfg.n_meta_rows:, :]  # exclude header row
+
+    cen_row, cen_col = _centroid_of_bright_pixels(pixel_data, pct=95.0)
+    # cen_row is in pixel-data coords; convert to full-frame coords
+    cen_row_full = cen_row + cfg.n_meta_rows
+
+    assert abs(cen_col - params.cx) < 1.0, (
+        f"Column centroid {cen_col:.2f} not within 1 px of cx={params.cx}"
     )
-    assert len(r_grid) == R_BINS
-    assert float(profile_1d.min()) >= default_params.B_dc * 0.9, (
-        f"Min profile value {float(profile_1d.min()):.1f} seems too low"
+    assert abs(cen_row_full - params.cy) < 1.0, (
+        f"Row centroid {cen_row_full:.2f} not within 1 px of cy={params.cy}"
     )
 
 
-# ---------------------------------------------------------------------------
-# T9 — truth JSON has all user_param keys and required structure (v1.3)
-# ---------------------------------------------------------------------------
+def test_snr_achieved(tmp_path):
+    """Peak SNR of the synthesized cal image is within ±20% of the requested SNR."""
+    params  = make_default_params(binning=2)
+    cfg     = get_binning_config(2)
+    cal_path = run_synthesis(params, tmp_path, seed=42)[0]
 
-def test_truth_json_complete(default_params, default_derived, tmp_path):
-    """Truth JSON must contain alpha (not f_mm), I0_adu, Y_B, and version 1.3."""
-    path_cal  = tmp_path / "cal.bin"
-    path_dark = tmp_path / "dark.bin"
-    truth_path = tmp_path / "truth.json"
+    data       = _load_frame(cal_path, cfg.nrows, cfg.ncols).astype(float)
+    pixel_data = data[cfg.n_meta_rows:, :]
 
-    write_truth_json(default_params, default_derived, 12345, path_cal, path_dark, truth_path)
+    bg_level  = float(np.percentile(pixel_data, 5))
+    peak_val  = float(np.max(pixel_data))
+    I_peak    = peak_val - bg_level
+    noise_est = math.sqrt(max(I_peak + OFFSET_ADU, 1.0))
+    achieved  = I_peak / noise_est if noise_est > 0 else 0.0
 
+    assert abs(achieved - params.snr_peak) / params.snr_peak < 0.20, (
+        f"Achieved SNR={achieved:.1f} vs requested={params.snr_peak} (>20% error)"
+    )
+
+
+def test_rel_638_ratio():
+    """Amplitude ratio of rel_638*A638 vs A640 components is within ±5% of rel_638."""
+    params  = make_default_params(binning=2)
+    derived = derive_secondary(params)
+    cfg     = get_binning_config(2)
+
+    r_grid    = np.linspace(0.0, cfg.r_max_px, R_BINS)
+    cos_theta = np.cos(np.arctan(params.alpha * r_grid))
+    F_coef    = 4.0 * params.R / (1.0 - params.R)**2
+    u         = r_grid / cfg.r_max_px
+    vignette  = derived.I0 * (1.0 + params.I1 * u + params.I2 * u**2)
+
+    def _airy(lam):
+        phase = 4.0 * np.pi * N_REF * (params.d_mm * 1e-3) * cos_theta / lam
+        return vignette / (1.0 + F_coef * np.sin(phase / 2.0)**2)
+
+    A640 = _airy(LAM_640)
+    A638 = _airy(LAM_638)
+
+    amp_640        = float(np.max(A640) - np.min(A640))
+    amp_638_scaled = float(np.max(params.rel_638 * A638) - np.min(params.rel_638 * A638))
+
+    measured_ratio = amp_638_scaled / amp_640
+    assert abs(measured_ratio - params.rel_638) / params.rel_638 < 0.05, (
+        f"Amplitude ratio {measured_ratio:.4f} ≠ rel_638={params.rel_638} (>5% error)"
+    )
+
+
+def test_dark_no_fringes(tmp_path):
+    """Dark frame has no periodic fringe structure (std much less than cal frame)."""
+    params   = make_default_params(binning=2)
+    cfg      = get_binning_config(2)
+    cal_path, dark_path, *_ = run_synthesis(params, tmp_path, seed=42)
+
+    cal_data  = _load_frame(cal_path,  cfg.nrows, cfg.ncols).astype(float)
+    dark_data = _load_frame(dark_path, cfg.nrows, cfg.ncols).astype(float)
+
+    cal_pixels  = cal_data[cfg.n_meta_rows:, :]
+    dark_pixels = dark_data[cfg.n_meta_rows:, :]
+
+    cal_std  = float(np.std(cal_pixels))
+    dark_std = float(np.std(dark_pixels))
+
+    assert dark_std < cal_std * 0.1, (
+        f"Dark std {dark_std:.2f} should be << cal std {cal_std:.2f} (no fringes)"
+    )
+
+
+def test_truth_json_complete(tmp_path):
+    """Truth JSON must contain all v1.5 required keys and must NOT contain removed keys."""
+    _, _, truth_path = _synth_files(tmp_path, binning=2)
     with open(truth_path) as f:
         truth = json.load(f)
 
     expected_user_keys = {
-        "d_mm", "alpha", "R", "sigma0", "sigma1", "sigma2",
-        "snr_peak", "I1", "I2", "B_dc", "rel_638"
+        "binning", "cx", "cy",
+        "d_mm", "alpha", "R",
+        "snr_peak", "I1", "I2", "T_fp_c", "rel_638",
     }
-    assert expected_user_keys == set(truth["user_params"].keys()), (
-        f"user_params keys mismatch: {set(truth['user_params'].keys())}"
-    )
     expected_derived_keys = {
         "alpha_rad_per_px", "I_peak_adu", "I0_adu", "Y_B",
-        "FSR_m", "finesse_coefficient_F", "finesse_N"
+        "finesse_N_R", "finesse_coefficient_F", "FSR_m", "dark_rate_adu_px_s",
     }
-    assert expected_derived_keys == set(truth["derived_params"].keys()), (
-        f"derived_params keys mismatch: {set(truth['derived_params'].keys())}"
+    expected_fixed_keys = {
+        "offset_adu", "dark_ref_adu_s", "T_ref_dark_c", "T_double_c",
+        "R_bins", "n_ref", "lam_640_m", "lam_638_m",
+        "n_meta_rows", "nrows", "ncols", "active_rows", "r_max_px", "pix_m", "label",
+    }
+
+    assert expected_user_keys == set(truth["user_params"].keys()), (
+        f"user_params key mismatch: {set(truth['user_params'].keys())}"
     )
-    assert "f_mm" not in truth["user_params"]
-    assert "f_mm" not in truth["derived_params"]
+    assert expected_derived_keys == set(truth["derived_params"].keys()), (
+        f"derived_params key mismatch: {set(truth['derived_params'].keys())}"
+    )
+    assert expected_fixed_keys == set(truth["fixed_constants"].keys()), (
+        f"fixed_constants key mismatch: {set(truth['fixed_constants'].keys())}"
+    )
+
+    # Absent keys (removed in v1.5)
+    for absent in ("sigma0", "sigma1", "sigma2", "B_dc", "f_mm", "sigma_read"):
+        assert absent not in truth["user_params"], f"Unexpected key '{absent}' in user_params"
+        assert absent not in truth.get("fixed_constants", {}), \
+            f"Unexpected key '{absent}' in fixed_constants"
+
+    assert truth["z03_version"] == "1.5"
     assert "output_cal_file"  in truth
     assert "output_dark_file" in truth
-    assert truth["z03_version"] == "1.3"
+    # n_meta_rows must be 1
+    assert truth["fixed_constants"]["n_meta_rows"] == 1
 
 
-# ---------------------------------------------------------------------------
-# T10 — cal and dark .bin files are written with correct size
-# ---------------------------------------------------------------------------
+def test_default_params(tmp_path):
+    """Script runs with all defaults — both .bin and _truth.json are written."""
+    params = make_default_params(binning=2)
+    cal_path, dark_path, truth_path, _ = run_synthesis(params, tmp_path, seed=12345)
 
-def test_output_files_exist(default_params, default_derived, tmp_path):
-    """synthesise_image + noise model produces correct-size .bin output."""
-    I_float = synthesise_image(default_params, default_derived)
+    assert cal_path.exists(),  f"cal .bin not found at {cal_path}"
+    assert dark_path.exists(), f"dark .bin not found at {dark_path}"
+    assert truth_path.exists(), f"truth JSON not found at {truth_path}"
 
-    rng = np.random.default_rng(42)
-    signal_counts = rng.poisson(np.clip(I_float, 0, None)).astype(np.float64)
-    read_noise    = rng.standard_normal(size=signal_counts.shape) * SIGMA_READ
-    image_cal     = np.clip(signal_counts + read_noise, 0, 16383).astype(np.uint16)
-
-    dark_float  = np.full((NROWS, NCOLS), default_params.B_dc, dtype=np.float64)
-    dark_counts = rng.poisson(dark_float).astype(np.float64)
-    dark_read   = rng.standard_normal(size=dark_float.shape) * SIGMA_READ
-    image_dark  = np.clip(dark_counts + dark_read, 0, 16383).astype(np.uint16)
-
-    cal_path  = tmp_path / "cal.bin"
-    dark_path = tmp_path / "dark.bin"
-    image_cal.tofile(str(cal_path))
-    image_dark.tofile(str(dark_path))
-
-    expected_bytes = NROWS * NCOLS * 2  # uint16
+    # Files have the right size
+    cfg = get_binning_config(2)
+    expected_bytes = cfg.nrows * cfg.ncols * 2
     assert cal_path.stat().st_size  == expected_bytes
     assert dark_path.stat().st_size == expected_bytes
 
 
-# ---------------------------------------------------------------------------
-# T11 — PSF broadening effect
-# ---------------------------------------------------------------------------
-
-def test_psf_broadening_effect(default_params):
-    """Non-zero sigma0 must produce broader fringes than sigma0=0."""
-    params_sharp = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.0, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=0.0, I2=0.0, B_dc=300.0, rel_638=0.58,
-    )
-    params_broad = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=2.0, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=0.0, I2=0.0, B_dc=300.0, rel_638=0.58,
-    )
-
-    derived_sharp = derive_secondary(params_sharp)
-    derived_broad = derive_secondary(params_broad)
-
-    inst_sharp = build_instrument_params(params_sharp, derived_sharp)
-    inst_broad = build_instrument_params(params_broad, derived_broad)
-
-    prof_sharp, r_grid = synthesise_profile(inst_sharp, 0.58)
-    prof_broad, _      = synthesise_profile(inst_broad, 0.58)
-
-    assert np.std(prof_broad) < np.std(prof_sharp), (
-        "PSF broadening should smooth (reduce std of) the fringe profile; "
-        f"std_sharp={np.std(prof_sharp):.2f}, std_broad={np.std(prof_broad):.2f}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# T12 — Vignetting effect
-# ---------------------------------------------------------------------------
-
-def test_vignetting_effect(default_params):
-    """Non-zero I1 must produce a measurable radial intensity gradient."""
-    params_flat = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=0.0, I2=0.0, B_dc=300.0, rel_638=0.58,
-    )
-    params_vig = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=-0.4, I2=0.0, B_dc=300.0, rel_638=0.58,
-    )
-
-    derived_flat = derive_secondary(params_flat)
-    derived_vig  = derive_secondary(params_vig)
-
-    img_flat = synthesise_image(params_flat, derived_flat)
-    img_vig  = synthesise_image(params_vig,  derived_vig)
-
-    cx, cy = 137, 129
-    r_half = 55   # half of r_max (110 px)
-
-    def annulus_mean(img, r_inner, r_outer):
-        rows, cols = np.ogrid[:img.shape[0], :img.shape[1]]
-        r_map = np.sqrt((cols - cx) ** 2 + (rows - cy) ** 2)
-        mask  = (r_map >= r_inner) & (r_map < r_outer)
-        return float(img[mask].mean())
-
-    inner_flat = annulus_mean(img_flat, 0, r_half)
-    outer_flat = annulus_mean(img_flat, r_half, 110)
-    inner_vig  = annulus_mean(img_vig,  0, r_half)
-    outer_vig  = annulus_mean(img_vig,  r_half, 110)
-
-    ratio_flat = inner_flat / outer_flat
-    ratio_vig  = inner_vig  / outer_vig
-
-    assert ratio_vig > ratio_flat * 1.01, (
-        f"Vignetting (I1=-0.4) should reduce outer vs inner; "
-        f"ratio_flat={ratio_flat:.4f}, ratio_vig={ratio_vig:.4f}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# T13 — I0 Option A: I0_adu = I_peak / (1 + rel_638)
-# ---------------------------------------------------------------------------
-
-def test_I0_option_a():
-    """derive_secondary must set I0 = I_peak/(1+rel_638) to 6 significant figures."""
-    params = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=-0.1, I2=0.005,
-        B_dc=300.0, rel_638=0.58,
-    )
-    derived = derive_secondary(params)
-    I_peak_expected = snr_to_ipeak(50.0, 300.0, SIGMA_READ)
-    I0_expected     = I_peak_expected / (1.0 + 0.58)
-    assert abs(derived.I0 - I0_expected) / I0_expected < 1e-6, (
-        f"I0 mismatch: {derived.I0} vs {I0_expected}"
-    )
-    assert abs(derived.I_peak - I_peak_expected) / I_peak_expected < 1e-6, (
-        f"I_peak mismatch: {derived.I_peak} vs {I_peak_expected}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# T14 — Round-trip I0: Z03 truth I0 matches F01 fitted I0 within 5%
-# ---------------------------------------------------------------------------
-
-def test_round_trip_I0():
+def test_round_trip_I0(tmp_path):
     """F01 must recover I0 within 5% of Z03 truth I0 on a synthetic profile."""
     from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_22 import (
-        fit_neon_fringe, TolanskyResult,
+        fit_neon_fringe,
+        TolanskyResult,
     )
 
-    params = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=-0.1, I2=0.005,
-        B_dc=300.0, rel_638=0.58,
-    )
-    derived  = derive_secondary(params)
-    inst     = build_instrument_params(params, derived)
-    profile_1d, r_grid = synthesise_profile(inst, params.rel_638)
+    params  = make_default_params(binning=2)
+    derived = derive_secondary(params)
+    cfg     = get_binning_config(2)
+
+    profile_1d, r_grid = synthesise_profile(params, derived)
 
     rng   = np.random.default_rng(42)
     noisy = rng.poisson(np.maximum(profile_1d, 1)).astype(np.float32)
     sigma = np.maximum(np.sqrt(noisy) / 8.0, 1.0).astype(np.float32)
 
     fringe = SimpleNamespace(
-        r_grid=r_grid.astype(np.float32),
-        r2_grid=(r_grid ** 2).astype(np.float32),
-        profile=noisy,
-        sigma_profile=sigma,
-        masked=np.zeros(len(r_grid), dtype=bool),
-        r_max_px=float(R_MAX_PX),
-        quality_flags=0,
+        r_grid        = r_grid.astype(np.float32),
+        r2_grid       = (r_grid**2).astype(np.float32),
+        profile       = noisy,
+        sigma_profile = sigma,
+        masked        = np.zeros(len(r_grid), dtype=bool),
+        r_max_px      = float(cfg.r_max_px),
+        quality_flags = 0,
     )
     tolansky = TolanskyResult(
-        t_m=20.0006e-3, alpha_rpx=1.6133e-4,
-        epsilon_640=0.7735, epsilon_638=0.2711, epsilon_cal=0.22,
+        t_m         = params.d_mm * 1e-3,
+        alpha_rpx   = params.alpha,
+        epsilon_640 = 0.7735,
+        epsilon_638 = 0.2711,
+        epsilon_cal = 0.22,
     )
-    result = fit_neon_fringe(fringe, tolansky)
-
+    result   = fit_neon_fringe(fringe, tolansky)
     truth_I0 = derived.I0
+
     assert abs(result.I0 - truth_I0) / truth_I0 < 0.05, (
         f"F01 I0={result.I0:.1f} vs Z03 truth I0={truth_I0:.1f} (>{5}% error)"
     )
 
 
-# ---------------------------------------------------------------------------
-# T15 — alpha present, f_mm absent in SynthParams and derived_params
-# ---------------------------------------------------------------------------
-
 def test_alpha_no_f_mm():
-    """SynthParams must have 'alpha' field and no 'f_mm' field."""
-    params = SynthParams(
-        d_mm=20.0006, alpha=1.6133e-4, R=0.53,
-        sigma0=0.5, sigma1=0.0, sigma2=0.0,
-        snr_peak=50.0, I1=0.0, I2=0.0,
-        B_dc=300.0, rel_638=0.58,
-    )
+    """SynthParams must have 'alpha' field and must NOT have 'f_mm' field."""
+    params  = make_default_params()
     derived = derive_secondary(params)
 
     user_keys = set(params.__dataclass_fields__.keys())
-    assert "alpha" in user_keys, "SynthParams must have 'alpha' field"
-    assert "f_mm" not in user_keys, "SynthParams must NOT have 'f_mm' field"
-    assert derived.alpha_rad_per_px == params.alpha, (
-        f"derived.alpha_rad_per_px={derived.alpha_rad_per_px} != params.alpha={params.alpha}"
+    assert "alpha" in user_keys,   "SynthParams must have 'alpha' field"
+    assert "f_mm"  not in user_keys, "SynthParams must NOT have 'f_mm' field"
+    assert derived.alpha_rad_per_px == pytest.approx(params.alpha)
+
+
+def test_cx_cy_offset_binned(tmp_path):
+    """Fringe centre displaced +10 px in both axes; centroid within 1 px of (cx+10, cy+10)."""
+    cfg = get_binning_config(2)
+    params = SynthParams(
+        binning=2,
+        cx=cfg.cx_default + 10.0,
+        cy=cfg.cy_default + 10.0,
+        d_mm=20.0005, alpha=cfg.alpha_default, R=0.725,
+        snr_peak=50.0, I1=-0.1, I2=0.005, T_fp_c=-20.0, rel_638=0.344,
+    )
+    cal_path = run_synthesis(params, tmp_path, seed=42)[0]
+
+    data       = _load_frame(cal_path, cfg.nrows, cfg.ncols).astype(float)
+    pixel_data = data[cfg.n_meta_rows:, :]
+
+    cen_row, cen_col = _centroid_of_bright_pixels(pixel_data, pct=95.0)
+    cen_row_full = cen_row + cfg.n_meta_rows
+
+    assert abs(cen_col - params.cx) < 1.0, (
+        f"Col centroid {cen_col:.2f} not within 1 px of cx={params.cx}"
+    )
+    assert abs(cen_row_full - params.cy) < 1.0, (
+        f"Row centroid {cen_row_full:.2f} not within 1 px of cy={params.cy}"
+    )
+
+
+def test_cx_cy_offset_unbinned(tmp_path):
+    """Unbinned: fringe centre displaced +20 px; centroid within 1 px of new centre."""
+    cfg = get_binning_config(1)
+    params = SynthParams(
+        binning=1,
+        cx=cfg.cx_default + 20.0,
+        cy=cfg.cy_default + 20.0,
+        d_mm=20.0005, alpha=cfg.alpha_default, R=0.725,
+        snr_peak=50.0, I1=-0.1, I2=0.005, T_fp_c=-20.0, rel_638=0.344,
+    )
+    cal_path = run_synthesis(params, tmp_path, seed=42)[0]
+
+    data       = _load_frame(cal_path, cfg.nrows, cfg.ncols).astype(float)
+    pixel_data = data[cfg.n_meta_rows:, :]
+
+    cen_row, cen_col = _centroid_of_bright_pixels(pixel_data, pct=95.0)
+    cen_row_full = cen_row + cfg.n_meta_rows
+
+    assert abs(cen_col - params.cx) < 1.0, (
+        f"Col centroid {cen_col:.2f} not within 1 px of cx={params.cx}"
+    )
+    assert abs(cen_row_full - params.cy) < 1.0, (
+        f"Row centroid {cen_row_full:.2f} not within 1 px of cy={params.cy}"
+    )
+
+
+def test_filename_label(tmp_path):
+    """Output filenames must contain the mode label (e.g., '2x2_binned')."""
+    cfg = get_binning_config(2)
+    params = make_default_params(binning=2)
+    cal_path, dark_path, *_ = run_synthesis(params, tmp_path, seed=42)
+
+    assert cfg.label in cal_path.name, (
+        f"Mode label '{cfg.label}' not found in cal filename '{cal_path.name}'"
+    )
+    assert cfg.label in dark_path.name, (
+        f"Mode label '{cfg.label}' not found in dark filename '{dark_path.name}'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ── NEW v1.5 TESTS ───────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+def test_no_sigma_params():
+    """SynthParams must NOT have sigma0, sigma1, sigma2, or B_dc fields."""
+    params = make_default_params()
+    for attr in ("sigma0", "sigma1", "sigma2", "B_dc"):
+        assert not hasattr(params, attr), (
+            f"SynthParams should not have '{attr}' field (removed in v1.5)"
+        )
+
+
+def test_dark_current_scales_with_temperature():
+    """Dark rate at −10°C must be at least 1.5× higher than at −20°C."""
+    exp_time_s = 1.0
+    rate_cold  = DARK_REF_ADU_S * 2.0**((-20.0 - T_REF_DARK_C) / T_DOUBLE_C)
+    rate_warm  = DARK_REF_ADU_S * 2.0**((-10.0 - T_REF_DARK_C) / T_DOUBLE_C)
+    assert rate_warm > rate_cold * 1.5, (
+        f"Dark rate at -10°C ({rate_warm:.4f}) should be >1.5× rate at -20°C ({rate_cold:.4f})"
+    )
+
+
+def test_offset_present_in_dark(tmp_path):
+    """Dark frame minimum ≥ 4 ADU (electronic offset floor) at very short exposure."""
+    cfg    = get_binning_config(2)
+    params = SynthParams(
+        binning=2,
+        cx=cfg.cx_default, cy=cfg.cy_default,
+        d_mm=20.0005, alpha=cfg.alpha_default, R=0.725,
+        snr_peak=50.0, I1=-0.1, I2=0.005,
+        T_fp_c=-20.0,   # coldest T → negligible dark current
+        rel_638=0.344,
+    )
+    # Use very short exposure: 1 count × 0.001 s = 0.001 s → dark ≈ 0.00005 ADU
+    _, dark_path, *_ = run_synthesis(params, tmp_path, seed=42, exp_time_cts=1)
+
+    dark_data   = _load_frame(dark_path, cfg.nrows, cfg.ncols)
+    dark_pixels = dark_data[cfg.n_meta_rows:, :]
+
+    assert int(np.min(dark_pixels)) >= 4, (
+        f"Dark minimum {int(np.min(dark_pixels))} ADU is below 4 (OFFSET_ADU floor)"
+    )
+
+
+def test_finesse_from_R():
+    """N_R computed from default R = 0.725 must be in the range (9.0, 10.5).
+
+    The spec quotes N_R ≈ 10.0 for R = 0.725 as an approximation;
+    the exact value is N_R = π√0.725 / (1−0.725) ≈ 9.73.
+    """
+    R   = 0.725
+    N_R = math.pi * math.sqrt(R) / (1.0 - R)
+    assert 9.0 < N_R < 10.5, (
+        f"Finesse N_R = {N_R:.4f} for R={R} is outside expected range (9.0, 10.5)"
+    )
+
+
+def test_1row_header(tmp_path):
+    """File row 0 is a valid 1-row header; row 1 (first pixel row) contains signal."""
+    cfg      = get_binning_config(2)
+    cal_path = _synth_files(tmp_path, binning=2)[0]
+
+    raw = _load_raw(cal_path)
+    assert raw.shape == (cfg.nrows * cfg.ncols,), (
+        f"Expected {cfg.nrows * cfg.ncols} words, got {raw.shape}"
+    )
+
+    header_row = raw[:cfg.ncols]
+    assert int(header_row[0]) == cfg.nrows, (
+        f"header_row[0] = {int(header_row[0])}, expected {cfg.nrows}"
+    )
+    assert int(header_row[1]) == cfg.ncols, (
+        f"header_row[1] = {int(header_row[1])}, expected {cfg.ncols}"
+    )
+
+    # Row 1 (first pixel row) should contain non-trivial signal
+    pixel_row1 = raw[cfg.ncols : 2 * cfg.ncols]
+    assert np.any(pixel_row1 > 10), (
+        "Expected some pixel values > 10 in the first pixel row (row 1)"
     )

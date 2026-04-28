@@ -24,7 +24,7 @@
 | Z01  | validate-cal| impl   | 6-stage  | 2026-04-11    |
 | Z01a | OI630-cal   | impl   | 16/16    | 2026-04-12    |
 | Z02  | airglow-gen | impl   | 8/8      | 2026-04-10    |
-| Z03  | cal-gen     | impl   | 15/15    | 2026-04-22    |
+| Z03  | cal-gen     | impl   | 25/25    | 2026-04-28    |
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
