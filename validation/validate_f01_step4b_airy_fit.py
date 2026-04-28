@@ -965,6 +965,17 @@ def main():
         print(f"  [CSV header] Y_B = {_yb_from_csv:.4f}  "
               f"(from Z01a amplitude ratio — will override internal estimator)")
 
+    # Fractional fringe order ε₆₄₀ from Tolansky WLS fit (written by Z01a).
+    # Used to pin the sub-FSR phase of d_eff so the Airy model places fringes
+    # at the correct radii.  Falls back to 0.0 if CSV predates Z01a 2026-04-22.
+    _eps_640 = (
+        float(_meta_peek["epsilon_640"])
+        if "epsilon_640" in _meta_peek and _meta_peek["epsilon_640"] not in ("nan", "")
+        else 0.0
+    )
+    print(f"  [CSV header] ε₆₄₀ = {_eps_640:.6f}  "
+          f"{'(from Z01a Tolansky WLS)' if 'epsilon_640' in _meta_peek else '(default 0.0 — not in CSV)'}")
+
     print("\n  Fit parameters (press Enter to accept default):\n")
     d_mm       = float(_ask("Benoit gap  d",  f"{D_25C_MM*1e3:.6f}", "mm"))
     alpha_init = float(_ask("Plate scale α",  _alpha_default,         "rad/px"))
@@ -981,6 +992,31 @@ def main():
                        "1", "1 or 2"))
 
     d_m = d_mm * 1e-3
+
+    # ── Adjust d_m to be self-consistent with the measured ε₆₄₀ ─────────────
+    # The Benoit-recovered d_mm is accurate to ~500 nm, but the Airy phase at
+    # r=0 depends on d to nanometre precision.  A 349 nm error in d shifts the
+    # first fringe from r=16.7 px to r=41 px — the entire model is displaced.
+    #
+    # The single-line corrected gap is:
+    #   N_int = round(2*n*d_benoit / lam_640)
+    #   d_eff = (N_int + eps_640_meas) * lam_640 / (2*n)
+    #
+    # This is self-consistent: N_int comes from d_benoit (which correctly
+    # resolves which FSR period we are in), and the sub-FSR position is then
+    # pinned by the measured eps_640 rather than the noisier Benoit formula.
+    # The two differ by at most ~(0.5 FSR × lam/2) = ~160 nm for any valid
+    # Tolansky result, well within the Benoit ±500 nm precision.
+    _lam_640 = 640.2248e-9  # m
+    _N_int = round(2.0 * d_m / _lam_640)
+    d_m_eff = (_N_int + _eps_640) * _lam_640 / 2.0
+    print(f"\n  Gap adjustment (d_benoit → d_eff):")
+    print(f"    d_benoit = {d_m*1e3:.6f} mm  (2nd/λ₆₄₀ = {2*d_m/_lam_640:.4f})")
+    print(f"    N_int    = {_N_int}")
+    print(f"    eps_640  = {_eps_640:.6f}  (from Tolansky WLS)")
+    print(f"    d_eff    = {d_m_eff*1e3:.6f} mm  (2nd/λ₆₄₀ = {2*d_m_eff/_lam_640:.6f})")
+    print(f"    delta    = {(d_m_eff - d_m)*1e9:+.1f} nm")
+    d_m = d_m_eff  # use corrected gap everywhere from here on
 
     # ── Load / generate profile ───────────────────────────────────────────────
     if csv_path:

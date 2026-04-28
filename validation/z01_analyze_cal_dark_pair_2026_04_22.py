@@ -295,7 +295,7 @@ plt.tight_layout()
 plt.show()
 
 # ── Annular reduction ─────────────────────────────────────────────────────────
-R_MAX_PX = 100.0
+R_MAX_PX = 110.0
 N_BINS   = 150
 
 fp = annular_reduce(
