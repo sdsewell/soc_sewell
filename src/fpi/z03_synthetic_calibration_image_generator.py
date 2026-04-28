@@ -45,9 +45,9 @@ from src.fpi.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
 # ---------------------------------------------------------------------------
 
 OFFSET_ADU       = 5          # ADU — bias + read noise combined; fixed pedestal
-DARK_REF_ADU_S   = 0.05       # ADU/px/s at T_REF_DARK_C
-T_REF_DARK_C     = -20.0      # °C — dark reference temperature
-T_DOUBLE_C       = 6.5        # °C — dark doubling interval
+DARK_REF_ADU_S   = 0.5       # ADU/px/s at T_REF_DARK_C
+T_REF_DARK_C     = 10.0      # °C — dark reference temperature
+T_DOUBLE_C       = 4.0        # °C — dark doubling interval
 R_BINS           = 2000       # radial bins
 N_REF            = 1.0        # refractive index, air gap
 LAM_640          = 640.2248e-9  # m — Ne primary line (Burns et al. 1950)
@@ -104,7 +104,7 @@ class SynthParams:
     cx:        float   # fringe centre column, pixels
     cy:        float   # fringe centre row, pixels (full-frame coords)
     # Group 1 — etalon geometry
-    d_mm:      float   # etalon gap, mm  (default 20.0005)
+    d_mm:      float   # etalon gap, mm  (default 20.0008)
     alpha:     float   # plate scale, rad/px  (mode-dependent default)
     # Group 2 — reflectivity
     R:         float   # effective reflectivity  (default 0.725)
@@ -112,7 +112,7 @@ class SynthParams:
     snr_peak:  float   # composite peak SNR  (default 50.0)
     I1:        float   # linear vignetting  (default -0.1)
     I2:        float   # quadratic vignetting  (default 0.005)
-    T_fp_c:    float   # focal plane temperature, °C  (default -20.0)
+    T_fp_c:    float   # focal plane temperature, °C  (default 20.0)
     # Group 4 — source
     rel_638:   float   # 638/640 intensity ratio  (default 0.344)
 
@@ -671,7 +671,9 @@ def make_radial_profile_figure(
 
     ax_prof.fill_between(r_v, m_v - s_v, m_v + s_v,
                          color="#4488CC", alpha=0.30, label="±1 SEM")
-    ax_prof.plot(r_v, m_v, color="#1155AA", lw=1.2, label="Radial average")
+    ax_prof.plot(r_v, m_v, color="#1155AA", lw=1.2,
+                 marker="o", markersize=2.5, markevery=1, markerfacecolor="#1155AA",
+                 label="Radial average")
 
     # Theoretical noise-free profile
     r_fine    = np.linspace(0.0, cfg.r_max_px, 6000)
@@ -751,11 +753,12 @@ def make_radial_profile_figure(
             for ci in range(len(col_labels)):
                 tbl[ri + 1, ci].set_facecolor(col)
         note = f"  (first {MAX_ROWS} of {len(labeled_peaks)} shown)" if truncated else ""
-        ax_tbl.set_title(
+        fig.text(
+            0.5, -0.1,
             f"Detected peaks: {len(labeled_peaks)} total  "
             f"({n_640} × 640.2 nm   {n_638} × 638.3 nm){note}  "
             f"|  blue = 640 nm, red = 638 nm",
-            fontsize=8.5,
+            ha="center", va="bottom", fontsize=8.5,
         )
     else:
         ax_tbl.text(0.5, 0.5, "No peaks detected in radial profile.",
@@ -864,7 +867,7 @@ def prompt_all_params() -> SynthParams:
                                cfg.cy_default - 50, cfg.cy_default + 50)
 
         print("\n── GROUP 1  ETALON GEOMETRY ──")
-        d_mm  = _validated_prompt("Etalon gap d",   20.0005,          "mm",    15.0,  25.0, 19.5, 20.5)
+        d_mm  = _validated_prompt("Etalon gap d",   20.0008,          "mm",    15.0,  25.0, 19.5, 20.5)
         alpha = _validated_prompt("Plate scale α", cfg.alpha_default, "rad/px", 1e-5, 1e-3, 0.5e-4, 5e-4)
 
         print("\n── GROUP 2  ETALON REFLECTIVITY ──")
@@ -876,7 +879,7 @@ def prompt_all_params() -> SynthParams:
         snr_peak = _validated_prompt("Peak SNR (composite 640+638 nm peak)",  50.0,   "",    1.0,  500.0, 10.0,  200.0)
         I1       = _validated_prompt("Linear vignetting coefficient I_1",     -0.1,   "",   -0.9,   0.9,  -0.5,   0.5)
         I2       = _validated_prompt("Quadratic vignetting coefficient I_2",   0.005, "",   -0.9,   0.9,  -0.5,   0.5)
-        T_fp_c   = _validated_prompt("Focal plane temperature",              -20.0,  "°C", -60.0,  20.0, -40.0,   0.0)
+        T_fp_c   = _validated_prompt("Focal plane temperature",              10.0,  "°C", -60.0,  30.0, -40.0,   0.0)
 
         print("\n── GROUP 4  SOURCE ──")
         rel_638 = _validated_prompt("Intensity ratio 638nm/640nm (rel_638)", 0.344, "", 0.0, 2.0, 0.1, 1.0)
