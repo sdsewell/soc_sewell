@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.table as mtable
 import matplotlib.ticker as mticker
+import matplotlib.gridspec as gridspec
 
 # ── Make src importable from validation/ ────────────────────────────────────
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -102,7 +103,7 @@ for fp in FILES:
 # Synthetic files follow YYYY-MM-DDTHH-MM-SSZ_cal.bin (hyphens in time portion)
 _SYNTHETIC_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_")
 _is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
-CX, CY   = (138, 129) if _is_synthetic else (145, 145)
+CX, CY   = (138, 129) if _is_synthetic else (137, 130)
 ROI_SIZE = 220
 
 # ── Plot figure 1 — loop until user accepts ROI size ─────────────────────────
@@ -364,7 +365,7 @@ ax_prof.set_title(
     f"r_max={R_MAX_PX:.0f} px,  n_bins={N_BINS},  peaks={n_peaks}",
     fontsize=9,
 )
-ax_prof.set_ylim(0, 16383)
+ax_prof.autoscale(axis="y")
 ax_prof.legend(fontsize=8)
 
 # ── Peak table ────────────────────────────────────────────────────────────────
@@ -553,7 +554,16 @@ two_sigma_d_mm = two_sigma_d_nm * 1e-6
 print(f"N_Δ  = {N_delta}")
 print(f"d    = {d_mm:.4f} ± {two_sigma_d_mm:.4f} mm  (2σ)")
 
-fig4, ax4 = plt.subplots(figsize=(9, 6))
+fig4 = plt.figure(figsize=(9, 11))
+gs4  = gridspec.GridSpec(
+    2, 1, figure=fig4,
+    height_ratios=[1.0, 1.0],
+    hspace=0.28,
+    left=0.09, right=0.97, top=0.93, bottom=0.02,
+)
+ax4     = fig4.add_subplot(gs4[0])
+ax_info = fig4.add_subplot(gs4[1])
+ax_info.axis("off")
 
 # Data points — x = r²_fit, y = P
 ax4.scatter(r2_640, p_640, color="#E84040", marker="o", s=50, zorder=3,
@@ -579,7 +589,7 @@ ax4.text(0.5, 1.002,
          transform=ax4.transAxes, fontsize=8.5,
          ha="center", va="bottom", color="#555555",
          clip_on=False)
-ax4.legend(fontsize=9, loc="lower right", bbox_to_anchor=(1.0, 0.16))
+ax4.legend(fontsize=9, loc="lower right")
 ax4.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
 # ── Lower-left: calibration image metadata ───────────────────────────────────
@@ -593,30 +603,17 @@ meta_annot = (
     f"CCD Temp: {cal_meta.ccd_temp1:.2f} °C   |   "
     f"Etalon Temps: {et_str} °C"
 )
-ax4.text(0.5, 0.97, meta_annot,
-         transform=ax4.transAxes, fontsize=8.5,
-         va="top", ha="center", family="monospace",
-         bbox=dict(boxstyle="round,pad=0.45", fc="#F5FFF5", ec="#3A7D44",
-                   alpha=0.95, lw=0.8))
-
-# ── Lower-right: ε values only ───────────────────────────────────────────────
 eps_annot = (
     f"ε_640 = {ep_640:.4f} ± {ep_640_2s:.4f}\n"
     f"ε_638 = {ep_638:.4f} ± {ep_638_2s:.4f}"
 )
-ax4.text(0.97, 0.05, eps_annot,
-         transform=ax4.transAxes, fontsize=9,
-         va="bottom", ha="right",
-         bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#888888",
-                   alpha=0.92, lw=0.8),
-         family="monospace")
 
 # ── Helper: two-part box (bold heading + monospace body) ─────────────────────
 # matplotlib can't mix font weights in one text() call, so we use two calls:
 # the heading draws the box (with padding below), the body overlaps it below.
 
 BOX_FS   = 8.0   # body font size (pt)
-LINE_H   = 0.038  # estimated axes-fraction height per line at BOX_FS in this figure
+LINE_H   = 0.058  # axes-fraction height per line at BOX_FS in the ~4-inch info panel
 
 def _two_part_box(ax, x, y_top, heading, body, n_body_lines,
                   fc, ec, heading_fc=None):
@@ -648,7 +645,19 @@ def _two_part_box(ax, x, y_top, heading, body, n_body_lines,
     body_h = n_body_lines * LINE_H + 0.025
     return y_body - body_h   # bottom of body box
 
-# ── Yellow box (N_Δ) — placed well below the legend ─────────────────────────
+# ── Info panel: metadata strip and ε values at top ───────────────────────────
+ax_info.text(0.02, 0.99, meta_annot,
+             transform=ax_info.transAxes, fontsize=8.5,
+             va="top", ha="left", family="monospace",
+             bbox=dict(boxstyle="round,pad=0.45", fc="#F5FFF5", ec="#3A7D44",
+                       alpha=0.95, lw=0.8))
+ax_info.text(0.98, 0.99, eps_annot,
+             transform=ax_info.transAxes, fontsize=9,
+             va="top", ha="right", family="monospace",
+             bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#888888",
+                       alpha=0.92, lw=0.8))
+
+# ── Left column: N_Δ then d recovery ─────────────────────────────────────────
 nd_heading = (
     "Integer Difference Between Orders\n"
     "at the Optical Axis for Two\n"
@@ -660,7 +669,7 @@ nd_body = (
     f"      (1/{LA_NM} − 1/{LB_NM}) nm⁻¹)\n"
     f"    = {N_delta}"
 )
-y_after_yellow = _two_part_box(ax4, 0.03, 0.90,
+y_after_yellow = _two_part_box(ax_info, 0.02, 0.82,
                                nd_heading, nd_body, n_body_lines=4,
                                fc="#FFF8E7", ec="#C8A000",
                                heading_fc="#FFE680")
@@ -673,7 +682,7 @@ d_body = (
     f"    · {LA_NM}·{LB_NM} / [2·({LB_NM}−{LA_NM})] nm\n"
     f"  = {d_mm:.4f} ± {two_sigma_d_mm:.4f} mm  (Benoit Gap, 2σ)"
 )
-y_after_blue = _two_part_box(ax4, 0.03, y_after_yellow - 0.02,
+y_after_blue = _two_part_box(ax_info, 0.02, y_after_yellow - 0.02,
                              d_heading, d_body, n_body_lines=4,
                              fc="#F0F8FF", ec="#4472C4",
                              heading_fc="#C8DEFF")
@@ -711,7 +720,8 @@ alpha_body = (
     f"       = {alpha_rpx:.5e} ± {alpha_rpx_2s:.2e}  rad/px\n"
     f"         ← use this value in F01 step4b"
 )
-y_after_green = _two_part_box(ax4, 0.03, y_after_blue - 0.02,
+# ── Right column: plate scale then Y_B ───────────────────────────────────────
+y_after_green = _two_part_box(ax_info, 0.50, 0.82,
               alpha_heading, alpha_body, n_body_lines=6,
               fc="#F5FFF5", ec="#3A7D44",
               heading_fc="#B8FFB8")
@@ -728,12 +738,11 @@ if np.isfinite(Y_B_estimate):
 else:
     yb_body = "Insufficient peaks to estimate Y_B"
     n_yb_lines = 1
-_two_part_box(ax4, 0.03, y_after_green - 0.02,
+_two_part_box(ax_info, 0.50, y_after_green - 0.02,
               yb_heading, yb_body, n_body_lines=n_yb_lines,
               fc="#FFF3E0", ec="#E65100",
               heading_fc="#FFCC80")
 
-plt.tight_layout()
 plt.show()
 
 # ── Save annular profile CSV ──────────────────────────────────────────────────

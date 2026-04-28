@@ -464,7 +464,10 @@ def make_diagnostic_figure(
         axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]
     )
 
-    im0 = ax_cal.imshow(cal_img, cmap="gray", vmin=0, vmax=16383)
+    cal_pixels = cal_img[cfg.n_meta_rows:, :]
+    cal_max    = max(int(cal_pixels.max()), 1)
+
+    im0 = ax_cal.imshow(cal_img, cmap="gray", vmin=0, vmax=cal_max)
     title_l1 = (
         f"d={params.d_mm} mm   α={params.alpha:.4e} rad/px   "
         f"R={params.R:.3f} (N_R={derived.finesse_N_R:.1f})   "
@@ -495,8 +498,8 @@ def make_diagnostic_figure(
     )
     fig.colorbar(im1, ax=ax_dark, fraction=0.046, pad=0.04)
 
-    ax_hcal.hist(cal_img.ravel(), bins=256, range=(0, 16383), color="C0", linewidth=0)
-    ax_hcal.set_xlim(0, 16383)
+    ax_hcal.hist(cal_pixels.ravel(), bins=256, range=(0, cal_max), color="C0", linewidth=0)
+    ax_hcal.set_xlim(0, cal_max)
     ax_hcal.set_xlabel("ADU")
     ax_hcal.set_ylabel("Pixel count")
     ax_hcal.set_title("Calibration histogram")
@@ -617,6 +620,18 @@ def find_labeled_peaks(
         distance=min_dist,
         prominence=0.04 * p_range,
     )
+    if len(pk_idx) == 0:
+        return []
+
+    # Require n_guard strictly-lower neighbours on each side; rejects edge artefacts.
+    n_guard = max(2, min_dist)
+    kept = []
+    for i in pk_idx:
+        left_ok  = (i >= n_guard) and np.all(means[i - n_guard : i] < means[i])
+        right_ok = (i + n_guard < len(means)) and np.all(means[i + 1 : i + n_guard + 1] < means[i])
+        if left_ok and right_ok:
+            kept.append(i)
+    pk_idx = np.array(kept, dtype=int)
     if len(pk_idx) == 0:
         return []
 
