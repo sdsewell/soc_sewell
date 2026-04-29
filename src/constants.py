@@ -176,7 +176,9 @@ ALPHA_RAD_PX           = CCD_PIXEL_2X2_UM * 1e-6 / FOCAL_LENGTH_M
 # Source: CCD97-00 datasheet (Teledyne e2v)
 # ---------------------------------------------------------------------------
 CCD_PIXELS_NATIVE    = 512           # px — active pixels per side, unbinned
+CCD_PIXELS_UNBINNED  = 512           # px — alias for CCD_PIXELS_NATIVE (S06 naming)
 CCD_PIXELS_2X2       = 256           # px — active pixels per side after 2×2 binning
+FOV_DEG              = 1.65          # deg — full field of view (both diameters)
 CCD_DARK_RATE_E_PX_S = 400.0        # e⁻/px/s — at 20°C; temperature-dependent
 CCD_READ_NOISE_E     = 2.2           # e⁻ rms — conventional readout (no EM gain, 50 kHz)
 CCD_READ_NOISE_EM_E  = 1.0           # e⁻ rms — EM gain mode (1 MHz, 1000× gain)
