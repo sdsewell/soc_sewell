@@ -1291,8 +1291,9 @@ def main():
         vz_all    = np.array([m.truth_v_zonal for m in sci_meta])
         vm_all    = np.array([m.truth_v_meridional for m in sci_meta])
         vlos_all  = np.array([m.truth_v_los for m in sci_meta])
-        vrel_sci  = np.array([d["v_rel_ms"] for d in vrel_list
-                               if not np.isnan(d["v_rel_ms"])])
+        sci_vrel = [(m, d["v_rel_ms"]) for m, d in zip(metadata_list, vrel_list)
+                    if m.img_type == "science" and not np.isnan(d["v_rel_ms"])]
+        vrel_sci  = np.array([v for _, v in sci_vrel])
         print(f"\nTangent point stats (science frames):")
         print(f"  tp_lat  : mean={tp_lats.mean():.1f}°, "
               f"min={tp_lats.min():.1f}°, max={tp_lats.max():.1f}°")
@@ -1301,10 +1302,15 @@ def main():
               f"min={vz_all.min():.1f}, max={vz_all.max():.1f} m/s")
         print(f"  v_merid : mean={vm_all.mean():.1f}, "
               f"min={vm_all.min():.1f}, max={vm_all.max():.1f} m/s")
-        print(f"\nv_rel stats for science frames (m/s):")
-        print(f"  Mean  : {vrel_sci.mean():8.1f}   (dominated by V_sc_LOS)")
-        print(f"  Std   : {vrel_sci.std():8.1f}")
-        print(f"  Min   : {vrel_sci.min():8.1f}   Max: {vrel_sci.max():.1f}")
+        print(f"\nv_rel stats by look mode (m/s):")
+        for label, mode in [("Along-track", "along_track"), ("Cross-track", "cross_track")]:
+            vals = np.array([v for m, v in sci_vrel if m.obs_mode == mode])
+            if vals.size:
+                print(f"  {label} ({vals.size} frames):")
+                print(f"    Mean : {vals.mean():8.1f}   (dominated by V_sc_LOS)")
+                print(f"    Std  : {vals.std():8.1f}")
+                print(f"    Min  : {vals.min():8.1f}")
+                print(f"    Max  : {np.abs(vals).max():8.1f}")
 
         at_meta = [m for m in sci_meta if m.obs_mode == "along_track"]
         ct_meta = [m for m in sci_meta if m.obs_mode == "cross_track"]
@@ -1315,6 +1321,7 @@ def main():
                 print(f"  {label} ({len(subset)} frames):")
                 print(f"    Mean : {los.mean():8.1f}   (truth wind projected onto LOS)")
                 print(f"    Std  : {los.std():8.1f}")
+                print(f"    Min  : {los.min():8.1f}")
                 print(f"    Max  : {np.abs(los).max():8.1f}")
 
     # -----------------------------------------------------------------------
