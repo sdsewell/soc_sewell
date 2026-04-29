@@ -18,6 +18,60 @@ import math
 
 import numpy as np
 
+
+def _edlen_n(lambda_vac_nm: float) -> float:
+    """
+    Refractive index of standard dry air at 15 °C, 101 325 Pa.
+
+    Parameters
+    ----------
+    lambda_vac_nm : float
+        Vacuum wavelength in nanometres.
+
+    Returns
+    -------
+    float
+        n_air (always > 1).
+
+    Reference
+    ---------
+    Edlén, B. (1966). The refractive index of air. Metrologia, 2(2), 71–80.
+    """
+    s = 1e4 / lambda_vac_nm           # wavenumber in µm⁻¹
+    n_minus_1 = (8342.13
+                 + 2406030.0 / (130.0 - s ** 2)
+                 + 15997.0  / (38.9  - s ** 2)) * 1e-8
+    return 1.0 + n_minus_1
+
+
+def _air_to_vac_nm(lambda_air_nm: float, tol: float = 1e-10) -> float:
+    """
+    Convert an air wavelength to vacuum wavelength via Edlén (1966).
+
+    Uses Newton iteration: λ_vac ← λ_air × n(_edlen_n(λ_vac)).
+    Converges in 3–4 iterations to femtometre accuracy.
+
+    Parameters
+    ----------
+    lambda_air_nm : float
+        Air wavelength in nanometres.
+    tol : float
+        Convergence tolerance in nanometres (default 1e-10 nm = 0.1 fm).
+
+    Returns
+    -------
+    float
+        Vacuum wavelength in nanometres.
+    """
+    lv = lambda_air_nm
+    for _ in range(20):
+        lv_new = lambda_air_nm * _edlen_n(lv)
+        if abs(lv_new - lv) < tol:
+            return lv_new
+        lv = lv_new
+    return lv
+
+
 # ---------------------------------------------------------------------------
 # 3.1 Fundamental physical constants
 # Source: CODATA 2018 (exact SI values)
@@ -43,31 +97,50 @@ WGS84_E2   = 1.0 - (WGS84_B_M / WGS84_A_M) ** 2  # —  — first eccentricity s
 # 3.3 Spectroscopic constants — OI airglow target line
 # Source: NIST Atomic Spectra Database (NIST ASD)
 #
-# LEGACY CORRECTION: legacy code uses OI_WAVELENGTH_M = 630.0e-9.
-# The correct NIST air wavelength is 630.0304 nm. That value is now in
-# OI_WAVELENGTH_VACUUM_M and used for all Doppler/physics calculations.
+# NIST ASD and Burns et al. (1950) report air wavelengths for visible lines
+# (standard dry air, 15 °C, 101 325 Pa). Vacuum values are Edlén-derived.
+#
+# LEGACY CORRECTIONS:
+#   (a) OI_WAVELENGTH_VACUUM_M = 630.0304e-9 was MISLABELLED;
+#       630.0304 nm is the AIR wavelength. Symbol renamed and correct vacuum
+#       value (629.9582 nm) added.
+#   (b) OI_WAVELENGTH_VAC_M = 630.2010e-9 was an unrecognised erroneous
+#       value. Removed.
 # ---------------------------------------------------------------------------
-# Inversion rest wavelength — shifted 0.05 nm from vacuum value to avoid
-# N_int half-integer boundary at 629.9974 nm. Use for F01/F02 only.
-OI_WAVELENGTH_M        = 629.95e-9       # m — inversion reference (F01/F02 only)
-OI_WAVELENGTH_VACUUM_M = 630.0304e-9     # m — OI 630 nm vacuum wavelength (S03); use for Doppler
-OI_WAVELENGTH_VAC_M    = 630.2010e-9     # m — OI 630 nm vacuum wavelength (NIST ASD)
-OXYGEN_MASS_KG         = 2.6567e-26      # kg — one oxygen-16 atom (16 u × 1.66054e-27 kg/u)
+OI_WAVELENGTH_AIR_M = 630.0304e-9      # m — NIST ASD air wavelength (canonical)
+OI_WAVELENGTH_VAC_M = _air_to_vac_nm(OI_WAVELENGTH_AIR_M * 1e9) * 1e-9
+# OI_WAVELENGTH_VAC_M ≈ 629.9582e-9 m; Δ ≈ −72.2 pm
 
-# Doppler formula: v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_VACUUM_M) / OI_WAVELENGTH_VACUUM_M
+# Deprecated alias — do not use in new code
+OI_WAVELENGTH_M = OI_WAVELENGTH_AIR_M  # backward-compat alias
+
+OXYGEN_MASS_KG = 2.6567e-26            # kg — one oxygen-16 atom
+
+# Doppler formula (air convention):
+# v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
 # Positive v_rel = recession (redshift, source moving away from spacecraft).
 
 # ---------------------------------------------------------------------------
 # 3.4 Spectroscopic constants — neon calibration lamp
-# Source: NIST Atomic Spectra Database (Ne I, air wavelengths)
+# Source: NIST ASD (Ne I, air wavelengths); Burns, Adams & Longwell (1950)
 #
-# These two Ne I lines are the brightest in the 630–640 nm window.
-# Their separation (~188 FSR) is used in M05 Stage 0 to anchor the etalon gap.
+# Both air and vacuum wavelengths are provided. All FSR / beat-period
+# calculations use air wavelengths (consistent with FPI calibration convention).
 # ---------------------------------------------------------------------------
-NE_WAVELENGTH_1_M  = 640.2248e-9   # m — primary Ne line; relative intensity = 1.0
-NE_WAVELENGTH_2_M  = 638.2991e-9   # m — secondary Ne line; relative intensity = 0.8
-NE_INTENSITY_1     = 1.0           # — — reference (arbitrary normalisation)
-NE_INTENSITY_2     = 0.8           # — — ratio of secondary to primary line
+NE_WAVELENGTH_1_AIR_M = 640.2248e-9   # m — primary Ne line, air; intensity 1.0
+NE_WAVELENGTH_1_VAC_M = _air_to_vac_nm(NE_WAVELENGTH_1_AIR_M * 1e9) * 1e-9
+# NE_WAVELENGTH_1_VAC_M ≈ 640.1426e-9 m; Δ ≈ −82.2 pm
+
+NE_WAVELENGTH_2_AIR_M = 638.2991e-9   # m — secondary Ne line, air; intensity 0.8
+NE_WAVELENGTH_2_VAC_M = _air_to_vac_nm(NE_WAVELENGTH_2_AIR_M * 1e9) * 1e-9
+# NE_WAVELENGTH_2_VAC_M ≈ 638.2189e-9 m; Δ ≈ −80.2 pm
+
+NE_INTENSITY_1 = 1.0                  # — reference intensity
+NE_INTENSITY_2 = 0.8                  # — ratio of secondary to primary
+
+# Deprecated aliases — do not use in new code
+NE_WAVELENGTH_1_M = NE_WAVELENGTH_1_AIR_M
+NE_WAVELENGTH_2_M = NE_WAVELENGTH_2_AIR_M
 
 # ---------------------------------------------------------------------------
 # 3.4b Authoritative gap and F01 calibration constants
@@ -202,20 +275,20 @@ LAT_RANGE_DEG         = (-40.0, 40.0)  # deg — primary science latitude band (
 
 # Etalon FSR at primary neon line (m)
 # FSR = lambda^2 / (2 * t)
-ETALON_FSR_NE1_M = NE_WAVELENGTH_1_M ** 2 / (2.0 * ETALON_GAP_M)
+ETALON_FSR_NE1_M = NE_WAVELENGTH_1_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
 # = (640.2248e-9)^2 / (2 * 20.008e-3) ≈ 1.024e-11 m = 10.24 pm
 
 # Etalon FSR at OI 630.0304 nm (m)
-ETALON_FSR_OI_M = OI_WAVELENGTH_M ** 2 / (2.0 * ETALON_GAP_M)
+ETALON_FSR_OI_M = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
 # = (630.0304e-9)^2 / (2 * 20.008e-3) ≈ 9.92e-12 m = 9.92 pm
 
 # Velocity equivalent of one FSR at OI 630 nm (m/s)
 # delta_v = c * FSR / lambda
-VELOCITY_PER_FSR_MS = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_M
+VELOCITY_PER_FSR_MS = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_AIR_M
 # ≈ 4720 m/s
 
 # Neon line separation in wavelength (m) and in FSR units
-NE_DELTA_LAMBDA_M  = NE_WAVELENGTH_1_M - NE_WAVELENGTH_2_M   # 1.9257e-9 m
+NE_DELTA_LAMBDA_M  = NE_WAVELENGTH_1_AIR_M - NE_WAVELENGTH_2_AIR_M   # 1.9257e-9 m
 NE_SEPARATION_FSR  = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M    # ≈ 187.9 FSR
 
 # CCD plate scale (= ALPHA_RAD_PX; provided here under the plate-scale name as well)

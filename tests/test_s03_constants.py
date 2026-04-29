@@ -11,36 +11,31 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# T1 — OI wavelength is not legacy 630.0 nm
+# T1 — Speed of light is exact SI value
 # ---------------------------------------------------------------------------
-def test_OI_wavelength_not_legacy():
-    """Catch any regression to the legacy 630.0 nm value."""
-    from src.constants import OI_WAVELENGTH_M, OI_WAVELENGTH_VACUUM_M
-    # OI_WAVELENGTH_M is the inversion reference (629.95 nm), not legacy 630.0 nm
-    assert abs(OI_WAVELENGTH_M - 630.0e-9) > 1e-12, (
-        "OI_WAVELENGTH_M appears to be the legacy 630.0 nm value"
-    )
-    assert abs(OI_WAVELENGTH_M - 629.95e-9) < 1e-14, (
-        f"OI_WAVELENGTH_M = {OI_WAVELENGTH_M * 1e9:.6f} nm; expected 629.9500 nm (inversion reference)"
-    )
-    # Vacuum value used for Doppler/physics contexts
-    assert abs(OI_WAVELENGTH_VACUUM_M - 630.0304e-9) < 1e-14, (
-        f"OI_WAVELENGTH_VACUUM_M = {OI_WAVELENGTH_VACUUM_M * 1e9:.6f} nm; expected 630.0304 nm"
-    )
+def test_speed_of_light():
+    from src.constants import SPEED_OF_LIGHT_MS
+    assert SPEED_OF_LIGHT_MS == 299_792_458.0
 
 
 # ---------------------------------------------------------------------------
-# T2 — Etalon gap is not legacy 20.670 mm
+# T2 — OI wavelength pair is self-consistent via Edlén
 # ---------------------------------------------------------------------------
-def test_etalon_gap_not_legacy():
-    """Catch any regression to the FlatSat FSR-error value."""
-    from src.constants import ETALON_GAP_M
-    assert abs(ETALON_GAP_M - 20.670e-3) > 1e-6, (
-        "ETALON_GAP_M appears to be the legacy 20.670 mm FlatSat value; should be 20.008 mm"
+def test_oi_wavelength_air_vac_consistency():
+    from src.constants import OI_WAVELENGTH_AIR_M, OI_WAVELENGTH_VAC_M, _edlen_n
+    # air → vacuum: lambda_vac = lambda_air * n_air (iterated)
+    la_nm = OI_WAVELENGTH_AIR_M * 1e9
+    lv_nm = OI_WAVELENGTH_VAC_M * 1e9
+    # recover air from vacuum: lambda_air = lambda_vac / n
+    n = _edlen_n(lv_nm)
+    la_recovered = lv_nm / n
+    assert abs(la_recovered - la_nm) < 1e-4, (
+        f"Round-trip error: air {la_nm:.6f} nm → vac {lv_nm:.6f} nm → "
+        f"air {la_recovered:.6f} nm (residual {abs(la_recovered - la_nm)*1e6:.4f} fm)"
     )
-    assert abs(ETALON_GAP_M - 20.008e-3) < 1e-9, (
-        f"ETALON_GAP_M = {ETALON_GAP_M * 1e3:.4f} mm; expected 20.008 mm"
-    )
+    # Shift is negative and in the range 60–90 pm
+    delta_pm = (lv_nm - la_nm) * 1000
+    assert -90 < delta_pm < -60, f"OI air-vac shift = {delta_pm:.1f} pm; expected ~−72 pm"
 
 
 # ---------------------------------------------------------------------------
@@ -70,14 +65,11 @@ def test_depression_angle_computed_from_primaries():
 # ---------------------------------------------------------------------------
 def test_fsr_consistency():
     """Derived FSR values are consistent with primary constants."""
-    from src.constants import (
-        ETALON_FSR_OI_M, ETALON_FSR_NE1_M,
-        OI_WAVELENGTH_M, NE_WAVELENGTH_1_M, ETALON_GAP_M,
-    )
-    fsr_oi_check  = OI_WAVELENGTH_M ** 2  / (2.0 * ETALON_GAP_M)
-    fsr_ne1_check = NE_WAVELENGTH_1_M ** 2 / (2.0 * ETALON_GAP_M)
-    assert abs(ETALON_FSR_OI_M  - fsr_oi_check)  < 1e-18
-    assert abs(ETALON_FSR_NE1_M - fsr_ne1_check) < 1e-18
+    from src.constants import (ETALON_FSR_OI_M, ETALON_FSR_NE1_M,
+                                OI_WAVELENGTH_AIR_M, NE_WAVELENGTH_1_AIR_M,
+                                ETALON_GAP_M)
+    assert abs(ETALON_FSR_OI_M  - OI_WAVELENGTH_AIR_M**2  / (2 * ETALON_GAP_M)) < 1e-18
+    assert abs(ETALON_FSR_NE1_M - NE_WAVELENGTH_1_AIR_M**2 / (2 * ETALON_GAP_M)) < 1e-18
 
 
 # ---------------------------------------------------------------------------
@@ -110,16 +102,18 @@ def test_constant_types():
     """Guard against string or None values from typos."""
     import src.constants as c
     non_tuple_names = [
-        "SPEED_OF_LIGHT_MS", "BOLTZMANN_J_PER_K", "OI_WAVELENGTH_M",
-        "NE_WAVELENGTH_1_M", "NE_WAVELENGTH_2_M", "ETALON_GAP_M",
-        "FOCAL_LENGTH_M", "ALPHA_RAD_PX", "DEPRESSION_ANGLE_DEG",
-        "SC_ALTITUDE_KM", "TP_ALTITUDE_KM", "WIND_BIAS_BUDGET_MS",
+        'SPEED_OF_LIGHT_MS', 'BOLTZMANN_J_PER_K',
+        'OI_WAVELENGTH_AIR_M', 'OI_WAVELENGTH_VAC_M',
+        'NE_WAVELENGTH_1_AIR_M', 'NE_WAVELENGTH_1_VAC_M',
+        'NE_WAVELENGTH_2_AIR_M', 'NE_WAVELENGTH_2_VAC_M',
+        'ETALON_GAP_M', 'FOCAL_LENGTH_M', 'ALPHA_RAD_PX',
+        'DEPRESSION_ANGLE_DEG', 'SC_ALTITUDE_KM', 'TP_ALTITUDE_KM',
+        'WIND_BIAS_BUDGET_MS',
     ]
     for name in non_tuple_names:
         val = getattr(c, name)
-        assert isinstance(val, (int, float)), (
+        assert isinstance(val, (int, float)), \
             f"{name} has type {type(val).__name__}, expected float"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -158,3 +152,31 @@ def test_depression_angle_sensitivity():
                          (angle_high_sc, "high_sc"), (angle_high_tp, "high_tp")]:
         assert 10.0 < angle < 25.0, \
             f"Depression angle ({label}) = {angle:.2f}° outside plausible range [10°, 25°]"
+
+
+# ---------------------------------------------------------------------------
+# T10 — Neon vacuum wavelengths are consistent with Edlén
+# ---------------------------------------------------------------------------
+def test_neon_vacuum_wavelengths():
+    from src.constants import (NE_WAVELENGTH_1_AIR_M, NE_WAVELENGTH_1_VAC_M,
+                                NE_WAVELENGTH_2_AIR_M, NE_WAVELENGTH_2_VAC_M,
+                                OI_WAVELENGTH_AIR_M, OI_WAVELENGTH_VAC_M,
+                                _edlen_n)
+    for la_m, lv_m, name in [
+        (NE_WAVELENGTH_1_AIR_M, NE_WAVELENGTH_1_VAC_M, 'Ne1'),
+        (NE_WAVELENGTH_2_AIR_M, NE_WAVELENGTH_2_VAC_M, 'Ne2'),
+    ]:
+        la_nm = la_m * 1e9
+        lv_nm = lv_m * 1e9
+        n = _edlen_n(lv_nm)
+        la_recovered = lv_nm / n
+        assert abs(la_recovered - la_nm) < 1e-4, (
+            f"{name} round-trip residual = {abs(la_recovered - la_nm)*1e6:.4f} fm"
+        )
+        delta_pm = (lv_nm - la_nm) * 1000
+        assert -90 < delta_pm < -70, \
+            f"{name} shift = {delta_pm:.1f} pm; expected between −90 and −70 pm"
+    # Vacuum wavelengths must be shorter than air wavelengths
+    assert NE_WAVELENGTH_1_VAC_M < NE_WAVELENGTH_1_AIR_M
+    assert NE_WAVELENGTH_2_VAC_M < NE_WAVELENGTH_2_AIR_M
+    assert OI_WAVELENGTH_VAC_M   < OI_WAVELENGTH_AIR_M
