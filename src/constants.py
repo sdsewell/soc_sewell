@@ -144,12 +144,10 @@ NE_WAVELENGTH_2_M = NE_WAVELENGTH_2_AIR_M
 
 # ---------------------------------------------------------------------------
 # 3.4b Authoritative gap and F01 calibration constants
-# Source: Z01a two-line Tolansky analysis (2026-04-21)
 # ---------------------------------------------------------------------------
-D_25C_MM          = 20.0006e-3       # m; ICOS build − Pat/Nir pre-load correction
-PLATE_SCALE_RPX   = 1.6071e-4        # rad/px; 2x2 binned Tolansky result
+D_25C_MM          = 20.008e-3       # m; ICOS build − Pat/Nir pre-load correction
+PLATE_SCALE_RPX   = 1.6000e-4        # Plate Scale Initial Guess rad/px; 2x2 binned (32microns/200mm focal length)
 R_REFL_FLATSAT    = 0.53             # FlatSat effective reflectivity
-R_MAX_PX          = 110              # FlatSat/flight usable radius, pixels
 
 # ---------------------------------------------------------------------------
 # 3.5 Etalon and optical constants
