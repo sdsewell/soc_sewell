@@ -257,10 +257,7 @@ DN_MAX = 2**14 - 1  # 16383
 for col, (roi, label) in enumerate(zip(rois, labels)):
     # Top row — image
     ax_img = axes2[0, col]
-    if col == 1:  # dark ROI: autoscale
-        vmin, vmax = np.percentile(roi, [1, 99])
-    else:         # cal ROI and cal-dark ROI: fixed scale
-        vmin, vmax = 0, DN_MAX
+    vmin, vmax = np.percentile(roi, [1, 99])
     im = ax_img.imshow(roi, origin="upper", cmap="gray",
                        vmin=vmin, vmax=vmax,
                        aspect="auto", interpolation="nearest")
@@ -329,8 +326,11 @@ ax_tbl  = fig3.add_subplot(gs[1])
 r_good = fp.r_grid[good]
 p_good = fp.profile[good]
 
-ax_prof.plot(r_good, p_good, "-", color="#4472C4", linewidth=0.8, alpha=0.5, zorder=1)
-ax_prof.scatter(r_good, p_good, s=6, color="#4472C4", zorder=2, label="Binned profile")
+ax_prof.plot(r_good, p_good, "-", color="#4472C4", linewidth=0.8,
+             alpha=0.5, zorder=1)
+ax_prof.scatter(r_good, p_good, s=10, facecolors="none",
+                edgecolors="#4472C4", linewidths=0.8,
+                zorder=2, label="Binned profile")
 
 # ── Peak markers, error bars, and text boxes ──────────────────────────────────
 # Compute y-range after drawing data so offsets are meaningful

@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy.signal import find_peaks
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -104,7 +104,7 @@ class SynthParams:
     cx:        float   # fringe centre column, pixels
     cy:        float   # fringe centre row, pixels (full-frame coords)
     # Group 1 — etalon geometry
-    d_mm:      float   # etalon gap, mm  (default 20.0008)
+    d_mm:      float   # etalon gap, mm  (default 20.008)
     alpha:     float   # plate scale, rad/px  (mode-dependent default)
     # Group 2 — reflectivity
     R:         float   # effective reflectivity  (default 0.725)
@@ -882,7 +882,7 @@ def prompt_all_params() -> SynthParams:
                                cfg.cy_default - 50, cfg.cy_default + 50)
 
         print("\n── GROUP 1  ETALON GEOMETRY ──")
-        d_mm  = _validated_prompt("Etalon gap d",   20.0008,          "mm",    15.0,  25.0, 19.5, 20.5)
+        d_mm  = _validated_prompt("Etalon gap d",   20.008,          "mm",    15.0,  25.0, 19.5, 20.5)
         alpha = _validated_prompt("Plate scale α", cfg.alpha_default, "rad/px", 1e-5, 1e-3, 0.5e-4, 5e-4)
 
         print("\n── GROUP 2  ETALON REFLECTIVITY ──")
