@@ -33,6 +33,26 @@ from src.constants import (
 
 
 # =============================================================================
+# Map background helper (geopandas, no cartopy)
+# =============================================================================
+
+def _add_map_background(ax) -> None:
+    """Draw coastlines and lat/lon grid on a plain matplotlib axes."""
+    import geopandas
+    import geodatasets
+
+    land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+    land.boundary.plot(ax=ax, linewidth=0.5, color="black")
+
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-90, 90)
+    ax.set_xticks(range(-180, 181, 60))
+    ax.set_yticks(range(-90, 91, 30))
+    ax.tick_params(labelsize=7)
+    ax.grid(linewidth=0.3, alpha=0.5)
+
+
+# =============================================================================
 # Colorbar sizing helper
 # =============================================================================
 
@@ -220,10 +240,8 @@ class WindMap(ABC):
         subsample: int,
         save_path: str | None,
     ) -> None:
-        """Two-panel figure: v_zonal (left) and v_merid (right) on Plate Carrée."""
+        """Two-panel figure: v_zonal (left) and v_merid (right)."""
         import matplotlib.pyplot as plt
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
 
         from src.windmap.nb00_wind_map_2026_04_18 import GridWindMap
         lats = GridWindMap.LAT_GRID
@@ -231,10 +249,7 @@ class WindMap(ABC):
         LON2D, LAT2D = np.meshgrid(lons, lats)
         si = slice(None, None, subsample)
 
-        fig, axes = plt.subplots(
-            1, 2, figsize=(14, 5),
-            subplot_kw={'projection': ccrs.PlateCarree()},
-        )
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         fig.suptitle(title, fontsize=11)
 
         lat_s = LAT2D[si, si].ravel()
@@ -245,13 +260,10 @@ class WindMap(ABC):
             (axes[0], vz_grid, 'Zonal wind  U  (m/s)',      400, 'RdBu_r', vz_grid),
             (axes[1], vm_grid, 'Meridional wind  V  (m/s)', 200, 'RdBu_r', vm_grid),
         ]:
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS,   linewidth=0.3)
-            ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.5)
             im = ax.pcolormesh(lons, lats, grid,
                                vmin=-vmax, vmax=vmax,
-                               cmap=cmap,
-                               transform=ccrs.PlateCarree())
+                               cmap=cmap)
+            _add_map_background(ax)
             cb = plt.colorbar(im, ax=ax, orientation='horizontal',
                               pad=0.05, label=label)
             cb_pairs.append((ax, cb, 'horizontal'))
@@ -261,7 +273,6 @@ class WindMap(ABC):
                     lon_s[nz], lat_s[nz],
                     vz_grid[si, si].ravel()[nz],
                     vm_grid[si, si].ravel()[nz],
-                    transform=ccrs.PlateCarree(),
                     color='black', alpha=0.6,
                     width=0.003, scale=4000,
                 )
@@ -285,8 +296,6 @@ class WindMap(ABC):
     ) -> None:
         """Single-panel: wind speed magnitude as colour, direction as arrows."""
         import matplotlib.pyplot as plt
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
 
         from src.windmap.nb00_wind_map_2026_04_18 import GridWindMap
         lats = GridWindMap.LAT_GRID
@@ -301,19 +310,14 @@ class WindMap(ABC):
 
         si = slice(None, None, subsample)
 
-        fig, ax = plt.subplots(
-            1, 1, figsize=(10, 5),
-            subplot_kw={'projection': ccrs.PlateCarree()},
-        )
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
         fig.suptitle(title, fontsize=11)
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS,   linewidth=0.3)
-        ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.5)
 
         im = ax.pcolormesh(lons, lats, speed,
                            vmin=0, vmax=v_max,
-                           cmap='viridis',
-                           transform=ccrs.PlateCarree())
+                           cmap='viridis')
+        _add_map_background(ax)
+
         cb_pairs = []
         if show_colorbar:
             cb = plt.colorbar(im, ax=ax, orientation='horizontal',
@@ -326,7 +330,6 @@ class WindMap(ABC):
             ax.quiver(
                 LON2D[si, si].ravel()[nz], LAT2D[si, si].ravel()[nz],
                 u_norm[si, si].ravel()[nz], v_norm[si, si].ravel()[nz],
-                transform=ccrs.PlateCarree(),
                 color='white', alpha=0.75,
                 width=0.003, scale=30, headwidth=4,
             )
@@ -348,8 +351,8 @@ class WindMap(ABC):
     ) -> None:
         """Single-panel: streamlines of the vector wind field."""
         import matplotlib.pyplot as plt
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
+        import geopandas
+        import geodatasets
 
         from src.windmap.nb00_wind_map_2026_04_18 import GridWindMap
         lats = GridWindMap.LAT_GRID
@@ -373,18 +376,15 @@ class WindMap(ABC):
         )
         plt.colorbar(strm.lines, ax=ax, orientation='horizontal',
                      pad=0.05, label='Wind speed (m/s)')
+
+        land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+        land.boundary.plot(ax=ax, linewidth=0.6, color="gray")
+
         ax.set_xlim(-180, 180)
         ax.set_ylim(-90, 90)
         ax.set_xlabel('Longitude (°)')
         ax.set_ylabel('Latitude (°)')
-
-        # Overlay coastlines via transparent GeoAxes
-        ax_geo = fig.add_axes(ax.get_position(),
-                              projection=ccrs.PlateCarree(),
-                              frameon=False)
-        ax_geo.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
-        ax_geo.add_feature(cfeature.COASTLINE, linewidth=0.6, edgecolor='gray')
-        ax_geo.gridlines(draw_labels=False, linewidth=0.3, alpha=0.4)
+        ax.grid(linewidth=0.3, alpha=0.4)
 
         plt.tight_layout()
         if save_path:
@@ -402,8 +402,6 @@ class WindMap(ABC):
     ) -> None:
         """Single-panel: wind speed magnitude with STM threshold contour."""
         import matplotlib.pyplot as plt
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
 
         try:
             from src.constants import WIND_BIAS_BUDGET_MS as _WBMS
@@ -417,35 +415,27 @@ class WindMap(ABC):
         speed = np.sqrt(vz_grid**2 + vm_grid**2)
         v_max = float(np.nanpercentile(speed, 98))
 
-        fig, ax = plt.subplots(
-            1, 1, figsize=(10, 5),
-            subplot_kw={'projection': ccrs.PlateCarree()},
-        )
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
         fig.suptitle(title, fontsize=11)
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS,   linewidth=0.3)
-        ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.5)
 
         im = ax.pcolormesh(lons, lats, speed,
                            vmin=0, vmax=v_max,
-                           cmap='hot_r',
-                           transform=ccrs.PlateCarree())
+                           cmap='hot_r')
+        _add_map_background(ax)
         cb = plt.colorbar(im, ax=ax, orientation='vertical',
                           pad=0.02, label='Wind speed (m/s)')
 
         # STM threshold contour (solid black)
         cs1 = ax.contour(lons, lats, speed,
                          levels=[_WBMS],
-                         colors='black', linewidths=1.0,
-                         transform=ccrs.PlateCarree())
+                         colors='black', linewidths=1.0)
         ax.clabel(cs1, fmt=f'{_WBMS:.1f} m/s', fontsize=7)
 
         # 100 m/s contour (dashed black)
         cs2 = ax.contour(lons, lats, speed,
                          levels=[100.0],
                          colors='black', linewidths=0.8,
-                         linestyles='dashed',
-                         transform=ccrs.PlateCarree())
+                         linestyles='dashed')
         ax.clabel(cs2, fmt='100 m/s', fontsize=7)
 
         plt.tight_layout()

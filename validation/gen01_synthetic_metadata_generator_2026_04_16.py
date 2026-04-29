@@ -1305,9 +1305,17 @@ def main():
         print(f"  Mean  : {vrel_sci.mean():8.1f}   (dominated by V_sc_LOS)")
         print(f"  Std   : {vrel_sci.std():8.1f}")
         print(f"  Min   : {vrel_sci.min():8.1f}   Max: {vrel_sci.max():.1f}")
-        print(f"\nv_wind_LOS stats (m/s):")
-        print(f"  Mean  : {vlos_all.mean():8.1f}   (truth wind projected onto LOS)")
-        print(f"  Std   : {vlos_all.std():8.1f}")
+
+        at_meta = [m for m in sci_meta if m.obs_mode == "along_track"]
+        ct_meta = [m for m in sci_meta if m.obs_mode == "cross_track"]
+        print(f"\nv_wind_LOS stats by look mode (m/s):")
+        for label, subset in [("Along-track", at_meta), ("Cross-track", ct_meta)]:
+            if subset:
+                los = np.array([m.truth_v_los for m in subset])
+                print(f"  {label} ({len(subset)} frames):")
+                print(f"    Mean : {los.mean():8.1f}   (truth wind projected onto LOS)")
+                print(f"    Std  : {los.std():8.1f}")
+                print(f"    Max  : {np.abs(los).max():8.1f}")
 
     # -----------------------------------------------------------------------
     # Step 5: Save outputs
