@@ -177,7 +177,7 @@ from windcube.constants import (
     ETALON_GAP_M,           # 20.008e-3 m  — ICOS build report (authoritative)
     ETALON_N,               # 1.0          — refractive index of etalon gap
     ETALON_R_INSTRUMENT,    # 0.53         — effective reflectivity (FlatSat)
-    FOCAL_LENGTH_M,         # 0.199_12 m   — Tolansky-recovered imaging lens f
+    FOCAL_LENGTH_M,         # 0.200 m   — imaging lens f
     ALPHA_RAD_PX,           # 1.6000e-4 rad/px — 2×2 binned plate scale (32 µm / 200 mm)
     # CCD
     CCD_PIXELS_UNBINNED,    # 512          — physical pixels per side
