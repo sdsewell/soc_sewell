@@ -443,11 +443,11 @@ def _encode_header(meta: ImageMetadata) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def _generate_science_pixels(v_rel_ms: float, rng,
-                              nx: int, ny: int, plate_scale: float) -> np.ndarray:
+                              nx: int, ny: int, plate_scale: float,
+                              cx: float, cy: float) -> np.ndarray:
     """Generate OI 630 nm Airy fringe image with Doppler shift v_rel_ms."""
     lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
 
-    cx, cy = nx / 2.0, ny / 2.0
     x = np.arange(nx) - cx
     y = np.arange(ny) - cy
     XX, YY = np.meshgrid(x, y)
@@ -464,9 +464,9 @@ def _generate_science_pixels(v_rel_ms: float, rng,
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
 
 
-def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float) -> np.ndarray:
+def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float,
+                         cx: float, cy: float) -> np.ndarray:
     """Generate two-line neon calibration fringe image."""
-    cx, cy = nx / 2.0, ny / 2.0
     x = np.arange(nx) - cx
     y = np.arange(ny) - cy
     XX, YY = np.meshgrid(x, y)
@@ -499,16 +499,17 @@ def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
 
 
 def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
-                     exp_time_cts: int, rng, binning_cfg: dict) -> np.ndarray:
+                     exp_time_cts: int, rng, binning_cfg: dict,
+                     cx: float, cy: float) -> np.ndarray:
     """Dispatch to the appropriate pixel generator."""
     nx          = binning_cfg["nx_pix"]
     ny          = binning_cfg["ny_pix"]
     plate_scale = binning_cfg["plate_scale"]
     exp_time_s  = exp_time_cts * TIMER_PERIOD_S
     if frame_type == "science":
-        return _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale)
+        return _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale, cx, cy)
     elif frame_type == "cal":
-        return _generate_cal_pixels(rng, nx, ny, plate_scale)
+        return _generate_cal_pixels(rng, nx, ny, plate_scale, cx, cy)
     elif frame_type == "dark":
         return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny)
     else:
@@ -855,6 +856,18 @@ def main():
             "Binning              [1 or 2, default  2       ] : ",
             2, int, 1, 2)
     binning_cfg   = BINNING_CFG[_bin_factor]
+    _cx_default   = binning_cfg["nx_pix"] / 2.0
+    _cy_default   = binning_cfg["ny_pix"] / 2.0
+    cx_offset     = _prompt(
+        f"Fringe centre cx offset  [px,   default  0.00      ]"
+        f"  (default cx={_cx_default:.2f}) : ",
+        0.0, float, -50.0, 50.0)
+    cy_offset     = _prompt(
+        f"Fringe centre cy offset  [px,   default  0.00      ]"
+        f"  (default cy={_cy_default:.2f}) : ",
+        0.0, float, -50.0, 50.0)
+    cx_centre     = round(_cx_default + cx_offset, 2)
+    cy_centre     = round(_cy_default + cy_offset, 2)
     altitude_km   = _prompt(
         "S/C altitude         [km,    default 510       ] : ",
         510.0, float, 400.0, 700.0)
@@ -976,6 +989,8 @@ def main():
     print(f"  Binning          : {_bin_factor}×{_bin_factor}  "
           f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
           f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)")
+    print(f"  Fringe centre    : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
+          f"(offset from default: Δcx={cx_offset:+.2f},  Δcy={cy_offset:+.2f})")
     print(f"  S/C altitude     : {altitude_km:.1f} km")
     print(f"  Tangent ht       : {h_target_km:.1f} km")
     print(f"  Wind map         : {windmap_label}  "
@@ -1090,6 +1105,8 @@ def main():
         "",
         "--- Instrument ---",
         f"Tangent height     : {h_target_km:.1f} km",
+        f"Fringe centre      : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
+        f"(offset Δcx={cx_offset:+.2f}, Δcy={cy_offset:+.2f})",
         f"Exposure time      : {exp_time_cts} counts × {TIMER_PERIOD_S * 1000:.1f} ms/count"
         f"  =  {exp_time_cts * TIMER_PERIOD_S:.3f} s  (exp_unit={EXP_UNIT})",
         "",
@@ -1113,7 +1130,10 @@ def main():
         f"{binning_cfg['n_cols_frame']} cols × 2 bytes = "
         f"{binning_cfg['n_rows_frame'] * binning_cfg['n_cols_frame'] * 2:,} bytes",
     ]
-    (bin_dir / "readme.txt").write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
+    _readme_stem = (f"GEN01_{t_start[:10].replace('-', '')}_{duration_days:05.1f}d_"
+                    f"{windmap_tag}_seed{rng_seed:04d}")
+    _readme_path = pathlib.Path(output_dir) / f"{_readme_stem}.txt"
+    _readme_path.write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
 
     metadata_list  = []
     vrel_list      = []   # CSV-only LOS velocity components per frame
@@ -1231,7 +1251,8 @@ def main():
 
         # Binary image synthesis — pixel draws follow the 9 metadata draws
         pixels = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
-                                  exp_time_cts, rng, binning_cfg)
+                                  exp_time_cts, rng, binning_cfg,
+                                  cx_centre, cy_centre)
         _write_bin_file(meta, pixels, bin_dir / _bin_filename(meta), binning_cfg)
 
         if i % max(1, n_obs // 100) == 0 or i == n_obs - 1:

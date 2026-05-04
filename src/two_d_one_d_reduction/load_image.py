@@ -1,6 +1,14 @@
 """
-ingest_raw_image.py — Load and display a WindCube FPI binary image from the
-raw_images_with_metadata/ folder.
+load_image.py — Load and display a WindCube FPI binary image from the
+    -> soc_synthesized_data\2x2_binned\bin_frames folder
+    These images can be either binned or unbinned
+    2027-01-01T00-00-00Z_science.bin
+
+Outputs
+-------
+- <stem>_ROI_L1.1.npy : 2-D uint16 numpy array of the user-selected ROI,
+      saved alongside the source .bin file.  This file is the primary input
+      to center_finder.py.
 
 Binary file format
 ------------------
@@ -38,7 +46,7 @@ big-endian float64 or construct as a LE uint64.
 
 Usage
 -----
-    python Scott/1-ingest/ingest_raw_image.py
+    python src/two_d_one_d_reduction/load_image.py
 """
 
 import os
@@ -51,6 +59,7 @@ from tkinter import filedialog
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.gridspec import GridSpec
 
 # ── User settings ─────────────────────────────────────────────────────────────
 
@@ -61,11 +70,6 @@ MASK_DARK = True
 # considered dark and excluded from the masked image.
 DARK_THRESHOLD = 0.5
 
-# Centre of the fringe pattern estimated by visual inspection (row, col).
-# This is used to extract a fixed-size ROI for the second subplot.
-# Adjust these values after examining the unmasked image.
-FRINGE_CENTER = (142, 145)   # (row, col) — update after visual inspection
-
 # Half-width/height of the ROI in pixels (ROI will be 2×ROI_HALF × 2×ROI_HALF).
 # 240-pixel ROI → ROI_HALF = 120
 ROI_HALF = 108
@@ -73,6 +77,10 @@ ROI_HALF = 108
 # ── Fixed geometry ─────────────────────────────────────────────────────────────
 
 ROWS, COLS = 259, 276   # image pixels only (excludes header row)
+
+# Initial fringe centre (row, col) — set to image midpoint.
+# Updated interactively via mouse click after the figure is displayed.
+FRINGE_CENTER = (ROWS // 2, COLS // 2)
 
 
 # ---------------------------------------------------------------------------
@@ -82,21 +90,29 @@ ROWS, COLS = 259, 276   # image pixels only (excludes header row)
 def load_raw(path: str):
     """
     Load the header row and image pixel region from a big-endian FPI binary.
+    Frame dimensions are read from header words 0 (n_rows_frame) and 1 (n_cols_frame),
+    so both 2×2 binned (260×276) and 1×1 unbinned (528×552) files are supported.
 
     Returns
     -------
-    header_be : ndarray (COLS,) uint16  — header words, big-endian decoded
-    image     : ndarray (ROWS, COLS) uint16 — pixel data
+    header_be : ndarray (n_cols_frame,) uint16  — full header row, big-endian decoded
+    image     : ndarray (n_rows_frame-1, n_cols_frame) uint16 — pixel data
     """
-    expected = (ROWS + 1) * COLS * 2
-    actual = os.path.getsize(path)
+    # Read the first 4 bytes to decode n_rows_frame (word 0) and n_cols_frame (word 1)
+    with open(path, "rb") as f:
+        first_words = np.frombuffer(f.read(4), dtype=">u2")
+    n_rows_frame = int(first_words[0])
+    n_cols_frame = int(first_words[1])
+
+    expected = n_rows_frame * n_cols_frame * 2
+    actual   = os.path.getsize(path)
     if actual != expected:
         raise ValueError(
             f"File size mismatch: got {actual} bytes, "
-            f"expected {expected} for a ({ROWS}+1)×{COLS} uint16 image."
+            f"expected {expected} for a {n_rows_frame}×{n_cols_frame} uint16 image."
         )
     raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
-    return raw[:COLS].copy(), raw[COLS:].reshape(ROWS, COLS)
+    return raw[:n_cols_frame].copy(), raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +290,7 @@ def _plot_hist(ax, image: np.ndarray, title: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Metadata table figure  (matches ingest_metadata_txt.py layout)
+# Metadata table helpers
 # ---------------------------------------------------------------------------
 
 _FIELD_META = {
@@ -318,30 +334,80 @@ def _fmt_value(key: str, raw) -> str:
     return str(raw)
 
 
-def build_metadata_figure(metadata: dict, filename: str):
-    col_labels = ["#", "Field (key)", "Display name", "Units", "Value"]
-    cell_text = [
-        [str(i), key,
-         _FIELD_META.get(key, (key, "", None))[0],
-         _FIELD_META.get(key, (key, "", None))[1],
-         _fmt_value(key, val)]
-        for i, (key, val) in enumerate(metadata.items(), start=1)
-    ]
+# ---------------------------------------------------------------------------
+# Figure builder
+# ---------------------------------------------------------------------------
 
-    _LINE_H  = 0.20
-    _MIN_ROW = 0.28
-    _HDR_ROW = 0.32
+def _build_figure(
+    image: np.ndarray,
+    roi: np.ndarray,
+    fringe_center: tuple,
+    filename: str,
+    col_labels: list,
+    cell_text: list,
+    row_heights_in: list,
+    table_h_in: float,
+    roi_half: int,
+):
+    """
+    Build and return the combined figure.
+    fringe_center is (row, col).  Called twice: once with the default centre
+    (for ginput), once with the user-selected coarse centre.
+    """
+    _HDR_ROW   = 0.32
+    fig_w      = 14.0 if MASK_DARK else 13.0
+    img_row_h  = 5.0
+    total_h    = img_row_h * 2 + table_h_in
+    n_img_cols = 2 if MASK_DARK else 1
 
-    row_heights_in = [
-        max(_MIN_ROW, max(v.count("\n") + 1 for v in row) * _LINE_H)
-        for row in cell_text
-    ]
-    fig_h = max(6.0, sum(row_heights_in) + _HDR_ROW + 1.2)
+    fig = plt.figure(figsize=(fig_w, total_h))
+    gs  = GridSpec(3, n_img_cols, figure=fig,
+                   height_ratios=[img_row_h, img_row_h, table_h_in])
 
-    fig, ax = plt.subplots(figsize=(13, fig_h))
-    ax.axis("off")
+    if MASK_DARK:
+        cr, cc = fringe_center
+        roi_title = (
+            f"ROI  {roi.shape[0]}×{roi.shape[1]} px  "
+            f"centred at (row={cr}, col={cc})"
+        )
+        ax00   = fig.add_subplot(gs[0, 0])
+        ax01   = fig.add_subplot(gs[0, 1])
+        ax10   = fig.add_subplot(gs[1, 0])
+        ax11   = fig.add_subplot(gs[1, 1])
+        ax_tbl = fig.add_subplot(gs[2, :])
 
-    tbl = ax.table(
+        _plot_image(ax00, fig, image, "Unmasked (full frame)")
+        _plot_image(ax01, fig, roi,   roi_title)
+
+        ax00.axhline(cr, color="cyan",   linewidth=0.8, linestyle="--", alpha=0.9)
+        ax00.axvline(cc, color="cyan",   linewidth=0.8, linestyle="--", alpha=0.9)
+        _ARM = 15
+        ax00.plot([cc - _ARM, cc + _ARM], [cr, cr],
+                  color="yellow", linewidth=1.5, linestyle="-", alpha=1.0)
+        ax00.plot([cc, cc], [cr - _ARM, cr + _ARM],
+                  color="yellow", linewidth=1.5, linestyle="-", alpha=1.0)
+        r_lo = max(0, cr - roi_half)
+        c_lo = max(0, cc - roi_half)
+        r_hi = min(image.shape[0], cr + roi_half)
+        c_hi = min(image.shape[1], cc + roi_half)
+        ax00.add_patch(mpatches.Rectangle(
+            (c_lo - 0.5, r_lo - 0.5),
+            c_hi - c_lo, r_hi - r_lo,
+            linewidth=1.2, edgecolor="red", facecolor="none",
+        ))
+
+        _plot_hist(ax10, image, "Pixel Distribution — Unmasked")
+        _plot_hist(ax11, roi,   "Pixel Distribution — ROI")
+    else:
+        ax0    = fig.add_subplot(gs[0, 0])
+        ax1    = fig.add_subplot(gs[1, 0])
+        ax_tbl = fig.add_subplot(gs[2, 0])
+        _plot_image(ax0, fig, image, "Unmasked")
+        _plot_hist( ax1,      image, "Pixel Distribution — Unmasked")
+
+    # Metadata table
+    ax_tbl.axis("off")
+    tbl = ax_tbl.table(
         cellText=cell_text,
         colLabels=col_labels,
         colWidths=[0.03, 0.16, 0.16, 0.10, 0.53],
@@ -351,28 +417,29 @@ def build_metadata_figure(metadata: dict, filename: str):
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8.5)
 
-    hdr_bg = "#2C3E50"
-    alt_bg = "#EBF5FB"
-    n_cols = len(col_labels)
+    hdr_bg     = "#2C3E50"
+    alt_bg     = "#EBF5FB"
+    n_tbl_cols = len(col_labels)
 
-    for c in range(n_cols):
-        tbl[0, c].set_height(_HDR_ROW / fig_h)
+    for c in range(n_tbl_cols):
+        tbl[0, c].set_height(_HDR_ROW / table_h_in)
         tbl[0, c].set_facecolor(hdr_bg)
         tbl[0, c].set_text_props(color="white", fontweight="bold")
         tbl[0, c].set_edgecolor("#CCCCCC")
 
     for r_idx, h_in in enumerate(row_heights_in):
-        for c in range(n_cols):
+        for c in range(n_tbl_cols):
             cell = tbl[r_idx + 1, c]
-            cell.set_height(h_in / fig_h)
+            cell.set_height(h_in / table_h_in)
             cell.set_edgecolor("#CCCCCC")
             if r_idx % 2 == 1:
                 cell.set_facecolor(alt_bg)
 
-    ax.set_title(
+    ax_tbl.set_title(
         f"WindCube FPI Metadata (from binary header row) — {filename}",
         fontsize=11, fontweight="bold", pad=8,
     )
+    fig.suptitle(f"WindCube FPI — {filename}", fontsize=12, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
@@ -409,72 +476,86 @@ def main() -> None:
     print(f"CCD temp    : {metadata['ccd_temp1']} °C")
     print(f"Image type  : {metadata['img_type']}")
 
-    # ── Extract ROI centred on user-defined fringe centre ──────────────────
-    roi = extract_roi(image, FRINGE_CENTER, ROI_HALF)
-    roi_side = ROI_HALF * 2
-    roi_cx = roi.shape[1] / 2.0 - 0.5
-    roi_cy = roi.shape[0] / 2.0 - 0.5
-    print(f"Fringe centre     : row {FRINGE_CENTER[0]}, col {FRINGE_CENTER[1]}")
-    print(f"ROI shape         : {roi.shape[0]} rows × {roi.shape[1]} cols "
-          f"(requested {roi_side}×{roi_side})")
-    print(f"ROI centre pixel  : cx = {roi_cx:.1f}, cy = {roi_cy:.1f}  (pixel coords)")
+    # ── Detect binning and set defaults ───────────────────────────────────
+    n_rows, n_cols = image.shape
+    unbinned        = (n_cols >= 500)          # 552 cols → 1×1; 276 cols → 2×2
+    roi_half_default   = 216 if unbinned else 108
+    fringe_center_default = (n_rows // 2, n_cols // 2)
+    print(f"Binning       : {'1×1 unbinned' if unbinned else '2×2 binned'}")
 
-    # ── Figure 1: image + histogram (2×2 if MASK_DARK) ────────────────────
-    if MASK_DARK:
-        roi_title = (
-            f"ROI  {roi.shape[0]}×{roi.shape[1]} px  "
-            f"centred at ({FRINGE_CENTER[0]}, {FRINGE_CENTER[1]})"
-        )
-        fig1, axes = plt.subplots(2, 2, figsize=(14, 10))
-        _plot_image(axes[0, 0], fig1, image, "Unmasked (full frame)")
-        _plot_image(axes[0, 1], fig1, roi,   roi_title)
-
-        # ── Overlays on full-frame panel ───────────────────────────────────
-        ax0 = axes[0, 0]
-        cr, cc = FRINGE_CENTER
-
-        # Crosshair 1 — full-span guide lines (cyan dashed)
-        ax0.axhline(cr, color="cyan", linewidth=0.8, linestyle="--", alpha=0.9)
-        ax0.axvline(cc, color="cyan", linewidth=0.8, linestyle="--", alpha=0.9)
-
-        # Crosshair 2 — short-arm tick marks at the user-defined fringe centre
-        # (yellow solid lines, ±15 px arms so they stay visible at any zoom)
-        _ARM = 15
-        ax0.plot([cc - _ARM, cc + _ARM], [cr, cr],
-                 color="yellow", linewidth=1.5, linestyle="-", alpha=1.0)
-        ax0.plot([cc, cc], [cr - _ARM, cr + _ARM],
-                 color="yellow", linewidth=1.5, linestyle="-", alpha=1.0)
-
-        # Red rectangle marking the ROI extent
-        r_lo = max(0, cr - ROI_HALF)
-        c_lo = max(0, cc - ROI_HALF)
-        r_hi = min(image.shape[0], cr + ROI_HALF)
-        c_hi = min(image.shape[1], cc + ROI_HALF)
-        rect = mpatches.Rectangle(
-            (c_lo - 0.5, r_lo - 0.5),          # (x, y) — col then row
-            c_hi - c_lo, r_hi - r_lo,
-            linewidth=1.2, edgecolor="red", facecolor="none",
-        )
-        ax0.add_patch(rect)
-
-        _plot_hist( axes[1, 0], image, "Pixel Distribution — Unmasked")
-        _plot_hist( axes[1, 1], roi,   "Pixel Distribution — ROI")
+    # ── Prompt for ROI half-size ───────────────────────────────────────────
+    _raw = input(
+        f"ROI half-size        [px,  default {roi_half_default:3d}       ] : "
+    ).strip()
+    if _raw:
+        try:
+            roi_half = int(_raw)
+            if not (10 <= roi_half <= min(n_rows, n_cols) // 2):
+                print(f"  Out of range — using default {roi_half_default}.")
+                roi_half = roi_half_default
+        except ValueError:
+            print(f"  Invalid input — using default {roi_half_default}.")
+            roi_half = roi_half_default
     else:
-        fig1, axes = plt.subplots(2, 1, figsize=(7, 10))
-        _plot_image(axes[0], fig1, image, "Unmasked")
-        _plot_hist( axes[1], image, "Pixel Distribution — Unmasked")
+        roi_half = roi_half_default
 
-    fig1.suptitle(f"WindCube FPI — {filename}", fontsize=12, fontweight="bold")
-    fig1.tight_layout()
- 
-    # ── Figure 2: metadata table ───────────────────────────────────────────
-    build_metadata_figure(metadata, filename)
+    print(f"ROI half-size : {roi_half} px  ({roi_half * 2}×{roi_half * 2} ROI)")
 
+    # ── Pre-compute metadata table dimensions (shared by both figures) ───────
+    col_labels = ["#", "Field (key)", "Display name", "Units", "Value"]
+    cell_text = [
+        [str(i), key,
+         _FIELD_META.get(key, (key, "", None))[0],
+         _FIELD_META.get(key, (key, "", None))[1],
+         _fmt_value(key, val)]
+        for i, (key, val) in enumerate(metadata.items(), start=1)
+    ]
+    _LINE_H  = 0.20
+    _MIN_ROW = 0.28
+    _HDR_ROW = 0.32
+    row_heights_in = [
+        max(_MIN_ROW, max(v.count("\n") + 1 for v in row) * _LINE_H)
+        for row in cell_text
+    ]
+    table_h_in = max(6.0, sum(row_heights_in) + _HDR_ROW + 1.2)
+
+    # ── Figure 1: default fringe centre (image midpoint) ──────────────────
+    roi = extract_roi(image, fringe_center_default, roi_half)
+    print(f"Default fringe centre : row {fringe_center_default[0]}, col {fringe_center_default[1]}")
+    print(f"ROI shape             : {roi.shape[0]} rows × {roi.shape[1]} cols")
+
+    fig = _build_figure(image, roi, fringe_center_default, filename,
+                        col_labels, cell_text, row_heights_in, table_h_in,
+                        roi_half)
+
+    print("\nClick on the FULL-FRAME IMAGE panel (top-left) to mark the coarse")
+    print("fringe centre.  Press Enter to accept the default centre.")
+    coords = plt.ginput(1, timeout=0)
+    plt.close(fig)
+
+    if coords:
+        cx_coarse = float(np.clip(coords[0][0], 0, n_cols - 1))
+        cy_coarse = float(np.clip(coords[0][1], 0, n_rows - 1))
+    else:
+        cx_coarse = float(fringe_center_default[1])
+        cy_coarse = float(fringe_center_default[0])
+
+    print(f"Coarse fringe centre  : cx = {cx_coarse:.1f} px,  cy = {cy_coarse:.1f} px")
+
+    # ── Figure 2: updated ROI centred on user-selected coarse centre ──────
+    fringe_center_coarse = (int(round(cy_coarse)), int(round(cx_coarse)))
+    roi = extract_roi(image, fringe_center_coarse, roi_half)
+    print(f"Updated ROI           : {roi.shape[0]} rows × {roi.shape[1]} cols  "
+          f"centred at row={fringe_center_coarse[0]}, col={fringe_center_coarse[1]}")
+
+    fig = _build_figure(image, roi, fringe_center_coarse, filename,
+                        col_labels, cell_text, row_heights_in, table_h_in,
+                        roi_half)
     plt.show()
 
     # ── Save ROI as numpy array alongside the source binary ────────────────
     src = pathlib.Path(bin_file)
-    roi_path = src.with_name(src.stem.replace("_L0", "") + "_L1.1.npy")
+    roi_path = src.with_name(src.stem.replace("_L0", "") + "_ROI_L1.1.npy")
     np.save(roi_path, roi)
     print(f"ROI saved : {roi_path}")
     print(f"  shape   : {roi.shape}  dtype: {roi.dtype}")

@@ -2,22 +2,67 @@
 annular_reduction.py — Mulligan (1986) r²-binned annular reduction.
 
 Requires a pre-determined fringe centre produced by center_finder.py
-(saved as cal_image_centre.npz).  No centre finding is performed here.
+(saved as 2027-01-01T00-00-00Z_science_ROI_L1.1_center.npz).  No centre finding is performed here.
 
 Pipeline:
-  1. Select L1.1 .npy image ROI.
-  2. Select corresponding _centre.npz (cx, cy, sigma_cx, sigma_cy).
+  1. Select image ROI (e.g. 2027-01-01T00-00-00Z_science_ROI_L1.1.npy) produced by load_image.py
+  2. Select corresponding _center.npz (cx, cy, sigma_cx, sigma_cy).
   3. Annular reduction → 1-D radial intensity profile (FringeProfile).
      Peak finding and Gaussian fits are performed here, on the profile
      and SEM arrays as soon as they are available.
-  4. Save _L1.2.npz with all fields required by M05.
-  5. Save cal_image_L1.3.npy  (r_grid | profile | sigma_profile).
-  6. Plot: image with centre | radial profile with labelled peaks.
+  4. Plot: image with centre | radial profile with labelled peaks | peak fit table.
+
+Outputs (all saved alongside the input .npy, sharing its stem)
+--------------------------------------------------------------
+  <stem>_L1.2.npz
+      Merged NumPy archive containing all radial profile fields and the
+      fringe centre.  Required by M05 (calibration inversion).
+      Keys:
+        r_grid        (n_bins,)  — bin-centre radii, px
+        r2_grid       (n_bins,)  — bin-centre radii squared, px²
+        profile       (n_bins,)  — mean intensity per bin, ADU
+        sigma_profile (n_bins,)  — SEM per bin, ADU (np.inf for masked bins)
+        masked        (n_bins,)  — bool, True = bin excluded from fitting
+        cx, cy                   — fringe centre, px
+        sigma_cx, sigma_cy       — 1-sigma centre uncertainties, px
+
+  <stem>_peak_fits.npy
+      2-D float64 array, one row per detected fringe peak.
+      Columns: peak_num | r_raw (px) | r_fit (px) | sigma_r_fit (px)
+               | amplitude (ADU) | width_sigma (px).
+      Columns r_fit, sigma_r_fit, width_sigma are NaN when the Gaussian
+      fit failed for that peak.
 
 References:
   Harding et al. (2014) Section 3
   Niciejewski et al. (1992) SPIE 1745
   Mulligan (1986) J. Phys. E 19, 545
+
+n_bins parameter note
+---------------------
+n_bins controls the r²-bin resolution and can be increased freely without
+affecting the equal-area Mulligan technique — it is purely a sampling
+parameter.  With n_bins=1500 and r_max=110 px each bin spans
+dr² = 110²/1500 ≈ 8.1 px², giving a radial bin width of dr ≈ 0.16 px at
+the first fringe (~25 px), which is sufficient to resolve narrow fringes
+accurately.  Two bin-unit parameters must be scaled in proportion whenever
+n_bins is changed:
+
+  peak_distance     (bins) — minimum peak separation passed to find_peaks.
+                    Scale with n_bins so it continues to represent the same
+                    physical separation.  At n_bins=1500 use peak_distance=50
+                    (equivalent to the original peak_distance=5 at n_bins=150).
+
+  peak_fit_half_window (bins) — half-width of the Gaussian fitting window.
+                    Must be chosen so the window covers the fringe without
+                    extending into the zero-count centre region, which biases
+                    the Gaussian centroid inward.  At n_bins=1500 use
+                    peak_fit_half_window=20 (≈ ±8 px at the first fringe,
+                    ±1.4 px at r=100 px — the adaptive clamp keeps the window
+                    away from adjacent peaks at all radii).
+
+All pixel-unit parameters (peak_prominence, min_peak_sep_px, r_min_px,
+r_max_px, sigma_clip_threshold, etc.) are unaffected by changes to n_bins.
 
 Usage
 -----
@@ -68,7 +113,7 @@ def _find_and_fit_peaks(
     masked:          np.ndarray,
     distance:        int   = 5,
     prominence:      float = 100.0,
-    fit_half_window: int   = 8,
+    fit_half_window: int   = 6,
     min_sep_px:      float = 3.0,
 ) -> list[PeakFit]:
     """
@@ -271,14 +316,14 @@ def annular_reduce(
     sigma_cy: float,
     r_min_px: float = 0.0,
     r_max_px: float = 110.0,
-    n_bins: int = 150,
+    n_bins: int = 1500,
     n_subpixels: int = 1,
     sigma_clip_threshold: float = 3.0,
     min_pixels_per_bin: int = 3,
     bad_pixel_mask: Optional[np.ndarray] = None,
-    peak_distance: int = 5,
+    peak_distance: int = 50,
     peak_prominence: float = 50.0,
-    peak_fit_half_window: int = 8,   # upper bound; adaptive clamp controls effective value
+    peak_fit_half_window: int = 20,  # upper bound; adaptive clamp controls effective value
     min_peak_sep_px: float = 3.0,
 ) -> FringeProfile:
     """
@@ -537,15 +582,8 @@ def main() -> None:
     if fp.sparse_bins:
         print("  WARNING: > 10 % of bins are sparse or masked")
 
-    # -- Save L1.3 — radial profile array (r_grid | profile | sigma_profile) --
-    l13_path  = src.with_name("cal_image_L1.3.npy")
-    l13_array = np.column_stack([fp.r_grid, fp.profile, fp.sigma_profile])
-    np.save(l13_path, l13_array)
-    print(f"L1.3 saved : {l13_path}")
-    print(f"  shape    : {l13_array.shape}  (n_bins x 3: r_grid | profile | sigma_profile)")
-
-    # -- Save radial_profile_peaks.npy — one row per detected peak -------------
-    peaks_path = src.with_name("radial_profile_peaks.npy")
+    # -- Save peak fits — one row per detected peak ----------------------------
+    peaks_path = src.with_name(src.stem + "_peak_fits.npy")
     if fp.peak_fits:
         peaks_array = np.array([
             [i + 1,
@@ -564,13 +602,14 @@ def main() -> None:
           f"| amplitude_adu | width_px")
     print(f"  rows     : {peaks_array.shape[0]} peak(s)")
 
-    # -- Save L1.2 — all fields required by M05 --------------------------------
-    l12_path = src.with_name(src.stem.replace("_L1.1", "") + "_L1.2.npz")
+    # -- Save merged L1.2 — all radial profile fields + centre in one archive --
+    l12_path = src.with_name(src.stem + "_L1.2.npz")
     np.savez(
         l12_path,
+        r_grid        = fp.r_grid,
+        r2_grid       = fp.r2_grid,
         profile       = fp.profile,
         sigma_profile = fp.sigma_profile,
-        r2_grid       = fp.r2_grid,
         masked        = fp.masked,
         cx            = np.array(cx),
         cy            = np.array(cy),
@@ -580,8 +619,10 @@ def main() -> None:
     print(f"L1.2 saved : {l12_path}")
 
     # -- Plotting --------------------------------------------------------------
-    fig = plt.figure(figsize=(14, 9))
-    gs  = fig.add_gridspec(2, 1, hspace=0.35)
+    n_peaks    = len(fp.peak_fits)
+    table_h    = max(1.5, 0.32 * (n_peaks + 2))
+    fig = plt.figure(figsize=(14, 10 + table_h))
+    gs  = fig.add_gridspec(3, 1, hspace=0.40, height_ratios=[4, 4, table_h])
 
     # Top panel — image with centre overlaid
     ax0 = fig.add_subplot(gs[0])
@@ -593,8 +634,8 @@ def main() -> None:
     ax0.axvline(cx, color="cyan", linewidth=0.8, linestyle="--", alpha=0.9)
     ax0.plot(cx, cy, "+", color="yellow", markersize=14, markeredgewidth=1.5)
     ax0.set_title(
-        f"{src.name}  |  "
-        f"cx = {cx:.2f} +/- {sigma_cx:.3f} px,  cy = {cy:.2f} +/- {sigma_cy:.3f} px",
+        f"Fine Center Determination from Nelder-Mead:  "
+        f"cx = {cx:.3f} +/- {sigma_cx:.3f} px,  cy = {cy:.3f} +/- {sigma_cy:.3f} px",
         fontsize=9,
     )
     ax0.set_xlabel("Column (pixel)", fontsize=8)
@@ -628,10 +669,6 @@ def main() -> None:
         ax1.plot(fp.r_grid[fp.masked], fp.profile[fp.masked],
                  "rx", markersize=4, label="Masked bins")
 
-    # Peak labels — offset computed from the profile data range
-    finite_profile = fp.profile[finite]
-    ax_span = max(float(finite_profile.max() - finite_profile.min()), 1.0) \
-              if finite_profile.size > 0 else 1.0
 
     for i, pf in enumerate(fp.peak_fits):
         # Dashed orange line at raw detection position
@@ -647,26 +684,6 @@ def main() -> None:
             ax1.axvspan(pf.r_fit_px - pf.sigma_r_fit_px,
                         pf.r_fit_px + pf.sigma_r_fit_px,
                         alpha=0.10, color="crimson")
-            label_str = (
-                f"P{i + 1}\n"
-                f"r = {pf.r_fit_px:.1f} +/- {pf.sigma_r_fit_px:.2f} px\n"
-                f"A = {pf.amplitude_adu:.0f} ADU"
-            )
-            r_label = pf.r_fit_px
-        else:
-            label_str = f"P{i + 1}\nr = {pf.r_raw_px:.1f} px\n(fit failed)"
-            r_label   = pf.r_raw_px
-
-        # Text annotation just above the peak, nudged right
-        ax1.annotate(
-            label_str,
-            xy       = (r_label, pf.profile_raw),
-            xytext   = (r_label + 0.5, pf.profile_raw + 0.06 * ax_span),
-            fontsize = 6.5,
-            color    = "crimson" if pf.fit_ok else "darkorange",
-            va="bottom", ha="left",
-            arrowprops=dict(arrowstyle="-", color="gray", lw=0.6),
-        )
 
     ax1.set_title(
         f"Radial profile  ({good_bins}/{fp.n_bins} bins)  |  "
@@ -679,6 +696,62 @@ def main() -> None:
     ax1.set_ylabel("Mean intensity  (ADU)", fontsize=8)
     ax1.tick_params(labelsize=7)
     ax1.legend(fontsize=7)
+
+    # Peak fit results table
+    ax2 = fig.add_subplot(gs[2])
+    ax2.axis("off")
+    col_labels = [
+        "Peak", "r_raw (px)", "r_fit (px)", "+/-sig_r (px)",
+        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "Width sig (px)",
+    ]
+    cell_text = []
+    for i, pf in enumerate(fp.peak_fits):
+        if pf.fit_ok:
+            r_fit_sq   = pf.r_fit_px ** 2
+            sig_r_sq   = 2.0 * pf.r_fit_px * pf.sigma_r_fit_px
+            cell_text.append([
+                str(i + 1),
+                f"{pf.r_raw_px:.2f}",
+                f"{pf.r_fit_px:.3f}",
+                f"{pf.sigma_r_fit_px:.3f}",
+                f"{r_fit_sq:.2f}",
+                f"{sig_r_sq:.3f}",
+                f"{pf.amplitude_adu:.1f}",
+                f"{pf.width_px:.2f}",
+            ])
+        else:
+            cell_text.append([
+                str(i + 1),
+                f"{pf.r_raw_px:.2f}",
+                "---", "---", "---", "---",
+                f"{pf.profile_raw:.1f}",
+                "---",
+            ])
+    if not cell_text:
+        cell_text = [["—"] * len(col_labels)]
+
+    tbl = ax2.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        loc="upper center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.5)
+    hdr_bg  = "#2C3E50"
+    alt_bg  = "#EBF5FB"
+    n_cols  = len(col_labels)
+    n_rows  = len(cell_text)
+    for c in range(n_cols):
+        tbl[0, c].set_facecolor(hdr_bg)
+        tbl[0, c].set_text_props(color="white", fontweight="bold")
+        tbl[0, c].set_edgecolor("#CCCCCC")
+    for r_idx in range(n_rows):
+        for c in range(n_cols):
+            tbl[r_idx + 1, c].set_edgecolor("#CCCCCC")
+            if r_idx % 2 == 1:
+                tbl[r_idx + 1, c].set_facecolor(alt_bg)
+    ax2.set_title("Peak Fit Results", fontsize=10, fontweight="bold", pad=8)
 
     fig.suptitle(
         f"Annular Reduction -- {src.name}",
@@ -695,7 +768,7 @@ def main() -> None:
 
 def _print_peak_table(peak_fits: list[PeakFit]) -> None:
     """Print a formatted summary table of detected peaks to stdout."""
-    sep = "-" * 74
+    sep = "-" * 92
     print(f"\n{sep}")
     print(f"  Detected peaks in radial profile  ({len(peak_fits)} found)")
     print(sep)
@@ -706,20 +779,24 @@ def _print_peak_table(peak_fits: list[PeakFit]) -> None:
 
     print(
         f"  {'Peak':>4}  {'r_raw (px)':>10}  {'r_fit (px)':>10}  "
-        f"{'+/-sig_r (px)':>13}  {'Amp (ADU)':>9}  {'Width sig (px)':>14}  {'Status':>10}"
+        f"{'+/-sig_r (px)':>13}  {'r_fit (px²)':>12}  {'+/-sig_r (px²)':>14}  "
+        f"{'Amp (ADU)':>9}  {'Width sig (px)':>14}"
     )
     print(sep)
     for i, pf in enumerate(peak_fits):
         if pf.fit_ok:
+            r_fit_sq = pf.r_fit_px ** 2
+            sig_r_sq = 2.0 * pf.r_fit_px * pf.sigma_r_fit_px
             print(
                 f"  {i + 1:>4}  {pf.r_raw_px:>10.2f}  {pf.r_fit_px:>10.3f}  "
-                f"{pf.sigma_r_fit_px:>13.3f}  {pf.amplitude_adu:>9.1f}  "
-                f"{pf.width_px:>14.2f}  {'OK':>10}"
+                f"{pf.sigma_r_fit_px:>13.3f}  {r_fit_sq:>12.2f}  {sig_r_sq:>14.3f}  "
+                f"{pf.amplitude_adu:>9.1f}  {pf.width_px:>14.2f}"
             )
         else:
             print(
                 f"  {i + 1:>4}  {pf.r_raw_px:>10.2f}  {'---':>10}  "
-                f"{'---':>13}  {pf.profile_raw:>9.1f}  {'---':>14}  {'fit failed':>10}"
+                f"{'---':>13}  {'---':>12}  {'---':>14}  "
+                f"{pf.profile_raw:>9.1f}  {'---':>14}"
             )
     print(sep)
 
