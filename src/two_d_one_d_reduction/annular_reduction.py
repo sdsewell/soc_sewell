@@ -27,11 +27,26 @@ Outputs (all saved alongside the input .npy, sharing its stem)
         sigma_cx, sigma_cy       — 1-sigma centre uncertainties, px
 
   <stem>_peak_fits.npy
-      2-D float64 array, one row per detected fringe peak.
-      Columns: peak_num | r_raw (px) | r_fit (px) | sigma_r_fit (px)
-               | amplitude (ADU) | width_sigma (px).
-      Columns r_fit, sigma_r_fit, width_sigma are NaN when the Gaussian
-      fit failed for that peak.
+      2-D float64 array, one row per detected fringe peak.  9 columns:
+        col 0 : peak_num
+        col 1 : r_raw (px)          — detected bin centre (find_peaks)
+        col 2 : r_fit (px)          — TRF Gaussian centroid μ
+        col 3 : sigma_r_fit (px)    — 1-sigma uncertainty on μ
+        col 4 : r_fit (px²)         — μ², for use in r²-domain calibration
+        col 5 : sigma_r_fit (px²)   — 2·μ·σ_μ  (propagated uncertainty)
+        col 6 : amplitude (ADU)     — Gaussian amplitude A above background
+        col 7 : width_sigma (px)    — Gaussian width σ
+        col 8 : reduced_chi2        — χ²/(n_points − 4); see note below
+      Cols 2–8 are NaN when the Gaussian fit failed for that peak.
+
+  Reduced chi-squared interpretation
+      A value near 1 indicates that the fit residuals are consistent with
+      the per-bin SEM weights — the Gaussian model is a good description of
+      the fringe shape.  A value significantly greater than 1 indicates
+      either a poor fit (wrong model, window too wide/narrow, or a biased
+      initial guess) or underestimated SEM.  A value much less than 1
+      suggests the SEM is overestimated or the window contains too few
+      degrees of freedom (n_points − 4 ≤ 0 gives NaN).
 
 References:
   Harding et al. (2014) Section 3
@@ -57,8 +72,8 @@ n_bins is changed:
                     Must be chosen so the window covers the fringe without
                     extending into the zero-count centre region, which biases
                     the Gaussian centroid inward.  At n_bins=1500 use
-                    peak_fit_half_window=20 (≈ ±8 px at the first fringe,
-                    ±1.4 px at r=100 px — the adaptive clamp keeps the window
+                    peak_fit_half_window=7 (≈ ±3 px at the first fringe,
+                    ±0.5 px at r=100 px — the adaptive clamp keeps the window
                     away from adjacent peaks at all radii).
 
 All pixel-unit parameters (peak_prominence, min_peak_sep_px, r_min_px,
@@ -99,6 +114,7 @@ class PeakFit:
     amplitude_adu:  float  # Gaussian amplitude above background (ADU)
     width_px:       float  # Gaussian sigma width (px); nan if fit failed
     fit_ok:         bool   # False if curve_fit failed or window too small
+    reduced_chi2:   float  # chi² / (n_points - 4); nan if fit failed
 
 
 def _gaussian(r: np.ndarray, A: float, mu: float, sig: float, B: float) -> np.ndarray:
@@ -211,6 +227,7 @@ def _find_and_fit_peaks(
         sigma_r_fit_px = np.nan
         amplitude_adu  = float(profile[bin_idx])
         width_px       = np.nan
+        reduced_chi2   = np.nan
         fit_ok         = False
 
         if win_use.size >= 4:
@@ -245,6 +262,10 @@ def _find_and_fit_peaks(
                 sigma_r_fit_px = float(perr[1])
                 amplitude_adu  = float(popt[0])
                 width_px       = float(abs(popt[2]))
+                n_dof          = len(r_w) - 4
+                if n_dof > 0:
+                    chi2         = float(np.sum(((p_w - _gaussian(r_w, *popt)) / sem_w) ** 2))
+                    reduced_chi2 = chi2 / n_dof
                 fit_ok         = True
             except (RuntimeError, ValueError):
                 pass
@@ -258,6 +279,7 @@ def _find_and_fit_peaks(
             amplitude_adu  = amplitude_adu,
             width_px       = width_px,
             fit_ok         = fit_ok,
+            reduced_chi2   = reduced_chi2,
         ))
 
     results.sort(key=lambda p: p.r_raw_px)
@@ -323,7 +345,7 @@ def annular_reduce(
     bad_pixel_mask: Optional[np.ndarray] = None,
     peak_distance: int = 50,
     peak_prominence: float = 50.0,
-    peak_fit_half_window: int = 20,  # upper bound; adaptive clamp controls effective value
+    peak_fit_half_window: int = 7,  # upper bound; adaptive clamp controls effective value
     min_peak_sep_px: float = 3.0,
 ) -> FringeProfile:
     """
@@ -588,18 +610,21 @@ def main() -> None:
         peaks_array = np.array([
             [i + 1,
              pf.r_raw_px,
-             pf.r_fit_px       if pf.fit_ok else np.nan,
-             pf.sigma_r_fit_px if pf.fit_ok else np.nan,
+             pf.r_fit_px           if pf.fit_ok else np.nan,
+             pf.sigma_r_fit_px     if pf.fit_ok else np.nan,
+             pf.r_fit_px ** 2      if pf.fit_ok else np.nan,
+             2.0 * pf.r_fit_px * pf.sigma_r_fit_px if pf.fit_ok else np.nan,
              pf.amplitude_adu,
-             pf.width_px       if pf.fit_ok else np.nan]
+             pf.width_px           if pf.fit_ok else np.nan,
+             pf.reduced_chi2       if pf.fit_ok else np.nan]
             for i, pf in enumerate(fp.peak_fits)
         ], dtype=np.float64)
     else:
-        peaks_array = np.empty((0, 6), dtype=np.float64)
+        peaks_array = np.empty((0, 9), dtype=np.float64)
     np.save(peaks_path, peaks_array)
     print(f"Peaks saved: {peaks_path}")
     print(f"  columns  : peak_num | r_raw_px | r_fit_px | sigma_r_fit_px "
-          f"| amplitude_adu | width_px")
+          f"| r_fit_sq | sigma_r_fit_sq | amplitude_adu | width_px | reduced_chi2")
     print(f"  rows     : {peaks_array.shape[0]} peak(s)")
 
     # -- Save merged L1.2 — all radial profile fields + centre in one archive --
@@ -702,7 +727,7 @@ def main() -> None:
     ax2.axis("off")
     col_labels = [
         "Peak", "r_raw (px)", "r_fit (px)", "+/-sig_r (px)",
-        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "Width sig (px)",
+        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "Width sig (px)", "χ²_red",
     ]
     cell_text = []
     for i, pf in enumerate(fp.peak_fits):
@@ -718,6 +743,7 @@ def main() -> None:
                 f"{sig_r_sq:.3f}",
                 f"{pf.amplitude_adu:.1f}",
                 f"{pf.width_px:.2f}",
+                f"{pf.reduced_chi2:.3f}",
             ])
         else:
             cell_text.append([
@@ -725,7 +751,7 @@ def main() -> None:
                 f"{pf.r_raw_px:.2f}",
                 "---", "---", "---", "---",
                 f"{pf.profile_raw:.1f}",
-                "---",
+                "---", "---",
             ])
     if not cell_text:
         cell_text = [["—"] * len(col_labels)]
@@ -762,7 +788,253 @@ def main() -> None:
     # -- Peak table to terminal (printed before plt.show so it is visible
     #    while the figure is open) -------------------------------------------
     _print_peak_table(fp.peak_fits)
+    if fp.peak_fits:
+        _plot_first_fringe_diagnostic(fp)
 
+    plt.show()
+
+
+def _plot_first_fringe_diagnostic(
+    fp: FringeProfile,
+    fit_half_window: int = 7,
+) -> None:
+    """
+    Diagnostic figure for the Gaussian fit to the first detected fringe peak.
+
+    Reproduces the exact window, initial guess, bounds, and curve_fit call used
+    by _find_and_fit_peaks so that the fit can be inspected visually.
+
+    NOTE on algorithm: scipy.optimize.curve_fit uses Levenberg-Marquardt (LM)
+    only when no bounds are supplied.  Because bounds ARE supplied here,
+    curve_fit switches to Trust Region Reflective (TRF) automatically.
+    The result stored in PeakFit is therefore a TRF fit, not a centroid and
+    not LM.
+    """
+    if not fp.peak_fits:
+        print("No peaks detected — skipping first-fringe diagnostic.")
+        return
+
+    pf = fp.peak_fits[0]   # first (innermost) peak
+
+    # --- Reconstruct median_dr_px (same logic as _find_and_fit_peaks) --------
+    good         = ~fp.masked
+    good_indices = np.where(good)[0]
+    if good_indices.size > 1:
+        median_dr_px = float(np.median(np.diff(fp.r_grid[good])))
+        if median_dr_px <= 0.0:
+            median_dr_px = 1.0
+    else:
+        median_dr_px = 1.0
+
+    # --- Reconstruct adaptive effective_hw for the first peak -----------------
+    # First peak has no left neighbour (left_sep = 9999).
+    # Right neighbour is fp.peak_fits[1] if it exists.
+    right_sep   = (fp.peak_fits[1].peak_idx - pf.peak_idx) if len(fp.peak_fits) > 1 else 9999
+    nearest     = right_sep                                  # left_sep always 9999 for peak 0
+    adaptive_hw = max(2, (nearest - 1) // 2)
+    effective_hw = min(fit_half_window, adaptive_hw)
+
+    bin_idx = pf.peak_idx
+    lo      = max(0, bin_idx - effective_hw)
+    hi      = min(len(fp.r_grid) - 1, bin_idx + effective_hw)
+    win     = np.arange(lo, hi + 1)
+    usable  = ~fp.masked[win] & np.isfinite(fp.sigma_profile[win])
+    win_use = win[usable]
+
+    r_w   = fp.r_grid[win_use]
+    p_w   = fp.profile[win_use]
+    sem_w = fp.sigma_profile[win_use]
+
+    # --- Reconstruct p0 and bounds (identical to _find_and_fit_peaks) --------
+    B0   = float(np.percentile(p_w, 20)) if len(p_w) > 0 else 0.0
+    A0   = max(float(fp.profile[bin_idx]) - B0, 1.0)
+    mu0  = float(fp.r_grid[bin_idx])
+    sig0 = max((float(r_w[-1]) - float(r_w[0])) / 6.0, median_dr_px * 0.5) if len(r_w) > 1 else median_dr_px
+    p0   = [A0, mu0, sig0, B0]
+
+    bounds_lo = [0.0,    float(r_w[0]),  0.3 * median_dr_px,                    0.0   ]
+    bounds_hi = [np.inf, float(r_w[-1]), float(r_w[-1]) - float(r_w[0]), np.inf]
+
+    # --- Re-run curve_fit to get full diagnostics ----------------------------
+    fit_ok   = False
+    popt     = list(p0)
+    perr     = [np.nan] * 4
+    pcov     = np.full((4, 4), np.nan)
+    mesg     = "fit not attempted (too few usable points)"
+
+    if win_use.size >= 4:
+        try:
+            popt, pcov = curve_fit(
+                _gaussian, r_w, p_w,
+                p0=p0, sigma=sem_w, absolute_sigma=True,
+                bounds=(bounds_lo, bounds_hi), maxfev=5000,
+            )
+            perr   = list(np.sqrt(np.diag(pcov)))
+            fit_ok = True
+            mesg   = "converged"
+        except RuntimeError as exc:
+            mesg = f"RuntimeError: {exc}"
+        except ValueError as exc:
+            mesg = f"ValueError: {exc}"
+
+    # Reduced chi-squared from the re-run fit
+    if fit_ok and len(r_w) - 4 > 0:
+        _chi2        = float(np.sum(((p_w - _gaussian(r_w, *popt)) / sem_w) ** 2))
+        reduced_chi2_diag = _chi2 / (len(r_w) - 4)
+    else:
+        reduced_chi2_diag = np.nan
+
+    # --- Fine grid for plotting curves ---------------------------------------
+    if len(r_w) > 0:
+        r_fine = np.linspace(r_w[0], r_w[-1], 500)
+    else:
+        r_fine = np.linspace(mu0 - 5, mu0 + 5, 500)
+    y_init = _gaussian(r_fine, *p0)
+    y_fit  = _gaussian(r_fine, *popt) if fit_ok else None
+
+    # --- Build annotation text -----------------------------------------------
+    alg_note = ("curve_fit + bounds  →  TRF (Trust Region Reflective)\n"
+                "  NOT Levenberg-Marquardt, NOT a centroid")
+    ann = "\n".join([
+        "ALGORITHM",
+        alg_note,
+        "",
+        "MODEL",
+        "  f(r) = A·exp(-½·((r-μ)/σ)²) + B",
+        "",
+        "FITTING WINDOW",
+        f"  bins {lo}–{hi}  ({hi - lo + 1} total, {win_use.size} usable)",
+        f"  r = {r_w[0]:.3f} – {r_w[-1]:.3f} px",
+        f"  median bin width = {median_dr_px:.4f} px",
+        f"  adaptive_hw = min({fit_half_window}, ({nearest}-1)//2={adaptive_hw}) = {effective_hw}",
+        "",
+        "INITIAL GUESS  p0",
+        f"  A₀ = {A0:.2f}  (profile[peak] − 20th-pct bkg)",
+        f"  μ₀ = {mu0:.4f} px  (detected bin centre)",
+        f"  σ₀ = {sig0:.4f} px  (window_span/6, ≥0.5·bin_width)",
+        f"  B₀ = {B0:.2f}  (20th-pct of window)",
+        "",
+        "BOUNDS  (lower, upper)",
+        f"  A  : (0,  ∞)",
+        f"  μ  : ({bounds_lo[1]:.4f},  {bounds_hi[1]:.4f}) px",
+        f"  σ  : ({bounds_lo[2]:.4f},  {bounds_hi[2]:.4f}) px",
+        f"  B  : (0,  ∞)",
+        "",
+        "FIT RESULT",
+        f"  status      : {mesg}",
+        f"  A           = {popt[0]:.2f}  ±  {perr[0]:.2f}",
+        f"  μ           = {popt[1]:.4f}  ±  {perr[1]:.4f} px",
+        f"  σ           = {popt[2]:.4f}  ±  {perr[2]:.4f} px",
+        f"  B           = {popt[3]:.2f}  ±  {perr[3]:.2f}",
+        f"  χ²_red      = {reduced_chi2_diag:.3f}  (n_dof = {len(r_w) - 4})",
+        "",
+        "STORED IN PeakFit",
+        f"  r_raw  = {pf.r_raw_px:.4f} px  (detected bin, coarse)",
+        f"  r_fit  = {pf.r_fit_px:.4f} px  (TRF centroid μ)",
+        f"  σ_fit  = {pf.sigma_r_fit_px:.4f} px",
+    ])
+
+    # --- Residuals at data points --------------------------------------------
+    if fit_ok:
+        y_fit_at_data  = _gaussian(r_w, *popt)
+        residuals      = p_w - y_fit_at_data
+        norm_residuals = residuals / sem_w   # pull: residual / 1-sigma SEM
+    else:
+        residuals = norm_residuals = None
+
+    # --- Figure  (context | fit+residuals | annotation) ----------------------
+    fig = plt.figure(figsize=(16, 8))
+    gs  = fig.add_gridspec(2, 3,
+                           width_ratios=[2, 2.2, 1.8],
+                           height_ratios=[3, 1.2],
+                           wspace=0.35, hspace=0.12)
+    ax_ctx  = fig.add_subplot(gs[:, 0])          # left — spans both rows
+    ax_zoom = fig.add_subplot(gs[0, 1])          # middle top — fit
+    ax_res  = fig.add_subplot(gs[1, 1],          # middle bottom — residuals
+                              sharex=ax_zoom)
+    ax_ann  = fig.add_subplot(gs[:, 2])          # right — spans both rows
+    ax_ann.axis("off")
+
+    # Left — full profile context, first 40 px
+    r_max_ctx = min(40.0, float(fp.r_grid[good].max()))
+    ax_ctx.plot(fp.r_grid[good], fp.profile[good],
+                color="steelblue", linewidth=0.8,
+                marker=".", markersize=4, markeredgewidth=0)
+    ax_ctx.axvspan(fp.r_grid[lo], fp.r_grid[hi],
+                   alpha=0.20, color="gold", label="Fitting window")
+    ax_ctx.axvline(pf.r_raw_px, color="darkorange", linewidth=1.2,
+                   linestyle="--", label=f"Detected  {pf.r_raw_px:.3f} px")
+    if pf.fit_ok:
+        ax_ctx.axvline(pf.r_fit_px, color="crimson", linewidth=1.4,
+                       label=f"TRF centroid  {pf.r_fit_px:.3f} px")
+    ax_ctx.set_xlim(0, r_max_ctx)
+    ax_ctx.set_xlabel("Radius (px)", fontsize=9)
+    ax_ctx.set_ylabel("Mean intensity (ADU)", fontsize=9)
+    ax_ctx.set_title(f"Full profile  (0 – {r_max_ctx:.0f} px)", fontsize=9)
+    ax_ctx.legend(fontsize=7)
+    ax_ctx.tick_params(labelsize=7)
+
+    # Right — zoomed fitting window
+    ax_zoom.errorbar(r_w, p_w, yerr=sem_w,
+                     fmt="o", color="steelblue", markersize=5,
+                     ecolor="cornflowerblue", elinewidth=1.2, capsize=3,
+                     zorder=3, label="Data ± 1σ SEM")
+    ax_zoom.plot(r_fine, y_init, color="goldenrod", linewidth=1.5,
+                 linestyle="--", zorder=2, label="Initial guess p0")
+    if fit_ok and y_fit is not None:
+        ax_zoom.plot(r_fine, y_fit, color="crimson", linewidth=2.0,
+                     zorder=4, label="TRF fit")
+    ax_zoom.axvline(pf.r_raw_px, color="darkorange", linewidth=1.2,
+                    linestyle="--", alpha=0.8,
+                    label=f"Detected  {pf.r_raw_px:.3f} px")
+    if pf.fit_ok:
+        ax_zoom.axvline(pf.r_fit_px, color="crimson", linewidth=1.4,
+                        linestyle="-", alpha=0.9,
+                        label=f"TRF centroid  {pf.r_fit_px:.3f} px")
+    ax_zoom.set_ylabel("Mean intensity (ADU)", fontsize=9)
+    ax_zoom.set_title("Fitting window — zoomed", fontsize=9)
+    ax_zoom.legend(fontsize=7)
+    ax_zoom.tick_params(labelsize=7)
+    plt.setp(ax_zoom.get_xticklabels(), visible=False)
+
+    # Residuals panel
+    if fit_ok and residuals is not None:
+        ax_res.errorbar(r_w, residuals, yerr=sem_w,
+                        fmt="o", color="steelblue", markersize=5,
+                        ecolor="cornflowerblue", elinewidth=1.2, capsize=3,
+                        zorder=3, label="Data − fit  ± 1σ SEM")
+        ax_res.axhline(0, color="crimson", linewidth=1.2, linestyle="-")
+        ax_res.axhspan(-sem_w.mean(), sem_w.mean(),
+                       alpha=0.12, color="crimson", label="Mean ±1σ SEM band")
+        ax_res.set_ylabel("Residual (ADU)", fontsize=9)
+        ax_res.legend(fontsize=7)
+    else:
+        ax_res.text(0.5, 0.5, "fit failed — no residuals",
+                    transform=ax_res.transAxes, ha="center", va="center",
+                    fontsize=8, color="gray")
+    ax_res.axvline(pf.r_raw_px, color="darkorange", linewidth=1.0,
+                   linestyle="--", alpha=0.7)
+    if pf.fit_ok:
+        ax_res.axvline(pf.r_fit_px, color="crimson", linewidth=1.0,
+                       linestyle="-", alpha=0.7)
+    ax_res.set_xlabel("Radius (px)", fontsize=9)
+    ax_res.tick_params(labelsize=7)
+
+    # Annotation panel
+    ax_ann.text(0.03, 0.97, ann,
+                transform=ax_ann.transAxes,
+                fontsize=7.5, fontfamily="monospace",
+                va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.6",
+                          facecolor="#F8F9FA", edgecolor="#AAAAAA"))
+
+    fig.suptitle(
+        f"First Fringe Diagnostic  —  Peak 1  |  "
+        f"r_raw = {pf.r_raw_px:.4f} px   r_fit = {pf.r_fit_px:.4f} px   "
+        f"σ_fit = {pf.sigma_r_fit_px:.4f} px   fit_ok = {pf.fit_ok}",
+        fontsize=10, fontweight="bold",
+    )
+    fig.tight_layout()
     plt.show()
 
 
