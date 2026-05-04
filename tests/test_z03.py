@@ -405,7 +405,7 @@ def test_default_params(tmp_path):
 
 def test_round_trip_I0(tmp_path):
     """F01 must recover I0 within 5% of Z03 truth I0 on a synthetic profile."""
-    from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_22 import (
+    from validation.f01_full_airy_fit_to_neon_image_2026_04_22 import (
         fit_neon_fringe,
         TolanskyResult,
     )

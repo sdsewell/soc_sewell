@@ -83,7 +83,7 @@ except ImportError:
     _M01_AVAILABLE = False
 
 try:
-    from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_22 import (
+    from validation.f01_full_airy_fit_to_neon_image_2026_04_22 import (
         fit_neon_fringe, TolanskyResult, CalibrationResult, CalibrationFitFlags,
     )
     _F01_AVAILABLE = True

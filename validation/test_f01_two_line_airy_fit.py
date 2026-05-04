@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_22 import (
+from validation.f01_full_airy_fit_to_neon_image_2026_04_22 import (
     CalibrationFitFlags,
     CalibrationResult,
     TolanskyResult,
