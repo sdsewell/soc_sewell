@@ -3,7 +3,7 @@ tolansky.py
 ===========
 Standalone Tolansky method for Fabry-Perot Interferometer characterisation.
 
-(example calibration data contained in radial_fringe_peaks.npy)
+(example calibration data contained in 2027-01-01T00-00-00Z_science_ROI_L1.1_peak_fits.npy)
 
 INPUT
 -----
@@ -1123,18 +1123,22 @@ class TwoLineAnalyser:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Entry point  (python tolansky.py  [path/to/radial_profile_peaks.npy])
+# Entry point  (python tolansky.py  [path/to/<stem>_peak_fits.npy])
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Ingests radial_profile_peaks.npy produced by annular_reduction.py.
-# Expected columns (float64, shape N×6):
+# Ingests the _peak_fits.npy file produced by annular_reduction.py.
+# 2-D float64 array, one row per detected fringe peak.  9 columns:
 #
-#   col 0  peak_num      detection index  (1 = innermost)
-#   col 1  r_raw_px      raw detected radius  [px]       — not used
-#   col 2  r_fit_px      Gaussian centroid    [px]       ← r input
-#   col 3  sigma_r_fit   1σ uncertainty on centroid [px] ← sigma_r input
-#   col 4  amplitude_adu peak amplitude [ADU]  ← used to split the two Ne lines
-#   col 5  width_px      Gaussian sigma width [px]       — not used
+#   col 0 : peak_num
+#   col 1 : r_raw (px)          — detected bin centre (find_peaks)       — not used
+#   col 2 : r_fit (px)          — TRF Gaussian centroid μ                ← r input
+#   col 3 : sigma_r_fit (px)    — 1-sigma uncertainty on μ               ← sigma_r input
+#   col 4 : r_fit (px²)         — μ², for use in r²-domain calibration   — not used here
+#   col 5 : sigma_r_fit (px²)   — 2·μ·σ_μ  (propagated uncertainty)     — not used here
+#   col 6 : amplitude (ADU)     — Gaussian amplitude A above background  ← line-split key
+#   col 7 : width_sigma (px)    — Gaussian width σ                       — not used
+#   col 8 : reduced_chi2        — χ²/(n_points − 4)                      — not used
+# Cols 2–8 are NaN when the Gaussian fit failed for that peak.
 #
 # ── Two-line neon structure ──────────────────────────────────────────────────
 #
@@ -1192,12 +1196,12 @@ if __name__ == "__main__":
             sys.exit(0)
 
     peaks = np.load(peaks_path)
-    if peaks.ndim != 2 or peaks.shape[1] != 6:
+    if peaks.ndim != 2 or peaks.shape[1] != 9:
         raise ValueError(
-            f"Expected shape (N, 6) from radial_profile_peaks.npy, "
+            f"Expected shape (N, 9) from _peak_fits.npy, "
             f"got {peaks.shape}.  "
-            f"Columns: peak_num | r_raw_px | r_fit_px | "
-            f"sigma_r_fit_px | amplitude_adu | width_px"
+            f"Columns: peak_num | r_raw_px | r_fit_px | sigma_r_fit_px | "
+            f"r_fit_sq | sigma_r_fit_sq | amplitude_adu | width_px | reduced_chi2"
         )
 
     print(f"\n  Loaded  {peaks_path}")
@@ -1209,7 +1213,7 @@ if __name__ == "__main__":
     # this dataset; adjust AMP_THRESHOLD below if needed.
     AMP_THRESHOLD = 1000.0    # ADU — peaks above → line 1, below → line 2
 
-    mask1 = peaks[:, 4] >= AMP_THRESHOLD   # strong line (640.2248 nm)
+    mask1 = peaks[:, 6] >= AMP_THRESHOLD   # strong line (640.2248 nm)
     mask2 = ~mask1                          # weak   line (638.2990 nm)
 
     if mask1.sum() == 0 or mask2.sum() == 0:

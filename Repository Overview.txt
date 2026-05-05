@@ -38,7 +38,17 @@
     Niciejewski et al. (1992) SPIE 1745
     Mulligan (1986) J. Phys. E 19, 545
 
+5) tolansky_2_line.py
+    Follows Vaughan and uses Benoit's method of exact fractions to extract an accurate value for etalon gap
+    'd' given the two well known wavelengths present in the neon calibraton lamp (and which are passed by
+    the 640 +/- 5 nm bandpass filter)
+    This routine also returns a value for the plate-scale 'alpha'[radians per pixel] used in Harding Equation (3)
 
+6) tolansky_1_line.py
+    This routine operates on the radial profile for a single line (airglow) image produced by annular_reduction.py
+    It is only able to return the fractional fringe order 'epsilon' at image center.  This must be used
+    with the etalon gap 'd' value determined in tolansky_2_line.py in order to retrieve the doppler shifted velocity
+    of the oxygen emission line.
 Start working on better physics:
 figure out how to reduce the number of fringes in an airglow synthesis by limiting the field of view to 1.65 degrees with details of the field stop.  Use claude ai to readin in an optical design description perhpas from zemax or from some export r from my own explanation
 

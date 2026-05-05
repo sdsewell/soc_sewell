@@ -777,7 +777,10 @@ def main() -> None:
             tbl[r_idx + 1, c].set_edgecolor("#CCCCCC")
             if r_idx % 2 == 1:
                 tbl[r_idx + 1, c].set_facecolor(alt_bg)
-    ax2.set_title("Peak Fit Results", fontsize=10, fontweight="bold", pad=8)
+    ax2.set_title(
+        f"Peak Fit Results -> Used by tolansky.py\n{peaks_path.name}",
+        fontsize=10, fontweight="bold", pad=8,
+    )
 
     fig.suptitle(
         f"Annular Reduction -- {src.name}",

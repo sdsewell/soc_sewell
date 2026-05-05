@@ -61,8 +61,8 @@ from load_real_image import (
     build_metadata_figure, _plot_image, _plot_hist,
     FRINGE_CENTER, ROI_HALF,
 )
-from center_finder import find_centre, _variance_cost
-from annular_reduction import annular_reduce
+from src.processing.center_finder import find_centre, _variance_cost
+from src.processing.annular_reduction import annular_reduce
 
 from fpi.m03_annular_reduction import FringeProfile as M03FringeProfile
 from cal_inversion_new import fit_calibration_fringe, FitConfig, _ne_model
