@@ -1,11 +1,10 @@
-# S06 — Airy Forward Model Specification
+# H01 — Airy Forward Model Specification
 
-**Spec ID:** S06
-**Spec file:** `docs/specs/S06_airy_forward_model_2026-04-29.md`
+**Spec ID:** H06
+**Spec file:** `docs/specs/H01_airy_forward_model_2026-04-29.md`
 **Project:** WindCube FPI Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
 **Status:** Authoritative
-**Supersedes:** `docs/specs/archive/S06_airy_forward_model_2026-04-13.md`
 **Depends on:** S01, S02, S03, S04
 **Used by:** calibration synthesis, airglow synthesis, calibration inversion, airglow inversion modules
 **References:**
@@ -41,7 +40,7 @@
 
 ## 1. Purpose
 
-S06 is the mathematical core of the FPI instrument model. It computes the
+H01 is the mathematical core of the FPI instrument model. It computes the
 ideal and PSF-broadened Airy transmission function for a given set of
 instrument parameters, and constructs the instrument matrix **A** that maps
 a source spectrum Y(λ) to a measured 1D fringe profile S(r):
@@ -56,7 +55,7 @@ not know whether the source is neon, OI 630 nm airglow, or
 anything else. That knowledge lives in the calling module's source spectrum
 vector `y`. This separation is intentional and must be preserved.
 
-**What S06 provides to the rest of the pipeline:**
+**What H01 provides to the rest of the pipeline:**
 - The `InstrumentParams` dataclass — the single shared container for all
   FPI hardware parameters, passed between pipeline modules.
 - The `build_instrument_matrix()` function — the computational kernel of
@@ -167,7 +166,7 @@ r_max            = min(128, 90) = 90 px
 **All numerical values must be imported from `windcube/constants.py`.**
 No module in the pipeline may hardcode a value that appears in that file.
 
-### 3.1 Constants required for S06 (already present in constants.py)
+### 3.1 Constants required for H01 (already present in constants.py)
 
 ```python
 from windcube.constants import (
@@ -175,8 +174,7 @@ from windcube.constants import (
     ETALON_GAP_M,           # 20.008e-3 m  — ICOS build report (authoritative)
     ETALON_N,               # 1.0          — refractive index of etalon gap
     ETALON_R_INSTRUMENT,    # 0.53         — effective reflectivity (FlatSat)
-    FOCAL_LENGTH_M,         # 0.199_12 m   — Tolansky-recovered imaging lens f
-    ALPHA_RAD_PX,           # 1.6000e-4 rad/px — 2×2 binned plate scale (32 µm / 200 mm)
+    ALPHA_RAD_PX,           # Tolansy Recovered 1.6000e-4 rad/px — 2×2 binned plate scale (32 µm / 200 mm)
     # CCD
     CCD_PIXELS_UNBINNED,    # 512          — physical pixels per side
     FOV_DEG,                # 1.65         — full field of view, degrees
@@ -193,16 +191,6 @@ from windcube.constants import (
 ```
 
 
-### 3.2 Constants to add to `windcube/constants.py` (if not already present)
-
-These were introduced in the 2026-04-13 revision and should already be
-present. Verify before implementing:
-
-```python
-PIXEL_SIZE_M        = 16.0e-6    # m, unbinned pixel pitch (CCD97 datasheet)
-CCD_PIXELS_UNBINNED = 512        # pixels per side, unbinned
-FOV_DEG             = 1.65       # degrees, full field of view
-```
 
 ---
 

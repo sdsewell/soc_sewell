@@ -161,18 +161,17 @@ NE_INTENSITY_2 = 0.8                  # — ratio of secondary to primary
 #   the plate scale is more directly and more accurately recovered from the
 #   Tolansky analysis than from the COTS lens specification.
 # ---------------------------------------------------------------------------
-ETALON_GAP_M            = 20.106e-3   # m — Tolansky two-line (S13/Z01); AUTHORITATIVE
+
 ETALON_GAP_ICOS_M       = 20.008e-3   # m — ICOS spacer; integer N_int disambiguation ONLY
 ETALON_GAP_TOLERANCE_M  = 0.010e-3    # m — ICOS manufacturing tolerance ±0.010 mm
 ETALON_R_COATING        = 0.80        # — — as-deposited coating reflectivity at 630 nm
 ETALON_R_INSTRUMENT     = 0.53        # — — effective instrument R from FlatSat fringe contrast
-R_REFL_FLATSAT          = ETALON_R_INSTRUMENT   # alias for M01/M03 fringe model code
 ETALON_N                = 1.0         # — — refractive index of etalon gap (air/vacuum)
 ALPHA_RAD_PX            = 1.6071e-4   # rad/px — Tolansky two-line joint fit; 2×2 binned
 #   (nominal design: 32e-6 m / 0.200 m = 1.60e-4 rad/px — do NOT use in fits)
-R_MAX_PX                = 110         # px — FlatSat/flight usable radius for M03
 CCD_PIXEL_UM            = 16.0        # µm — CCD97-00 native pixel pitch (unbinned)
 CCD_PIXEL_2X2_UM        = 32.0        # µm — effective pixel pitch after 2×2 binning
+FOV_DEG                 = 1.65        # degrees, full field of view
 
 # ---------------------------------------------------------------------------
 # 3.6 CCD detector constants
