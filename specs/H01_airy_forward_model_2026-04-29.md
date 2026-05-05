@@ -174,7 +174,7 @@ from windcube.constants import (
     ETALON_GAP_M,           # 20.008e-3 m  — ICOS build report (authoritative)
     ETALON_N,               # 1.0          — refractive index of etalon gap
     ETALON_R_INSTRUMENT,    # 0.53         — effective reflectivity (FlatSat)
-    ALPHA_RAD_PX,           # Tolansy Recovered 1.6000e-4 rad/px — 2×2 binned plate scale (32 µm / 200 mm)
+    ALPHA_RAD_PX,           # Tolansy Recovered 1.6071e-4 rad/px — 2×2 binned plate scale (32 µm / 200 mm)
     # CCD
     CCD_PIXELS_UNBINNED,    # 512          — physical pixels per side
     FOV_DEG,                # 1.65         — full field of view, degrees
@@ -184,7 +184,7 @@ from windcube.constants import (
     NE_WAVELENGTH_1_AIR_M,  # 640.2248e-9 m — strong line
     NE_WAVELENGTH_2_AIR_M,  # 638.2991e-9 m — weak line
     NE_INTENSITY_1,         # 1.0           — reference intensity ratio
-    NE_INTENSITY_2,         # 0.8           — weak/strong ratio
+    NE_INTENSITY_2,         # 0.36           — weak/strong ratio
     # Physical constants
     SPEED_OF_LIGHT_MS,      # 299_792_458.0 m/s
 )
@@ -237,7 +237,7 @@ where:
 - `λ₁ = NE_WAVELENGTH_1_AIR_M` (640.2248 nm, strong line — imported from constants.py)
 - `λ₂ = NE_WAVELENGTH_2_AIR_M` (638.2991 nm, weak line — imported from constants.py)
 - `NE_INTENSITY_1 = 1.0` (reference — imported from constants.py)
-- `NE_INTENSITY_2 = 0.8` (relative intensity — imported from constants.py)
+- `NE_INTENSITY_2 = 0.3` (relative intensity — imported from constants.py)
 - `I_line` — overall brightness scale (free parameter, units: ADU)
 
 **The delta-function approximation is exact for neon:** the natural
@@ -518,7 +518,6 @@ class InstrumentParams:
 
 ## 6. Function signatures
 
-### 6.1 Existing functions (unchanged from 2026-04-13)
 
 ```python
 def theta_from_r(r: np.ndarray, alpha: float) -> np.ndarray:
@@ -583,7 +582,6 @@ def make_wavelength_grid(lam_centre: float, n_fsr: float,
     """
 ```
 
-### 6.2 New functions added in this revision
 
 ```python
 def make_ne_spectrum(lam_grid: np.ndarray, I_line: float = 1.0) -> np.ndarray:
@@ -929,7 +927,7 @@ scipy  >= 1.10   # gaussian_filter1d, find_peaks (tests only)
 ```
 
 `windcube.constants` must export all constants listed in Section 3 before
-S06 is implemented.
+H01 is implemented.
 
 ---
 
