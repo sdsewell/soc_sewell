@@ -103,100 +103,82 @@ for fp in FILES:
 # Synthetic files follow YYYY-MM-DDTHH-MM-SSZ_cal.bin (hyphens in time portion)
 _SYNTHETIC_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_")
 _is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
-CX, CY   = (138, 129) if _is_synthetic else (137, 130)
+CX, CY   = (138, 129) if _is_synthetic else (145, 143)
 ROI_SIZE = 220
 
-# ── Plot figure 1 — loop until user accepts ROI size ─────────────────────────
-_img_max_dim = min(images[0].shape)
-while True:
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10),
-                             gridspec_kw={"height_ratios": [3, 2]})
-    fig.subplots_adjust(hspace=0.35, wspace=0.15)
+# ── Plot figure 1 — cal & dark image viewer ───────────────────────────────────
+fig, axes = plt.subplots(2, 2, figsize=(14, 10),
+                         gridspec_kw={"height_ratios": [3, 2]})
+fig.subplots_adjust(hspace=0.35, wspace=0.15)
 
-    for col, (fp, meta, img) in enumerate(zip(FILES, metas, images)):
-        # ── Top row: image ────────────────────────────────────────────────────
-        ax_img = axes[0][col]
-        vmin, vmax = np.percentile(img, [1, 99])
-        ax_img.imshow(img, origin="upper", cmap="gray", vmin=vmin, vmax=vmax,
-                      aspect="auto", interpolation="nearest")
-        ax_img.set_title(fp.name, fontsize=9, pad=6)
-        ax_img.set_xlabel("Column (px)", fontsize=8)
-        ax_img.set_ylabel("Row (px)", fontsize=8)
-        ax_img.tick_params(labelsize=7)
+for col, (fp, meta, img) in enumerate(zip(FILES, metas, images)):
+    # ── Top row: image ────────────────────────────────────────────────────
+    ax_img = axes[0][col]
+    vmin, vmax = np.percentile(img, [1, 99])
+    ax_img.imshow(img, origin="upper", cmap="gray", vmin=vmin, vmax=vmax,
+                  aspect="auto", interpolation="nearest")
+    ax_img.set_title(fp.name, fontsize=9, pad=6)
+    ax_img.set_xlabel("Column (px)", fontsize=8)
+    ax_img.set_ylabel("Row (px)", fontsize=8)
+    ax_img.tick_params(labelsize=7)
 
-        # Absolute image centre
-        abs_cx = (img.shape[1] - 1) / 2.0
-        abs_cy = (img.shape[0] - 1) / 2.0
-        ax_img.plot(abs_cx, abs_cy, "+", color="cyan",
-                    markersize=14, markeredgewidth=1.5,
-                    label=f"Image centre  ({abs_cx:.1f}, {abs_cy:.1f})")
+    # Absolute image centre
+    abs_cx = (img.shape[1] - 1) / 2.0
+    abs_cy = (img.shape[0] - 1) / 2.0
+    ax_img.plot(abs_cx, abs_cy, "+", color="cyan",
+                markersize=14, markeredgewidth=1.5,
+                label=f"Image centre  ({abs_cx:.1f}, {abs_cy:.1f})")
 
-        # Seed centre (CX = col, CY = row)
-        ax_img.plot(CX, CY, "x", color="yellow",
-                    markersize=12, markeredgewidth=1.5,
-                    label=f"Seed  ({CX}, {CY})")
+    # Seed centre (CX = col, CY = row)
+    ax_img.plot(CX, CY, "x", color="yellow",
+                markersize=12, markeredgewidth=1.5,
+                label=f"Seed  ({CX}, {CY})")
 
-        # ROI box — shown on cal image only
-        if col == 0:
-            half = ROI_SIZE // 2
-            roi_rect = mpatches.Rectangle(
-                (CX - half, CY - half), ROI_SIZE, ROI_SIZE,
-                linewidth=1.2, edgecolor="yellow", facecolor="none",
-                linestyle="--", label=f"ROI  {ROI_SIZE}×{ROI_SIZE} px",
-            )
-            ax_img.add_patch(roi_rect)
-
-        ax_img.legend(fontsize=6.5, loc="lower right",
-                      framealpha=0.7, edgecolor="0.5")
-
-        # ── Bottom row: metadata table ────────────────────────────────────────
-        ax_tbl = axes[1][col]
-        ax_tbl.axis("off")
-
-        meta_dict = meta.__dict__
-        cell_text = [[label, fmt_value(meta_dict[key])] for key, label in FIELDS]
-
-        tbl = ax_tbl.table(
-            cellText=cell_text,
-            colLabels=["Field", "Value"],
-            loc="upper center",
-            cellLoc="left",
+    # ROI box — shown on cal image only
+    if col == 0:
+        half = ROI_SIZE // 2
+        roi_rect = mpatches.Rectangle(
+            (CX - half, CY - half), ROI_SIZE, ROI_SIZE,
+            linewidth=1.2, edgecolor="yellow", facecolor="none",
+            linestyle="--", label=f"ROI  {ROI_SIZE}×{ROI_SIZE} px",
         )
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(7.5)
-        tbl.auto_set_column_width([0, 1])
+        ax_img.add_patch(roi_rect)
 
-        # Style header row
+    ax_img.legend(fontsize=6.5, loc="lower right",
+                  framealpha=0.7, edgecolor="0.5")
+
+    # ── Bottom row: metadata table ────────────────────────────────────────
+    ax_tbl = axes[1][col]
+    ax_tbl.axis("off")
+
+    meta_dict = meta.__dict__
+    cell_text = [[label, fmt_value(meta_dict[key])] for key, label in FIELDS]
+
+    tbl = ax_tbl.table(
+        cellText=cell_text,
+        colLabels=["Field", "Value"],
+        loc="upper center",
+        cellLoc="left",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7.5)
+    tbl.auto_set_column_width([0, 1])
+
+    # Style header row
+    for j in range(2):
+        tbl[0, j].set_facecolor("#4472C4")
+        tbl[0, j].set_text_props(color="white", fontweight="bold")
+
+    # Alternating row shading
+    for i in range(1, len(cell_text) + 1):
+        color = "#EEF2FF" if i % 2 == 0 else "white"
         for j in range(2):
-            tbl[0, j].set_facecolor("#4472C4")
-            tbl[0, j].set_text_props(color="white", fontweight="bold")
+            tbl[i, j].set_facecolor(color)
 
-        # Alternating row shading
-        for i in range(1, len(cell_text) + 1):
-            color = "#EEF2FF" if i % 2 == 0 else "white"
-            for j in range(2):
-                tbl[i, j].set_facecolor(color)
-
-    plt.suptitle("Cal & Dark Image Viewer", fontsize=12, fontweight="bold", y=1.01)
-    plt.tight_layout()
-    plt.show()
-    plt.close(fig)
-
-    # Prompt to accept or change ROI size
-    raw = input(
-        f"\nROI size: {ROI_SIZE}×{ROI_SIZE} px.  "
-        f"Press Enter to accept, or type a new square size: "
-    ).strip()
-    if raw == "":
-        break
-    try:
-        new_size = int(raw)
-        if new_size < 10 or new_size > _img_max_dim:
-            print(f"  Must be between 10 and {_img_max_dim}. Try again.")
-        else:
-            ROI_SIZE = new_size
-    except ValueError:
-        print("  Please enter an integer (e.g. 220). Try again.")
+plt.suptitle("Cal & Dark Image Viewer", fontsize=12, fontweight="bold", y=1.01)
+plt.tight_layout()
+plt.show()
+plt.close(fig)
 
 # ── ROI extraction ────────────────────────────────────────────────────────────
 half = ROI_SIZE // 2
@@ -312,13 +294,39 @@ for i, pk in enumerate(fp.peak_fits):
     print(f"  Peak {i+1:2d}: r_fit={pk.r_fit_px:.3f} ± {two_s:.3f} px (2σ)  "
           f"amp={pk.amplitude_adu:.1f}  width={pk.width_px:.3f}  ok={pk.fit_ok}")
 
+# ── Build 9-column peak_fits array (format: annular_reduction.py / tolansky-2line.py)
+_npy_rows = []
+for _i, _pk in enumerate(fp.peak_fits):
+    if _pk.fit_ok and np.isfinite(_pk.sigma_r_fit_px):
+        _r, _sr = _pk.r_fit_px, _pk.sigma_r_fit_px
+        _row = [float(_i + 1), _pk.r_raw_px,
+                _r, _sr, _r**2, 2.0*_r*_sr,
+                _pk.amplitude_adu, _pk.width_px, float("nan")]
+    else:
+        _row = [float(_i + 1), _pk.r_raw_px,
+                float("nan"), float("nan"), float("nan"), float("nan"),
+                float("nan"), float("nan"), float("nan")]
+    _npy_rows.append(_row)
+peak_fits_arr = np.array(_npy_rows, dtype=np.float64)
+
+# Output paths (same folder as the calibration image)
+_cal_stem = pathlib.Path(cal_path).stem
+_out_dir  = pathlib.Path(cal_path).parent
+_png_path = _out_dir / f"{_cal_stem}_annular_profile.png"
+_npy_path = _out_dir / f"{_cal_stem}_peak_fits.npy"
+
 # ── Radial profile figure ─────────────────────────────────────────────────────
 good = ~fp.masked & np.isfinite(fp.profile) & np.isfinite(fp.sigma_profile)
 
 n_peaks = len(fp.peak_fits)
 tbl_height = max(1.5, n_peaks * 0.28)
 fig3 = plt.figure(figsize=(13, 6 + tbl_height))
-gs   = fig3.add_gridspec(2, 1, height_ratios=[6, tbl_height], hspace=0.45)
+gs   = fig3.add_gridspec(2, 1, height_ratios=[6, tbl_height], hspace=0.45,
+                          top=0.93, bottom=0.04)
+fig3.suptitle(
+    "Annular Profile of a Real Cal - Dark Frame - Feeding tolansky-2line.py",
+    fontsize=12, fontweight="bold", y=0.99,
+)
 ax_prof = fig3.add_subplot(gs[0])
 ax_tbl  = fig3.add_subplot(gs[1])
 
@@ -332,11 +340,7 @@ ax_prof.scatter(r_good, p_good, s=10, facecolors="none",
                 edgecolors="#4472C4", linewidths=0.8,
                 zorder=2, label="Binned profile")
 
-# ── Peak markers, error bars, and text boxes ──────────────────────────────────
-# Compute y-range after drawing data so offsets are meaningful
-y_all  = p_good
-y_span = y_all.max() - y_all.min() if len(y_all) else 1.0
-
+# ── Peak markers and error bars ───────────────────────────────────────────────
 for i, pk in enumerate(fp.peak_fits):
     r_x    = float(pk.r_fit_px)
     y_mark = float(fp.profile[pk.peak_idx])
@@ -346,17 +350,6 @@ for i, pk in enumerate(fp.peak_fits):
     ax_prof.errorbar(r_x, y_mark, xerr=two_s,
                      fmt="none", ecolor="red", elinewidth=1.2, capsize=3, zorder=4)
     ax_prof.plot(r_x, y_mark, "v", color="red", markersize=6, zorder=5)
-
-    y_off = y_span * (0.12 if i % 2 == 0 else 0.22)
-    txt   = (f"r={r_x:.2f}\n±{two_s:.2f} px" if two_s > 0
-             else f"r={r_x:.2f}\n(no fit)")
-    ax_prof.annotate(
-        txt, xy=(r_x, y_mark),
-        xytext=(r_x, y_mark + y_off),
-        fontsize=5.5, ha="center", va="bottom",
-        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="red", alpha=0.75, lw=0.6),
-        arrowprops=dict(arrowstyle="-", color="red", lw=0.5),
-    )
 
 ax_prof.set_xlabel("Radius [px]", fontsize=10)
 ax_prof.set_ylabel("Mean intensity (ADU)", fontsize=10)
@@ -370,6 +363,10 @@ ax_prof.legend(fontsize=8)
 
 # ── Peak table ────────────────────────────────────────────────────────────────
 ax_tbl.axis("off")
+ax_tbl.set_title(
+    "Fit Peak Positions for Strong and Weak Neon Lamp Calibration Lines",
+    fontsize=9, fontweight="bold", pad=4,
+)
 
 # Ne line wavelengths: odd peak numbers → 640.2248 nm, even → 638.2991 nm
 NE_LINES = {1: 640.2248, 0: 638.2991}   # keyed by (peak_number - 1) % 2
@@ -501,6 +498,8 @@ else:
     ax_tbl.text(0.5, 0.5, "No peaks found", ha="center", va="center",
                 transform=ax_tbl.transAxes, fontsize=11)
 
+fig3.savefig(str(_png_path), dpi=150, bbox_inches="tight")
+print(f"Annular profile figure saved → {_png_path}")
 plt.show()
 
 # ── Ring Order P vs r²_fit figure ────────────────────────────────────────────
@@ -592,6 +591,17 @@ ax4.text(0.5, 1.002,
 ax4.legend(fontsize=9, loc="lower right")
 ax4.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
+# ε box — placed inside the plot frame, upper-left, above the legend
+eps_annot = (
+    f"ε_640 = {ep_640:.4f} ± {ep_640_2s:.4f}  (2σ)\n"
+    f"ε_638 = {ep_638:.4f} ± {ep_638_2s:.4f}  (2σ)"
+)
+ax4.text(0.03, 0.97, eps_annot,
+         transform=ax4.transAxes, fontsize=9,
+         va="top", ha="left", family="monospace",
+         bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#888888",
+                   alpha=0.92, lw=0.8))
+
 # ── Lower-left: calibration image metadata ───────────────────────────────────
 cal_meta   = metas[0]
 exp_s      = cal_meta.exp_time / 100.0        # centiseconds → seconds
@@ -603,11 +613,6 @@ meta_annot = (
     f"CCD Temp: {cal_meta.ccd_temp1:.2f} °C   |   "
     f"Etalon Temps: {et_str} °C"
 )
-eps_annot = (
-    f"ε_640 = {ep_640:.4f} ± {ep_640_2s:.4f}\n"
-    f"ε_638 = {ep_638:.4f} ± {ep_638_2s:.4f}"
-)
-
 # ── Helper: two-part box (bold heading + monospace body) ─────────────────────
 # matplotlib can't mix font weights in one text() call, so we use two calls:
 # the heading draws the box (with padding below), the body overlaps it below.
@@ -645,17 +650,12 @@ def _two_part_box(ax, x, y_top, heading, body, n_body_lines,
     body_h = n_body_lines * LINE_H + 0.025
     return y_body - body_h   # bottom of body box
 
-# ── Info panel: metadata strip and ε values at top ───────────────────────────
+# ── Info panel: metadata strip at top ────────────────────────────────────────
 ax_info.text(0.02, 0.99, meta_annot,
              transform=ax_info.transAxes, fontsize=8.5,
              va="top", ha="left", family="monospace",
              bbox=dict(boxstyle="round,pad=0.45", fc="#F5FFF5", ec="#3A7D44",
                        alpha=0.95, lw=0.8))
-ax_info.text(0.98, 0.99, eps_annot,
-             transform=ax_info.transAxes, fontsize=9,
-             va="top", ha="right", family="monospace",
-             bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#888888",
-                       alpha=0.92, lw=0.8))
 
 # ── Left column: N_Δ then d recovery ─────────────────────────────────────────
 nd_heading = (
@@ -743,6 +743,9 @@ _two_part_box(ax_info, 0.50, y_after_green - 0.02,
               fc="#FFF3E0", ec="#E65100",
               heading_fc="#FFCC80")
 
+_fig4_path = _out_dir / f"{_cal_stem}_tolansky_joint_two_line.png"
+fig4.savefig(str(_fig4_path), dpi=150, bbox_inches="tight")
+print(f"Tolansky figure saved  → {_fig4_path}")
 plt.show()
 
 # ── Save annular profile CSV ──────────────────────────────────────────────────
@@ -776,6 +779,10 @@ with open(csv_path, "w", newline="") as _fh:
     _df.to_csv(_fh, index=False)
 
 print(f"\nAnnular profile saved → {csv_path}")
+
+np.save(str(_npy_path), peak_fits_arr)
+print(f"Peak fits saved       → {_npy_path}")
+print(f"  ({len(fp.peak_fits)} peaks, 9 columns — compatible with tolansky-2line.py)")
 print(f"  α_rpx  (rad/px)     : {alpha_rpx:.6e}  ← correct value for F01")
 print(f"  slope  (orders/px²) : {alpha_mean:.6f}  ← Tolansky raw slope (do NOT pass to F01 as alpha)")
 print(f"  Y_B                 : {Y_B_estimate:.4f}  ← initial guess for F01 Y_B parameter")

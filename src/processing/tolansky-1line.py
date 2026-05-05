@@ -16,22 +16,20 @@ INPUT FILE
   col 1 : r_raw (px)          — detected bin centre (find_peaks)       — not used
   col 2 : r_fit (px)          — TRF Gaussian centroid μ                ← r input
   col 3 : sigma_r_fit (px)    — 1-sigma uncertainty on μ               ← sigma_r input
-  col 4 : r_fit (px²)         — μ², for use in r²-domain calibration   — not used here
-  col 5 : sigma_r_fit (px²)   — 2·μ·σ_μ  (propagated uncertainty)     — not used here
-  col 6 : amplitude (ADU)     — Gaussian amplitude A above background  — not used here
-  col 7 : width_sigma (px)    — Gaussian width σ                       — not used
-  col 8 : reduced_chi2        — χ²/(n_points − 4)                      — not used
+  col 4–8 : not used here
 Cols 2–8 are NaN when the Gaussian fit failed for that peak (those rows are
 dropped before analysis).
 
 OUTPUT
 ------
-  - Weighted least-squares fit of r² vs p
-  - Slope S and intercept with 1σ uncertainties
-  - Fractional order ε at the geometric centre
-  - Successive Δ(r²) and σ(Δr²) — linearity / parallelism diagnostic
-  - Recovered plate spacing d  (λ, n, f known)
-  - One four-panel diagnostic figure saved alongside the input file
+  - Δ (slope of r² vs p) with 2σ uncertainty
+  - ε (fractional fringe order at the geometric centre) with 2σ uncertainty
+  - χ²_ν (reduced chi-square of the WLS fit)
+  - Successive Δ(r²) and CV — linearity / parallelism diagnostic
+  - Four-panel diagnostic figure saved alongside the input file
+
+Physical interpretation of Δ (recovering d, λ, or f) is handled by S13a /
+tolansky-2line.py.
 
 PHYSICAL MODEL
 --------------
@@ -39,31 +37,16 @@ Constructive interference (Haidinger fringes):
 
     m λ = 2 n d cos θ
 
-At the pattern centre the order is m₀ = 2nd/λ.
 Writing m = m₀ - (p - 1 + ε) for fringe index p and fractional order ε,
 and using the paraxial substitution cos θ ≈ 1 - r²/(2f²):
 
-    r_p² = (f² λ / (n d)) · (p − 1 + ε)
+    r_p² = Δ · (p − 1 + ε)        where  Δ = f² λ / (n d)
 
-So r² is LINEAR in fringe index p, with:
+So r² is LINEAR in fringe index p:
 
-    Slope      S = f² λ / (n d)         [unit² / fringe,  unit = unit of r and f]
-    Intercept  b = S · (ε − 1)
+    Slope      Δ = f² λ / (n d)        [r_unit² / fringe]
+    Intercept  b = Δ · (ε − 1)
     ε            = fractional order at centre  (0 ≤ ε < 1)
-
-Recovering the unknown from the measured slope:
-
-    d = f² λ / (n S)          if  λ, n, f  are known
-    λ = n d S / f²            if  d, n, f  are known
-
-UNIT CONVENTION
----------------
-r, f, and d must all be in the SAME unit.  This script works entirely in
-pixels so that r (from the detector), f, and d share one unit:
-
-    f_px  = f_mm  / pixel_size_mm
-    d_px  = d_mm  / pixel_size_mm
-    λ_px  = λ_nm  × 1e-9 / pixel_size_m     (lam_unit_per_nm = 1e-9 / pixel_m)
 
 WEIGHTED LEAST-SQUARES
 -----------------------
@@ -72,18 +55,6 @@ WEIGHTED LEAST-SQUARES
     weights w_p = 1 / σ(r²_p)²
 
 This gives the correct covariance matrix and propagated parameter uncertainties.
-
-WINDCUBE INSTRUMENT CONSTANTS
-------------------------------
-  pixel pitch   :  32 µm  (CCD97-00, 2×2 binned)
-  focal length  : 200 mm  (→ f_px = 200/0.032 = 6250 px)
-  n (gap)       :   1.0   (vacuum gap)
-  λ (airglow)   : set LAM_NM in the __main__ block to the airglow emission [nm]
-  d  (ICOS)     :  20.008 mm  (spacer measurement, build report §7.4)
-                   → d_px = 20.008/0.032 = 625.25 px
-
-One analysis is run:
-  λ known  →  recover d   (compare to ICOS calibration value)
 """
 
 from __future__ import annotations
@@ -101,7 +72,7 @@ from typing import Optional
 
 @dataclass
 class TolanskyResult:
-    """All outputs from a single Tolansky analysis."""
+    """All outputs from a single Tolansky WLS analysis."""
 
     # ── Derived input columns ───────────────────────────────────────────────
     p:          np.ndarray   # fringe index
@@ -111,24 +82,18 @@ class TolanskyResult:
     sigma_r_sq: np.ndarray   # 1σ uncertainty on r²  = 2r·σ_r
 
     # ── Weighted least-squares fit ──────────────────────────────────────────
-    slope:        float      # S = Δ = f² λ / (n d)
-    sigma_slope:  float      # 1σ uncertainty on S
-    intercept:    float      # b = S(ε − 1)
+    slope:        float      # Δ — slope of r² vs p
+    sigma_slope:  float      # 1σ uncertainty on Δ
+    intercept:    float      # b = Δ(ε − 1)
     sigma_int:    float      # 1σ uncertainty on b
     r2_fit:       float      # coefficient of determination R²
     chi2_dof:     float      # reduced chi-square  χ²/(N−2)
 
-    # ── Derived diagnostics ─────────────────────────────────────────────────
+    # ── Derived quantities ──────────────────────────────────────────────────
     epsilon:       float       # fractional order at centre  (0 ≤ ε < 1)
     sigma_epsilon: float       # 1σ uncertainty on ε
     delta_r_sq:    np.ndarray  # successive Δ(r²)
     sigma_delta:   np.ndarray  # 1σ uncertainty on each Δ(r²)
-
-    # ── Recovered physical parameter ────────────────────────────────────────
-    recovered_d:    Optional[float] = None   # plate spacing  [r_unit]
-    sigma_d:        Optional[float] = None
-    recovered_lam_nm: Optional[float] = None # wavelength     [nm]
-    sigma_lam_nm:   Optional[float] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,26 +102,17 @@ class TolanskyResult:
 
 class TolanskyAnalyser:
     """
-    Tolansky r² analysis on measured FPI fringe ring radii.
+    Tolansky r² WLS analysis on measured FPI fringe ring radii.
+
+    Fits r² = Δ·p + b and returns slope Δ and fractional order ε with
+    their uncertainties.  Physical interpretation of Δ is left to the caller.
 
     Parameters
     ----------
     p        : array_like    fringe indices  (1 = innermost)
-    r        : array_like    ring radii
+    r        : array_like    ring radii  [any consistent unit]
     sigma_r  : array_like    1σ uncertainty on each radius
-    r_unit   : str           display label for the radius unit
-
-    Provide all known physical parameters; set the unknown to None:
-    lam_nm   : float | None  wavelength [nm]
-    n        : float         refractive index of etalon gap
-    f        : float | None  effective focal length in the SAME unit as r
-    d        : float | None  plate separation in the SAME unit as r
-
-    lam_unit_per_nm : float
-        Conversion factor from nm to whatever unit r and f are in.
-        Default 1e-6 (nm → mm).  Override when r is in pixels:
-            lam_unit_per_nm = 1e-9 / pixel_size_metres
-        Example: 32 µm pixels → lam_unit_per_nm = 1e-9 / 32e-6 = 3.125e-5
+    r_unit   : str           display label for the radius unit  (default "px")
     """
 
     def __init__(
@@ -164,22 +120,12 @@ class TolanskyAnalyser:
         p:       "array_like",
         r:       "array_like",
         sigma_r: "array_like",
-        r_unit:  str             = "mm",
-        lam_nm:  Optional[float] = None,
-        n:       float           = 1.0,
-        f:       Optional[float] = None,
-        d:       Optional[float] = None,
-        lam_unit_per_nm: float   = 1e-6,   # default: nm → mm
+        r_unit:  str = "px",
     ):
         self.p       = np.asarray(p,       dtype=float)
         self.r       = np.asarray(r,       dtype=float)
         self.sigma_r = np.asarray(sigma_r, dtype=float)
         self.r_unit  = r_unit
-        self.lam_nm  = lam_nm
-        self.n       = float(n)
-        self.f       = f
-        self.d       = d
-        self.lam_unit_per_nm = lam_unit_per_nm
         self.result: Optional[TolanskyResult] = None
         self._validate()
 
@@ -194,49 +140,31 @@ class TolanskyAnalyser:
             raise ValueError("All sigma_r must be > 0.")
         if np.any(self.r <= 0):
             raise ValueError("All radii must be > 0.")
-        if self.lam_nm is not None and self.d is not None:
-            raise ValueError(
-                "Both lam_nm and d are provided — set exactly one to None."
-            )
-        if self.lam_nm is None and self.d is None:
-            raise ValueError(
-                "Both lam_nm and d are None — at least one must be known."
-            )
 
     # ── Step 1: r → r² with uncertainty propagation ──────────────────────────
 
     def _derive_r_squared(self):
-        """
-        r_sq       = r²
-        sigma_r_sq = 2r · sigma_r
-
-        Derivation:
-            y = r²  →  dy/dr = 2r
-            σ_y = |dy/dr| · σ_r = 2r · σ_r
-
-        Valid provided σ_r << r (well-resolved rings).
-        """
         r_sq       = self.r ** 2
         sigma_r_sq = 2.0 * self.r * self.sigma_r
         return r_sq, sigma_r_sq
 
-    # ── Step 2: weighted least-squares r² = S·p + b ──────────────────────────
+    # ── Step 2: weighted least-squares r² = Δ·p + b ─────────────────────────
 
     @staticmethod
     def _wls(x, y, w):
         """
         Weighted least-squares  y = S·x + b.
 
-        Normal equations (see e.g. Bevington & Robinson §6.3):
+        Normal equations (Bevington & Robinson §6.3):
 
-            Δ = Σw · Σwx² − (Σwx)²
-            S = (Σw · Σwxy  −  Σwx · Σwy) / Δ
-            b = (Σwx² · Σwy  −  Σwx · Σwxy) / Δ
+            Λ = Σw · Σwx² − (Σwx)²
+            S = (Σw · Σwxy  −  Σwx · Σwy) / Λ
+            b = (Σwx² · Σwy  −  Σwx · Σwxy) / Λ
 
-            Var(S) = Σw  / Δ
-            Var(b) = Σwx² / Δ
+            Var(S) = Σw  / Λ
+            Var(b) = Σwx² / Λ
 
-        Returns (slope, sigma_slope, intercept, sigma_intercept, R²)
+        Returns (slope, sigma_slope, intercept, sigma_intercept, R², χ²_ν)
         """
         sw   = w.sum()
         swx  = (w * x).sum()
@@ -244,15 +172,15 @@ class TolanskyAnalyser:
         swxx = (w * x**2).sum()
         swxy = (w * x * y).sum()
 
-        delta = sw * swxx - swx**2
-        if delta == 0:
+        lam = sw * swxx - swx**2
+        if lam == 0:
             raise ValueError("Degenerate fit: check fringe indices are distinct.")
 
-        S = (sw * swxy - swx * swy) / delta
-        b = (swxx * swy - swx * swxy) / delta
+        S = (sw * swxy - swx * swy) / lam
+        b = (swxx * swy - swx * swxy) / lam
 
-        sigma_S = np.sqrt(sw   / delta)
-        sigma_b = np.sqrt(swxx / delta)
+        sigma_S = np.sqrt(sw   / lam)
+        sigma_b = np.sqrt(swxx / lam)
 
         y_hat    = S * x + b
         ss_res   = (w * (y - y_hat)**2).sum()
@@ -267,17 +195,11 @@ class TolanskyAnalyser:
     @staticmethod
     def _epsilon(S, b, sigma_S, sigma_b):
         """
-        From  b = S(ε − 1):
+        From  b = Δ(ε − 1):   ε = 1 + b/Δ  (wrapped to [0, 1))
 
-            ε = 1 + b/S       (wrapped to [0, 1))
-
-        Error propagation (S and b are correlated from the same fit, but here
-        we use the conservative uncorrelated approximation):
-
-            σ_ε² = (σ_b / S)²  +  (b · σ_S / S²)²
+        σ_ε² = (σ_b / S)²  +  (b · σ_S / S²)²   (conservative, uncorrelated)
         """
-        eps_raw  = 1.0 + b / S
-        epsilon  = eps_raw % 1.0
+        epsilon   = (1.0 + b / S) % 1.0
         sigma_eps = np.sqrt((sigma_b / S)**2 + (b * sigma_S / S**2)**2)
         return epsilon, sigma_eps
 
@@ -286,55 +208,22 @@ class TolanskyAnalyser:
     @staticmethod
     def _successive_diffs(r_sq, sigma_r_sq):
         """
-        Δ(r²)_k   = r²_{k+1} − r²_k
-        σ(Δr²)_k  = sqrt(σ_{k+1}² + σ_k²)
+        Δ(r²)_k  = r²_{k+1} − r²_k
+        σ_k      = sqrt(σ_{k+1}² + σ_k²)
 
-        In a perfect system all Δ(r²) equal the slope S, and the coefficient
-        of variation CV = std / mean × 100 % should be < ~2 %.
-        Larger CV indicates non-parallelism or systematic measurement error.
+        CV = std/mean × 100 % should be < ~2 % for a parallel etalon.
         """
         return np.diff(r_sq), np.sqrt(sigma_r_sq[1:]**2 + sigma_r_sq[:-1]**2)
-
-    # ── Step 5: recover physical parameter ───────────────────────────────────
-
-    def _recover(self, S, sigma_S):
-        """
-        S = f² λ / (n d)
-
-        Solve for the unknown:
-            d = f² λ / (n S)        σ_d = d · σ_S / S
-            λ = n d S / f²          σ_λ = λ · σ_S / S   (same relative error)
-
-        λ is stored in nm; converted to r_unit via self.lam_unit_per_nm
-        before use, and the result converted back to nm for display.
-        """
-        if self.f is None:
-            return None, None, None, None
-
-        rec_d = rec_sd = rec_lam = rec_slam = None
-
-        if self.lam_nm is not None:
-            lam_u = self.lam_nm * self.lam_unit_per_nm   # nm → r_unit
-            rec_d  = self.f**2 * lam_u / (self.n * S)
-            rec_sd = rec_d * sigma_S / S
-
-        elif self.d is not None:
-            lam_u   = self.n * self.d * S / self.f**2    # in r_unit
-            rec_lam = lam_u / self.lam_unit_per_nm        # → nm
-            rec_slam = rec_lam * sigma_S / S
-
-        return rec_d, rec_sd, rec_lam, rec_slam
 
     # ── Public: run ───────────────────────────────────────────────────────────
 
     def run(self) -> TolanskyResult:
-        """Execute all five steps and return a TolanskyResult."""
+        """Execute WLS fit and return a TolanskyResult."""
         r_sq, sigma_r_sq = self._derive_r_squared()
         w                = 1.0 / sigma_r_sq**2
         S, sS, b, sb, R2, chi2_dof = self._wls(self.p, r_sq, w)
         eps, seps        = self._epsilon(S, b, sS, sb)
         delta, sdelta    = self._successive_diffs(r_sq, sigma_r_sq)
-        rec_d, sd, rec_lam, slam = self._recover(S, sS)
 
         self.result = TolanskyResult(
             p=self.p, r=self.r, sigma_r=self.sigma_r,
@@ -344,8 +233,6 @@ class TolanskyAnalyser:
             r2_fit=R2, chi2_dof=chi2_dof,
             epsilon=eps, sigma_epsilon=seps,
             delta_r_sq=delta, sigma_delta=sdelta,
-            recovered_d=rec_d,  sigma_d=sd,
-            recovered_lam_nm=rec_lam, sigma_lam_nm=slam,
         )
         return self.result
 
@@ -378,20 +265,11 @@ class TolanskyAnalyser:
                   f"{ds}  {sds}")
         print(sep)
         print(f"\n  Weighted linear fit:   r² = Δ · p + b")
-        print(f"    Δ (slope)   = {res.slope:.6g} ± {2*res.sigma_slope:.6g}  {u2}/fringe  (2σ)")
-        print(f"    Intercept b = {res.intercept:.6g} ± {res.sigma_int:.6g}  {u2}")
-        print(f"    χ²_ν        = {res.chi2_dof:.4f}")
-        print(f"    ε (frac. order at centre) = {res.epsilon:.5f} ± {2*res.sigma_epsilon:.5f}  (2σ)")
+        print(f"    Δ    = {res.slope:.6g} ± {2*res.sigma_slope:.6g}  {u2}/fringe  (2σ)")
+        print(f"    ε    = {res.epsilon:.5f} ± {2*res.sigma_epsilon:.5f}  (2σ)")
+        print(f"    χ²_ν = {res.chi2_dof:.4f}")
         cv = res.delta_r_sq.std() / abs(res.delta_r_sq.mean()) * 100
-        print(f"    Δ(r²) mean  = {res.delta_r_sq.mean():.6g}  "
-              f"std = {res.delta_r_sq.std():.6g}  "
-              f"CV = {cv:.1f} %  {'✓' if cv < 5 else '⚠'}")
-        if res.recovered_d is not None:
-            print(f"\n  → Recovered plate spacing:  "
-                  f"d = {res.recovered_d:.6g} ± {res.sigma_d:.6g}  {u}")
-        if res.recovered_lam_nm is not None:
-            print(f"\n  → Recovered wavelength:  "
-                  f"λ = {res.recovered_lam_nm:.4f} ± {res.sigma_lam_nm:.4f}  nm")
+        print(f"    CV(Δr²) = {cv:.1f} %  {'✓' if cv < 5 else '⚠'}")
         print()
 
     # ── Public: plot ──────────────────────────────────────────────────────────
@@ -403,7 +281,7 @@ class TolanskyAnalyser:
           A) Tolansky plot: r² vs p with weighted fit and ±1σ error bars
           B) Fit residuals
           C) Successive Δ(r²) — linearity / parallelism diagnostic
-          D) Summary text
+          D) Summary: Δ ± 2σ, ε ± 2σ, χ²_ν, CV
         """
         if self.result is None:
             self.run()
@@ -426,7 +304,7 @@ class TolanskyAnalyser:
         gs  = gridspec.GridSpec(2, 2, figure=fig,
                                 hspace=0.44, wspace=0.37,
                                 left=0.09, right=0.97,
-                                top=0.91, bottom=0.08)
+                                top=0.88, bottom=0.08)
         ax_tol = fig.add_subplot(gs[0, 0])
         ax_res = fig.add_subplot(gs[1, 0])
         ax_dr2 = fig.add_subplot(gs[0, 1])
@@ -498,42 +376,20 @@ class TolanskyAnalyser:
 
         # ── D: Summary ────────────────────────────────────────────────────────
         ax_txt.axis('off')
-        known_str = ("OI 630.0304 nm  (vac, known)"
-                     if self.lam_nm is not None
-                     else f"d = {self.d:.6g} {u}  (known)")
-        f_str = (f"f = {self.f:.6g} {u}"
-                 if self.f is not None else "f = not provided")
-        if res.recovered_d is not None:
-            rec_line = (f"d  =  {res.recovered_d:.6g} "
-                        f"± {res.sigma_d:.4g}  {u}")
-        elif res.recovered_lam_nm is not None:
-            rec_line = (f"λ  =  {res.recovered_lam_nm:.4f} "
-                        f"± {res.sigma_lam_nm:.4f}  nm")
-        else:
-            rec_line = "(provide f to recover physical param)"
-
         chi2_col = GREEN if 0.5 < res.chi2_dof < 2.0 else YELLOW
         lines = [
-            ("TOLANSKY SUMMARY",                        TEXT,     11,  'bold'),
-            ("",                                        TEXT,      3,  'normal'),
-            (f"N rings : {len(res.p)}",                 GRAY,    9.5,  'normal'),
-            (f"n (gap) : {self.n:.3f}",                 GRAY,    9.5,  'normal'),
-            (f"{f_str}",                                GRAY,    9.5,  'normal'),
-            (f"{known_str}",                            GRAY,    9.5,  'normal'),
-            ("",                                        TEXT,      3,  'normal'),
-            ("── WLS Fit ─────────────────────",        BORDER,  8.5,  'normal'),
-            (f"Δ     = {res.slope:.5g}  {u2}/fr",       ACCENT,  9.5,  'normal'),
-            (f"2σ_Δ  = ±{2*res.sigma_slope:.3g}  {u2}/fr",
-             ACCENT, 9.5, 'normal'),
-            (f"ε     = {res.epsilon:.5f}",              ACCENT,  9.5,  'normal'),
-            (f"2σ_ε  = ±{2*res.sigma_epsilon:.5f}",    ACCENT,  9.5,  'normal'),
-            (f"χ²_ν  = {res.chi2_dof:.4f}",            chi2_col, 9.5,  'normal'),
-            (f"CV(Δr²) = {cv:.2f} %  "
-             f"{'✓' if cv < 5 else '⚠'}",
+            ("TOLANSKY SUMMARY",                                TEXT,     11, 'bold'),
+            ("",                                                TEXT,      3, 'normal'),
+            (f"N rings : {len(res.p)}",                         GRAY,    9.5, 'normal'),
+            ("",                                                TEXT,      3, 'normal'),
+            ("── WLS Fit ─────────────────────",                BORDER,  8.5, 'normal'),
+            (f"Δ  = {res.slope:.5g} ± {2*res.sigma_slope:.3g}"
+             f"  {u2}/fr  (2σ)",                                ACCENT,  9.5, 'normal'),
+            (f"ε  = {res.epsilon:.5f} ± {2*res.sigma_epsilon:.5f}"
+             f"  (2σ)",                                         ACCENT,  9.5, 'normal'),
+            (f"χ²_ν = {res.chi2_dof:.4f}",                     chi2_col, 9.5, 'normal'),
+            (f"CV(Δr²) = {cv:.2f} %  {'✓' if cv < 5 else '⚠'}",
              cv_col, 9.5, 'normal'),
-            ("",                                        TEXT,      3,  'normal'),
-            ("── Recovered ───────────────────",        BORDER,  8.5,  'normal'),
-            (rec_line,                                  GREEN,    10,  'bold'),
         ]
         y = 0.97
         for text, color, size, weight in lines:
@@ -544,7 +400,11 @@ class TolanskyAnalyser:
             y -= size * 0.013 + 0.010
 
         fig.suptitle("Tolansky Method  —  FPI Fringe Ring Analysis",
-                     color=TEXT, fontsize=13, fontweight='bold', y=0.97)
+                     color=TEXT, fontsize=13, fontweight='bold', y=0.99)
+        if peaks_filename:
+            fig.text(0.5, 0.955, peaks_filename,
+                     ha='center', va='top', fontsize=9, color=GRAY,
+                     fontfamily='monospace')
 
         if save_path:
             fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=BG)
@@ -558,29 +418,12 @@ class TolanskyAnalyser:
 #
 # Ingests the _peak_fits.npy file produced by annular_reduction.py.
 # All valid (non-NaN) peaks are treated as a single spectral line.
-# 2-D float64 array, one row per detected fringe peak.  9 columns:
+# Outputs Δ ± 2σ and ε ± 2σ from the WLS fit r² = Δ·p + b.
 #
-#   col 0 : peak_num
-#   col 1 : r_raw (px)          — detected bin centre (find_peaks)       — not used
-#   col 2 : r_fit (px)          — TRF Gaussian centroid μ                ← r input
-#   col 3 : sigma_r_fit (px)    — 1-sigma uncertainty on μ               ← sigma_r input
-#   col 4 : r_fit (px²)         — μ², for use in r²-domain calibration   — not used here
-#   col 5 : sigma_r_fit (px²)   — 2·μ·σ_μ  (propagated uncertainty)     — not used here
-#   col 6 : amplitude (ADU)     — Gaussian amplitude A above background  — not used here
-#   col 7 : width_sigma (px)    — Gaussian width σ                       — not used
-#   col 8 : reduced_chi2        — χ²/(n_points − 4)                      — not used
+# Columns used from the .npy array:
+#   col 2 : r_fit (px)        — TRF Gaussian centroid μ  ← r input
+#   col 3 : sigma_r_fit (px)  — 1σ uncertainty on μ      ← sigma_r input
 # Cols 2–8 are NaN when the Gaussian fit failed for that peak.
-#
-# ── WindCube instrument constants ────────────────────────────────────────────
-#
-#   pixel pitch   :  32 µm  (CCD97-00, 2×2 binned)
-#   focal length  : 200 mm  (→ f_px = 200/0.032 = 6250 px)
-#   n (gap)       :   1.0   (vacuum gap)
-#   λ (airglow)   : set LAM_NM below to the airglow emission wavelength [nm]
-#   d  (ICOS)     :  20.008 mm  → d_px = 625.25 px
-#
-# One analysis is run:
-#   λ known  →  recover d   (compare to ICOS calibration value)
 
 if __name__ == "__main__":
     import sys
@@ -630,53 +473,21 @@ if __name__ == "__main__":
 
     # ── Extract inputs; re-index p from 1 ────────────────────────────────────
     p       = np.arange(1, len(peaks) + 1, dtype=float)
-    r       = peaks[:, 2]   # r_fit (px)         — TRF Gaussian centroid μ
-    sigma_r = peaks[:, 3]   # sigma_r_fit (px)   — 1σ uncertainty on μ
+    r       = peaks[:, 2]   # r_fit (px)       — TRF Gaussian centroid μ
+    sigma_r = peaks[:, 3]   # sigma_r_fit (px) — 1σ uncertainty on μ
 
     print(f"  Valid peaks : {len(peaks)}")
     print(f"  r range     : {r[0]:.2f} – {r[-1]:.2f} px")
 
-    # ── Instrument constants (pixels) ─────────────────────────────────────────
-    PIXEL_M         = 32e-6             # pixel pitch  [m]
-    F_PX            = 200e-3 / PIXEL_M  # focal length  [px] = 6250.00
-    N_GAP           = 1.0               # refractive index (vacuum gap)
-    LAM_NM          = 630.0304          # OI 630.0304 nm vacuum rest wavelength
-    D_ICOS_MM       = 20.008            # ICOS mechanical measurement  [mm]
-    D_PX            = D_ICOS_MM * 1e-3 / PIXEL_M   # [px] = 625.25
-    LAM_UNIT_PER_NM = 1e-9 / PIXEL_M   # nm → px  = 3.125e-5
-
-    print(f"\n  Instrument constants:")
-    print(f"    pixel pitch  = {PIXEL_M*1e6:.0f} µm")
-    print(f"    f            = {F_PX:.2f} px  =  {F_PX*PIXEL_M*1e3:.1f} mm")
-    print(f"    d (ICOS)     = {D_PX:.4f} px  =  {D_ICOS_MM:.4f} mm")
-    print(f"    λ (airglow)  = {LAM_NM:.4f} nm")
-    print(f"    n            = {N_GAP:.1f}")
-
-    sep = "═" * 65
-
-    # ── Run: known λ → recover d ──────────────────────────────────────────────
-    print(f"\n{sep}")
-    print(f"  known λ = {LAM_NM:.4f} nm  →  recover d")
-    print(sep)
-    ana = TolanskyAnalyser(
-        p=p, r=r, sigma_r=sigma_r,
-        r_unit="px",
-        lam_nm=LAM_NM, n=N_GAP, f=F_PX, d=None,
-        lam_unit_per_nm=LAM_UNIT_PER_NM,
-    )
-    res = ana.run()
+    # ── Run WLS fit ───────────────────────────────────────────────────────────
+    ana = TolanskyAnalyser(p=p, r=r, sigma_r=sigma_r, r_unit="px")
+    ana.run()
     ana.print_table()
-    d_mm     = res.recovered_d * PIXEL_M * 1e3
-    sig_d_mm = res.sigma_d     * PIXEL_M * 1e3
-    pull_d   = abs(d_mm - D_ICOS_MM) / sig_d_mm
-    print(f"  → d         = {d_mm:.6f} ± {sig_d_mm:.6f} mm")
-    print(f"  ICOS  d     = {D_ICOS_MM:.6f} mm")
-    print(f"  Δ           = {d_mm - D_ICOS_MM:+.6f} mm   (|Δ|/σ = {pull_d:.1f})")
 
     # ── Save figure ───────────────────────────────────────────────────────────
     out_dir  = peaks_path.parent
     stem     = peaks_path.stem.replace("_peak_fits", "")
     fig_path = str(out_dir / f"{stem}_tolansky_1line.png")
-    ana.plot(save_path=fig_path)
+    ana.plot(save_path=fig_path, peaks_filename=peaks_path.name)
 
     plt.show()

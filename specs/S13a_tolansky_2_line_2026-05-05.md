@@ -16,17 +16,12 @@
   - GNL4096-R iss1 WindCube Etalon Assembly (ICOS build report, Dec 2023)
   - Burns, Adams & Longwell (1950) — Ne IAU "S" standard wavelengths
 **Sibling spec:** S13b (single-line Tolansky for airglow radial profile analysis)
-**Supersedes:** S13_tolansky_analysis_2026-04-13.md
 **Last updated:** 2026-05-05
 
-> **Revision note v0.3 (2026-05-05):** Renamed S13 → S13a to disambiguate from
+> ** Renamed S13 → S13a to disambiguate from
 > S13b (single-line Tolansky for airglow images).  No algorithmic content changed.
 > Two-line analysis applies exclusively to neon calibration lamp images; it must
-> never be applied to airglow science images.
-
-> **Revision note v0.2:** This rewrite removes all references to dark
-> subtraction, annular reduction, and peak finding.  Those responsibilities
-> belong to M03 (S12) and are validated by Z00.  This module's sole input
+> never be applied to airglow science images.  This module's sole input
 > is the structured `_fringe_peaks.npy` array saved by Z00, and its sole
 > purpose is to carry out the Vaughan §3.5.2 two-line Tolansky analysis
 > to recover the plate spacing `d`, effective focal length `f`, plate-scale
@@ -53,7 +48,7 @@ addition of a weighted least-squares (WLS) refinement step to obtain
 properly propagated 1σ uncertainties on all recovered parameters.
 
 **Scope of this module.**  This module operates on **neon calibration lamp
-images only**.  It requires two spectrally distinct emission lines (λₐ and
+averaged annular profiles only**.  It requires two spectrally distinct emission lines (λₐ and
 λᵦ) so that Benoit's exact-fractions method can resolve the plate-spacing
 ambiguity.  For airglow science images (single OI 630 nm line), see S13b.
 
