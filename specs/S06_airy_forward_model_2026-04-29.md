@@ -15,8 +15,6 @@
   - GNL4096-R iss1 WindCube Etalon Assembly (ICOS build report, Dec 2023)
   - Teledyne e2v CCD97 datasheet — pixel pitch, array size
   - Burns, Adams & Longwell (1950) — Ne I spectroscopic standards
-**Last updated:** 2026-04-29
-**Created/Modified by:** Claude AI
 
 > **What changed from 2026-04-13:**
 > 1. **Section 4 (forward models) completely rewritten** to explicitly follow
