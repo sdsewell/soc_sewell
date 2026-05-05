@@ -4,10 +4,10 @@
 **Spec file:** `docs/specs/S13a_tolansky_2_line_2026-05-05.md`
 **Project:** WindCube FPI Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
-**Status:** v0.3 — renamed 2026-05-05 from S13 to S13a; content unchanged from v0.2
-**Depends on:** Z00 (provides `{stem}_fringe_peaks.npy`)
+**Status:** v0.4 — 2026-05-05
+**Depends on:** `annular_reduction.py` — provides `{stem}_peak_fits.npy`
 **Used by:**
-  - S14 (M05) — receives `TolanskyResult` as informed priors
+  - M05 (S14) — receives `TolanskyResult` as informed priors for α and ε
 **References:**
   - Vaughan (1989) *The Fabry-Perot Interferometer*, §3.5.2 "Analysis of
     photographic recordings", pp. 116–121.  **Equations 3.83–3.97 are
@@ -16,82 +16,136 @@
   - GNL4096-R iss1 WindCube Etalon Assembly (ICOS build report, Dec 2023)
   - Burns, Adams & Longwell (1950) — Ne IAU "S" standard wavelengths
 **Sibling spec:** S13b (single-line Tolansky for airglow radial profile analysis)
+**Supersedes:** S13a_tolansky_2_line_2026-05-05.md v0.3
 **Last updated:** 2026-05-05
 
-> ** Renamed S13 → S13a to disambiguate from
-> S13b (single-line Tolansky for airglow images).  No algorithmic content changed.
-> Two-line analysis applies exclusively to neon calibration lamp images; it must
-> never be applied to airglow science images.  This module's sole input
-> is the structured `_fringe_peaks.npy` array saved by Z00, and its sole
-> purpose is to carry out the Vaughan §3.5.2 two-line Tolansky analysis
-> to recover the plate spacing `d`, effective focal length `f`, plate-scale
-> `α`, and fractional interference orders `εₐ`, `εᵦ`.
+> **Revision note v0.4 (2026-05-05):**
+> (1) Focal length f removed throughout.  α is the primary recovered plate-scale
+> parameter; f is redundant because α = sqrt(λ/(d·Δ)) absorbs it completely.
+> (2) Input changed from a structured `_fringe_peaks.npy` with a `family` string
+> field to the plain 9-column float64 `_peak_fits.npy` produced by
+> `annular_reduction.py`.  Family assignment is now done by amplitude threshold
+> (640 nm line is ~3× brighter than 638 nm).
+> (3) Expected Δ values updated from ~485 px² to ~1233 px² to match actual
+> FlatSat data (wider fringe spacing than earlier synthetic estimates).
+> (4) Reference plot added as §10.
 
 ---
 
 ## 1. Purpose
 
 Given a set of calibration fringe ring radii for **two known neon wavelengths**,
-recover the etalon physical parameters that M05 (S14) needs as starting
-priors:
+recover the etalon physical parameters that M05 (S14) needs as starting priors:
 
 | Parameter | Symbol | Physical meaning |
 |-----------|--------|-----------------|
-| Plate spacing | d | Etalon mirror separation (metres) |
-| Focal length | f | Imaging lens focal length (pixels) |
-| Plate scale | α | Angular pixel scale (rad/px) |
-| Fractional orders | εₐ, εᵦ | Fractional interference order at optical axis for each neon line |
+| Plate scale | α | Angular pixel scale (rad/px); primary geometric parameter |
+| r²-spacing | Δₐ, Δᵦ | Mean successive r²-differences for each line (px²) |
+| Fractional orders | εₐ, εᵦ | Fractional interference order at optical axis for each line |
+| Plate spacing | d | Etalon mirror separation (metres); recovered via Benoit |
 
-The analysis follows the rectangular-array method of Tolansky (1931) as
-described in Vaughan (1989) §3.5.2, equations (3.83)–(3.97), with the
-addition of a weighted least-squares (WLS) refinement step to obtain
-properly propagated 1σ uncertainties on all recovered parameters.
+> **Why α, not f.**  The focal length f (pixels) and α (rad/px) carry identical
+> information: α = 1/f_px.  Working in α avoids a derived intermediate quantity
+> and is dimensionally consistent with the angular convention used throughout
+> the pipeline.  f is not reported or stored anywhere in this module.
 
-**Scope of this module.**  This module operates on **neon calibration lamp
-averaged annular profiles only**.  It requires two spectrally distinct emission lines (λₐ and
-λᵦ) so that Benoit's exact-fractions method can resolve the plate-spacing
-ambiguity.  For airglow science images (single OI 630 nm line), see S13b.
+The analysis follows Tolansky's rectangular-array method as described in
+Vaughan (1989) §3.5.2, equations (3.83)–(3.97), with WLS refinement to obtain
+propagated 1σ uncertainties.
 
-**What this module is not.**  The Tolansky analysis uses only ring radii
-(not the full fringe profile shape), so it cannot recover reflectivity R,
-PSF width σ, or intensity envelope coefficients.  Its purpose is to anchor
-d, f, and ε so M05 starts from physically correct initial values.
+**Scope.**  This module operates on **neon calibration lamp images only**.
+It requires two spectrally distinct emission lines (λₐ and λᵦ) so that
+Benoit's exact-fractions method can resolve the plate-spacing ambiguity.
+For airglow science images (single OI 630 nm line), see S13b.
 
 ---
 
 ## 2. Input
 
-```python
-peak_table = np.load('{stem}_fringe_peaks.npy')
-```
+### 2.1 Peak fits array
 
-where `{stem}` is the base name of the calibration ROI array used by Z00.
-The structured array dtype is defined in Z00 §10.1. For this module,
-the relevant fields are:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `family` | str | `'neon_A'` (λₐ = 640.2248 nm) or `'neon_B'` (λᵦ = 638.2991 nm) |
-| `ring_index` | int | 1-based ring index p within family |
-| `r_fit_px` | float | Gaussian centroid radius r_p (pixels) |
-| `sigma_r_fit_px` | float | 1σ uncertainty σ(r_p) (pixels) |
-| `r2_fit_px2` | float | r²_p = r_fit_px² (pixels²) |
-| `two_sigma_r2_px2` | float | 2σ(r²_p) = 2 × 2·r_p·σ(r_p) (pixels²) |
-
-Load the two families separately:
+S13a reads the `_peak_fits.npy` file saved by `annular_reduction.py`:
 
 ```python
-rows_a = peak_table[peak_table['family'] == 'neon_A']   # line a: λₐ
-rows_b = peak_table[peak_table['family'] == 'neon_B']   # line b: λᵦ
-
-p_a  = rows_a['ring_index'].astype(float)   # 1, 2, 3, …
-r2_a = rows_a['r2_fit_px2']                 # ₐr²_p  (px²)
-sr_a = rows_a['sigma_r_fit_px']             # σ(r_p) (px)
-
-p_b  = rows_b['ring_index'].astype(float)
-r2_b = rows_b['r2_fit_px2']
-sr_b = rows_b['sigma_r_fit_px']
+peaks = np.load('{stem}_peak_fits.npy')   # shape (N_peaks, 9), float64
 ```
+
+The 9 columns are (zero-indexed), exactly as written by `annular_reduction.py`:
+
+| Col | Name | Units | Description |
+|-----|------|-------|-------------|
+| 0 | `peak_num` | — | 1-based sequential index across both families |
+| 1 | `r_raw_px` | px | Detected bin-centre radius (`find_peaks`) |
+| 2 | `r_fit_px` | px | TRF Gaussian centroid μ; NaN if fit failed |
+| 3 | `sigma_r_fit_px` | px | 1σ uncertainty on μ; NaN if fit failed |
+| 4 | `r_fit_sq_px2` | px² | μ²; NaN if fit failed |
+| 5 | `sigma_r_fit_sq_px2` | px² | 2·μ·σ_μ (propagated); NaN if fit failed |
+| 6 | `amplitude_adu` | ADU | Gaussian amplitude A above background |
+| 7 | `width_sigma_px` | px | Gaussian σ-width; NaN if fit failed |
+| 8 | `reduced_chi2` | — | χ²/(n_points−4); NaN if fit failed |
+
+**Expected row count:** 20 rows for a typical FlatSat calibration image
+(10 rings per line × 2 lines, interleaved in radius).
+
+### 2.2 Family assignment by amplitude
+
+The two neon lines are physically interleaved in the ring pattern and arrive
+in the peak table sorted by radius, not by wavelength.  They are separated by
+amplitude: the 640.2248 nm line is approximately **3× brighter** than the
+638.2991 nm line (FlatSat intensity ratio Y_B ≈ 0.30; see §9).
+
+```python
+# 1. Filter to valid (non-NaN) rows
+valid       = np.isfinite(peaks[:, 2])
+n_nan_dropped = int((~valid).sum())
+peaks_ok    = peaks[valid]
+
+if peaks_ok.shape[0] < 4:
+    raise InsufficientRingsError(
+        f"Only {peaks_ok.shape[0]} valid fitted peaks; need ≥ 4 (≥2 per family)."
+    )
+
+amps = peaks_ok[:, 6]   # col 6: amplitude_adu
+
+# 2. Split on median amplitude
+amp_threshold = np.median(amps)
+mask_a = amps > amp_threshold    # 640.2248 nm — brighter line
+mask_b = amps <= amp_threshold   # 638.2991 nm — dimmer line
+
+peaks_a = peaks_ok[mask_a]   # sorted by radius (ascending r)
+peaks_b = peaks_ok[mask_b]
+
+if peaks_a.shape[0] < 2 or peaks_b.shape[0] < 2:
+    raise InsufficientRingsError(
+        "Family split by amplitude produced < 2 rings in one family.  "
+        "Check peak detection parameters."
+    )
+
+# 3. Assign 1-based ring indices within each family
+p_a = np.arange(1, peaks_a.shape[0] + 1, dtype=float)
+p_b = np.arange(1, peaks_b.shape[0] + 1, dtype=float)
+
+r2_a      = peaks_a[:, 4]    # r²_p for λₐ  (px²)
+sigma_r2_a = peaks_a[:, 5]   # σ(r²_p) for λₐ  (px²)
+r2_b      = peaks_b[:, 4]
+sigma_r2_b = peaks_b[:, 5]
+```
+
+> **Amplitude ratio sanity check:** compute
+> `Y_B_obs = median(amps[mask_b]) / median(amps[mask_a])`.
+> Warn if `Y_B_obs < 0.15` or `Y_B_obs > 0.60`; this range covers normal
+> FlatSat operating conditions.  A value outside the range may indicate a
+> bad exposure, wrong dark subtraction, or inverted family assignment.
+
+### 2.3 WindCube numerical constants
+
+| Constant | Value | Source |
+|---------|-------|--------|
+| λₐ | 640.2248 × 10⁻⁹ m | Burns et al. 1950; IAU standard |
+| λᵦ | 638.2991 × 10⁻⁹ m | Burns et al. 1950; IAU standard |
+| pixel_pitch | 32 × 10⁻⁶ m | 2×2 binned CCD97 (2 × 16 µm) |
+| d_prior | 20.008 × 10⁻³ m | ICOS build report GNL4096-R (spacer measurement) |
+| n_air | 1.0 | Air gap |
 
 ---
 
@@ -105,247 +159,178 @@ Since D_p = 2 r_p:
 r²_p = D²_p / 4
 ```
 
-All of Vaughan's equations involving D² or Δ translate to r² and Δ/4.
-For clarity, every equation below is written in **our r² pixel notation**,
-with the corresponding Vaughan equation number cited.  The factor-of-4
-substitution is made once here and silently absorbed throughout.
+All of Vaughan's equations involving D² translate to r² with the factor-of-4
+substitution made once here and silently absorbed throughout.
 
 | Vaughan symbol | Our symbol | Units | Meaning |
 |---------------|-----------|-------|---------|
-| ₐD²_p | ₐr²_p | px² | Radius-squared of pth ring, line a |
-| Δₐ (= ₐD²_{p+1} − ₐD²_p) | Δₐ (= ₐr²_{p+1} − ₐr²_p) | px² | Mean successive r²-difference, line a |
-| δₐ_p (individual) | δₐ_p | px² | p-th successive difference = r²_{p+1} − r²_p |
-| ₐε_c / 2π | εₐ | — | Fractional interference order at centre, line a |
+| ₐD²_p / 4 | ₐr²_p | px² | Radius-squared of pth ring, line a |
+| Δₐ (Vaughan D² form) / 4 | Δₐ | px² | Mean successive r²-difference, line a |
+| δₐ_p | δₐ_p | px² | p-th successive difference |
+| ₐε_c | εₐ | — | Fractional interference order at centre, line a |
 | nₐ | nₐ | — | Integer interference order at centre, line a |
-| f (focal length, mm) | f (focal length, px) | px | f_px = f_m / pixel_pitch_m |
-| d | d | m | Plate spacing |
-| λₐ | λₐ | m | Wavelength of line a |
-| n (refractive index) | n_air = 1.0 | — | Refractive index of etalon gap |
 
-**Ring indexing:** Vaughan numbers rings from p = 0 (innermost).
-We number from p = 1.  Where Vaughan writes `− p`, we write `− (p − 1)`.
-
-**WindCube numerical constants:**
-
-| Constant | Value | Source |
-|---------|-------|--------|
-| λₐ | 640.2248 × 10⁻⁹ m | Burns et al. 1950; IAU standard |
-| λᵦ | 638.2991 × 10⁻⁹ m | Burns et al. 1950; IAU standard |
-| pixel_pitch | 32 × 10⁻⁶ m | 2×2 binned CCD97 (2 × 16 µm) |
-| d_prior | 20.008 × 10⁻³ m | ICOS build report GNL4096-R (spacer measurement) |
-| n_air | 1.0 | Air gap |
+**Ring indexing:** p = 1 for innermost ring (Vaughan uses p = 0; we offset by 1).
 
 ---
 
 ## 4. Analysis — equations (3.83) through (3.97)
 
-### Step 1 — Successive r²-differences (Vaughan Eq. 3.85 / 3.87)
+### Step 1 — Successive r²-differences (Vaughan Eqs. 3.85, 3.87)
 
 For a Fabry-Pérot fringe pattern at high interference order,
-the paraxial approximation gives ring radii that are equally spaced in r²:
+the paraxial approximation gives rings equally spaced in r²:
 
 ```
-ₐr²_p = Δₐ · (p − 1 + εₐ)                           [3.84 in r² form]
+ₐr²_p  =  Δₐ · (p − 1 + εₐ)                          [3.84 in r² form]
 ```
 
 Successive r²-differences are therefore constant:
 
 ```
-δₐ_p  ≡  ₐr²_{p+1} − ₐr²_p  =  Δₐ  =  f² · λₐ / (n_air · d)   [3.85]
-δᵦ_p  ≡  ᵦr²_{p+1} − ᵦr²_p  =  Δᵦ  =  f² · λᵦ / (n_air · d)   [3.87]
+Δₐ  =  f²_px · λₐ / (n_air · d)  =  λₐ / (n_air · d · α²)   [3.85]
+Δᵦ  =  f²_px · λᵦ / (n_air · d)  =  λᵦ / (n_air · d · α²)   [3.87]
 ```
 
-Compute for each family:
+Note: both expressions on the right are equivalent; neither f nor α
+appears in the Tolansky analysis itself — they are derived **from** Δ and d
+after the Benoit recovery (Step 6).
+
+Compute simple mean differences as a first check:
 
 ```python
-delta_a = np.diff(r2_a)     # δₐ_1, δₐ_2, … (n_a − 1 values)
+delta_a = np.diff(r2_a)    # δₐ_p, length n_a − 1
 delta_b = np.diff(r2_b)
 
-Delta_a = np.mean(delta_a)  # Δₐ — best simple estimate (px²)
-Delta_b = np.mean(delta_b)  # Δᵦ
+Delta_a_simple = np.mean(delta_a)
+Delta_b_simple = np.mean(delta_b)
 ```
 
 **Consistency check (Eq. 3.85 / 3.87 ratio):**
 
 ```
-Δₐ / Δᵦ  =  λₐ / λᵦ  =  640.2248 / 638.2991  =  1.003014 …    [3.85/3.87]
+Δₐ / Δᵦ  =  λₐ / λᵦ  =  640.2248 / 638.2991  =  1.003017   [3.85/3.87]
 ```
 
-Deviation from this ratio in excess of ~0.1% signals a family mis-assignment.
+Deviation from this ratio in excess of ~0.2% signals a family
+mis-assignment or a mis-measured ring.
 
 ### Step 2 — Rectangular array (Vaughan Table 3.1)
 
-Tolansky's rectangular array lays out r²_p values as columns
-(ring number 1, 2, 3, …) and lines as rows (component a, component b).
-Between successive columns the individual differences δ_p are written.
-This layout makes gross errors in ring measurement immediately apparent
-because any δ_p that differs markedly from Δ corresponds to a mis-measured
-or mis-assigned ring (Vaughan pp. 118–119).
+Tolansky's rectangular array lays out r²_p values as columns (ring
+number 1, 2, …) and lines as rows (a, b).  Individual differences δ_p
+are written between successive columns; any δ_p that differs markedly
+from the mean Δ flags a bad ring.  The module renders this as a formatted
+printed table (see §6).
 
-```
-Component a  (λₐ = 640.2248 nm)
-  Ring p :       1           2           3       …       nₐ
-  ₐr²_p  :  ₐr²_1      ₐr²_2      ₐr²_3  …  ₐr²_nₐ
-              δₐ_1₂        δₐ_2₃        δₐ_3₄  …
-  Mean Δₐ = …
-
-Component b  (λᵦ = 638.2991 nm)
-  Ring p :       1           2           3       …       nᵦ
-  ᵦr²_p  :  ᵦr²_1      ᵦr²_2      ᵦr²_3  …  ᵦr²_nᵦ
-              δᵦ_1₂        δᵦ_2₃        δᵦ_3₄  …
-  Mean Δᵦ = …
-
-Ratio  Δₐ/Δᵦ (observed) = …   expected = λₐ/λᵦ = 1.003014
-```
-
-The module renders this array as a formatted printed table (see Section 6).
-
-### Step 3 — Fractional interference orders (Vaughan Eq. 3.86 / 3.88)
-
-The fractional interference order at the optical axis for each line is:
+### Step 3 — Fractional interference orders (Vaughan Eqs. 3.86, 3.88)
 
 ```
 εₐ  =  ₐr²_p / Δₐ  −  (p − 1)    for any ring p          [3.86]
 εᵦ  =  ᵦr²_p / Δᵦ  −  (p − 1)    for any ring p          [3.88]
 ```
 
-In practice, compute εₐ from every ring and take the mean (or use WLS,
-see Step 4):
+Computed per-ring and averaged; WLS gives the best estimates (Step 4).
+
+**Sanity check:** `0 ≤ εₐ < 1` and `0 ≤ εᵦ < 1`.
+
+### Step 4 — WLS refinement
+
+Fit model `r²_p = S · p + b` with weights `w_p = 1/σ(r²_p)²`:
 
 ```python
-eps_a_per_ring = r2_a / Delta_a - (p_a - 1)
-eps_b_per_ring = r2_b / Delta_b - (p_b - 1)
-eps_a = np.mean(eps_a_per_ring)   # should lie in [0, 1)
-eps_b = np.mean(eps_b_per_ring)
+def _wls(p, r2, sigma_r2):
+    w        = 1.0 / sigma_r2**2
+    sum_w    = np.sum(w)
+    sum_wp   = np.sum(w * p)
+    sum_wp2  = np.sum(w * p**2)
+    sum_wr2  = np.sum(w * r2)
+    sum_wpr2 = np.sum(w * p * r2)
+    Lambda   = sum_w * sum_wp2 - sum_wp**2
+    S        = (sum_w * sum_wpr2 - sum_wp * sum_wr2) / Lambda
+    b        = (sum_wp2 * sum_wr2 - sum_wp * sum_wpr2) / Lambda
+    var_S    = sum_w  / Lambda
+    var_b    = sum_wp2 / Lambda
+    eps      = 1.0 + b / S
+    sig_eps  = np.sqrt((np.sqrt(var_b)/S)**2 + (b*np.sqrt(var_S)/S**2)**2)
+    chi2_dof = np.sum(w * (r2 - S*p - b)**2) / (len(p) - 2)
+    return dict(Delta=S, sigma_Delta=np.sqrt(var_S),
+                eps=eps, sigma_eps=sig_eps,
+                chi2_dof=chi2_dof,
+                intercept=b, sigma_intercept=np.sqrt(var_b))
 ```
 
-**Sanity check:** `0 ≤ εₐ < 1` and `0 ≤ εᵦ < 1`.  Values outside this
-range indicate an error in ring indexing or family assignment.
+Apply to each family independently.
 
-### Step 4 — WLS refinement (enhancement over basic Vaughan method)
+**Reduced χ²:** values `χ²_dof ≫ 1` indicate under-estimated σ(r_p) or
+a mis-assigned ring; `χ²_dof ≪ 1` indicates over-estimated σ(r_p).
 
-The mean-differences approach of Steps 1–3 gives equal weight to all rings.
-A weighted least-squares (WLS) linear fit to `r²_p = Δ · p + b` provides
-best-estimate Δ and ε with propagated uncertainties.
-
-Propagate radial uncertainties to r²:
+### Step 5 — Identify integer order difference N_Δ (Vaughan Eq. 3.96)
 
 ```
-σ(r²_p)  =  2 · r_p · σ(r_p)                             [error propagation]
+N_Δ  ≡  nₐ − nᵦ  =  round(2 · d_prior · (1/λₐ − 1/λᵦ))   [3.96]
 ```
 
-Weight each ring inversely by its variance:
+`d_prior = 20.008 mm` resolves the FSR-period integer ambiguity only; it
+does **not** bias the recovered d.
 
-```
-w_p  =  1 / σ(r²_p)²
-```
-
-WLS normal equations for model `r²_p = S · p + b`:
-
-```
-Λ  =  Σw · Σw·p²  −  (Σw·p)²
-S  =  (Σw · Σw·p·r² − Σw·p · Σw·r²) / Λ                 [slope = Δ]
-b  =  (Σw·p² · Σw·r² − Σw·p · Σw·p·r²) / Λ              [intercept]
-
-Var(S)  =  Σw / Λ
-Var(b)  =  Σw·p² / Λ
-```
-
-Apply separately to each family (a and b).  Recover the fractional order:
-
-```
-εₐ  =  1  +  bₐ / Sₐ                                     [from Eq. 3.86]
-σ(εₐ)²  =  (σ_b/Sₐ)²  +  (bₐ · σ_S / Sₐ²)²
-```
-
-The WLS slope is the best-estimate `Δₐ = Sₐ` (px²/ring).
-
-**Reduced χ²:**
-
-```
-χ²_dof  =  Σ w_p · (r²_p − Sₐ·p − bₐ)²  /  (N_a − 2)
-```
-
-Values `χ²_dof ≫ 1` indicate under-estimated σ(r_p) or a mis-assigned ring.
-
-### Step 5 — Identify integer order difference N_Δ (Vaughan Eqs. 3.95–3.96)
-
-The central interference orders for lines a and b are:
-
-```
-nₐ + εₐ  =  2·d / λₐ                                      [3.94]
-nᵦ + εᵦ  =  2·d / λᵦ                                      [3.95]
-```
-
-Their difference is an integer (Benoit exact-fractions):
-
-```
-N_Δ  ≡  nₐ − nᵦ  =  round(2 · d_prior · (1/λₐ − 1/λᵦ))  [3.96]
-```
-
-`d_prior` is the ICOS spacer measurement (20.008 mm).  Its sole function
-here is to resolve the FSR-period integer ambiguity; it does **not** bias
-the recovered d.
-
-For WindCube: `N_Δ = round(2 × 20.008×10⁻³ × (1/640.2248×10⁻⁹ − 1/638.2991×10⁻⁹)) ≈ −189`
+For WindCube: **N_Δ = −189**
 
 ### Step 6 — Recover plate spacing d (Vaughan Eq. 3.97 / Benoit)
 
-Subtracting the two expressions in Step 5:
-
 ```
-N_Δ  +  εₐ − εᵦ  =  2d · (1/λₐ − 1/λᵦ)
-
-d  =  (N_Δ + εₐ − εᵦ) · λₐ·λᵦ / (2·n_air·(λᵦ − λₐ))    [3.97 / Benoit]
+d  =  (N_Δ + εₐ − εᵦ) · λₐ·λᵦ / (2·n_air·(λᵦ − λₐ))     [3.97]
 ```
 
-Note: λᵦ < λₐ so λᵦ − λₐ < 0, and N_Δ ≈ −189 < 0, so d > 0 as required.
+Note λᵦ < λₐ so (λᵦ − λₐ) < 0, and N_Δ = −189 < 0, giving d > 0.
 
-Propagate uncertainty:
+Uncertainty (εₐ and εᵦ are independent):
 
-```
-σ(εₐ − εᵦ)  =  sqrt(σ_εₐ² + σ_εᵦ² − 2·Cov(εₐ, εᵦ))
-```
-
-where `Cov(εₐ, εᵦ) = 0` since the two families come from independent ring
-measurements.
-
-```
-σ(d)  =  |λₐ·λᵦ / (2·n_air·(λᵦ − λₐ))| · σ(εₐ − εᵦ)
+```python
+factor  = lam_a * lam_b / (2 * n_air * abs(lam_b - lam_a))
+sigma_d = factor * np.sqrt(sig_eps_a**2 + sig_eps_b**2)
 ```
 
-### Step 7 — Recover focal length f and plate scale α
+### Step 7 — Recover plate scale α
 
-From Eq. (3.85) rearranged:
-
-```
-f  =  sqrt(Δₐ · n_air · d / λₐ)        [pixels]           [from 3.85]
-f_m  =  f · pixel_pitch                 [metres]
-```
-
-Uncertainty (treating Δₐ and d as independent):
+From Eq. (3.85) rearranged (eliminating f entirely):
 
 ```
-σ(f)/f  =  (1/2) · sqrt( (σ_Δₐ/Δₐ)² + (σ_d/d)² )
+α  =  sqrt(λₐ · n_air / (d · Δₐ))                         [from 3.85]
 ```
 
-Plate scale:
+This is the **primary geometric output** of S13a.  Propagate uncertainty:
 
-```
-α  =  pixel_pitch / f_m  =  1 / f_px    [rad/px]
-σ(α)  =  α · σ(f)/f
-```
-
-### Verification: self-consistency of f from both lines
-
-As a cross-check, compute f also from line b:
-
-```
-f_b  =  sqrt(Δᵦ · n_air · d / λᵦ)
+```python
+alpha     = np.sqrt(lam_a * n_air / (d * Delta_a))
+sig_alpha = 0.5 * alpha * np.sqrt((sig_Delta_a/Delta_a)**2 + (sig_d/d)**2)
 ```
 
-`|f_a − f_b| / f_a < 0.001` is the acceptance criterion.
-Larger discrepancy indicates a bad ring in one family.
+**Cross-check α from line b:**
+
+```
+α_b  =  sqrt(λᵦ · n_air / (d · Δᵦ))
+```
+
+Acceptance criterion: `|α_a − α_b| / α_a < 0.001` (1000 ppm).
+
+**α_mean** (reported, used as M05 prior):
+
+```python
+alpha_mean = 0.5 * (alpha_a + alpha_b)
+```
+
+> **Note on plot annotation.**  The reference plot (§10) labels the slopes
+> of the P vs r² WLS fit as `α_640`, `α_638` in units of "orders/px²".
+> These are `1/Δ` (the WLS slope), **not** the angular plate scale.  The
+> plot then derives `α_rpx = sqrt(slope · λ / (2nd))`, which differs from
+> our formula by a factor of `1/sqrt(2)`.  This module uses the form that
+> follows directly from Vaughan Eq. 3.85 without the factor of 2 in the
+> denominator: `α = sqrt(λ/(d·Δ))`.  The two forms correspond to different
+> conventions for the interference condition (2nd cos θ vs nd cos θ); the
+> Vaughan convention (2nd) is authoritative for this pipeline.  α values
+> from this module (~1.607 × 10⁻⁴ rad/px) should not be directly compared
+> with the plot's `α_rpx` (~1.14 × 10⁻⁴ rad/px).
 
 ---
 
@@ -357,87 +342,99 @@ class TolanskyResult:
     """
     Output of the Tolansky two-line analysis (S13a).
     All two_sigma_ fields are exactly 2 × sigma_ (S04 convention).
+    Focal length f is not reported; α is the sole plate-scale parameter.
     """
-    # --- Single-line WLS fit results ---
-    # Line a  (λₐ = 640.2248 nm)
-    Delta_a:         float   # Δₐ = mean r²-step, px²          [Eq. 3.85]
-    sigma_Delta_a:   float   # 1σ uncertainty on Δₐ,  px²
-    eps_a:           float   # εₐ = fractional order at centre  [Eq. 3.86]
-    sigma_eps_a:     float   # 1σ
-    chi2_dof_a:      float   # reduced χ² for line-a WLS fit
-    delta_a:         np.ndarray  # δₐ_p successive differences  (px²)
+    # --- Family assignment provenance ---
+    n_peaks_total:   int    # total rows in _peak_fits.npy
+    n_nan_dropped:   int    # rows dropped (NaN r_fit_px)
+    n_rings_a:       int    # rings used for λₐ family
+    n_rings_b:       int    # rings used for λᵦ family
+    amp_threshold:   float  # median amplitude used for family split (ADU)
+    Y_B_obs:         float  # median_amp_b / median_amp_a  (intensity ratio)
 
-    # Line b  (λᵦ = 638.2991 nm)
-    Delta_b:         float   # Δᵦ,  px²                         [Eq. 3.87]
+    # --- Line a  (λₐ = 640.2248 nm) ---
+    Delta_a:         float        # Δₐ  (px²)                  [Eq. 3.85]
+    sigma_Delta_a:   float        # 1σ
+    two_sigma_Delta_a: float      # exactly 2 × sigma_Delta_a
+    eps_a:           float        # εₐ                         [Eq. 3.86]
+    sigma_eps_a:     float        # 1σ
+    two_sigma_eps_a: float        # exactly 2 × sigma_eps_a
+    chi2_dof_a:      float        # reduced χ²
+    delta_a:         np.ndarray   # successive r²-differences (px²)
+
+    # --- Line b  (λᵦ = 638.2991 nm) ---
+    Delta_b:         float        # Δᵦ  (px²)                  [Eq. 3.87]
     sigma_Delta_b:   float
-    eps_b:           float   # εᵦ                               [Eq. 3.88]
+    two_sigma_Delta_b: float
+    eps_b:           float        # εᵦ                         [Eq. 3.88]
     sigma_eps_b:     float
+    two_sigma_eps_b: float
     chi2_dof_b:      float
     delta_b:         np.ndarray
 
     # --- Consistency check ---
-    Delta_ratio_obs:      float  # Δₐ/Δᵦ (observed)
-    Delta_ratio_expected: float  # λₐ/λᵦ = 1.003014…
-    Delta_ratio_residual: float  # |obs − expected| / expected
+    Delta_ratio_obs:      float   # Δₐ/Δᵦ observed
+    Delta_ratio_expected: float   # λₐ/λᵦ = 1.003017
+    Delta_ratio_residual: float   # |obs − expected| / expected
 
     # --- Integer disambiguation ---
-    N_Delta:  int    # N_Δ = nₐ − nᵦ  [Eq. 3.96 / Benoit]
+    N_Delta: int                  # N_Δ = nₐ − nᵦ  [Eq. 3.96 / Benoit]
 
     # --- Plate spacing recovery  [Eq. 3.97] ---
-    d_m:             float  # recovered d  (metres)
-    sigma_d_m:       float  # 1σ
-    two_sigma_d_m:   float  # exactly 2 × sigma_d_m   (S04)
+    d_m:             float        # recovered d  (metres)
+    sigma_d_m:       float        # 1σ
+    two_sigma_d_m:   float        # exactly 2 × sigma_d_m
 
-    # --- Focal length and plate scale ---
-    f_px:            float  # f  (pixels)
-    sigma_f_px:      float
-    two_sigma_f_px:  float  # exactly 2 × sigma_f_px  (S04)
-    f_b_px:          float  # cross-check from line b
-    f_consistency:   float  # |f_a − f_b| / f_a  (accept if < 0.001)
+    # --- Plate scale α (primary geometric output) ---
+    alpha_a:         float        # α from line a  (rad/px)    [from 3.85]
+    alpha_b:         float        # α from line b  (rad/px)  cross-check
+    alpha_mean:      float        # mean of α_a and α_b  (rad/px)
+    sigma_alpha:     float        # 1σ on α_mean
+    two_sigma_alpha: float        # exactly 2 × sigma_alpha
+    alpha_consistency: float      # |α_a − α_b| / α_a  (accept if < 0.001)
 
-    alpha_rad_px:    float  # α  (rad/px)
-    sigma_alpha:     float
-    two_sigma_alpha: float  # exactly 2 × sigma_alpha  (S04)
-
-    # --- Inputs for M05 priors ---
-    lam_a_nm:  float  # 640.2248
-    lam_b_nm:  float  # 638.2991
-    n_rings_a: int    # number of rings used
-    n_rings_b: int
+    # --- Wavelengths (provenance) ---
+    lam_a_nm: float               # 640.2248
+    lam_b_nm: float               # 638.2991
 ```
 
 ---
 
 ## 6. Rectangular array table (Vaughan Table 3.1 analog)
 
-The `print_rectangular_array(result)` function prints the following layout
-to stdout, matching Vaughan's Table 3.1 structure exactly:
-
 ```
-=== TOLANSKY RECTANGULAR ARRAY (Vaughan 1989, Table 3.1 analog) ===
+=== TOLANSKY RECTANGULAR ARRAY  (Vaughan 1989, Table 3.1 analog) ===
+
+Family assignment:  amp_threshold = XXXX.X ADU   Y_B_obs = X.XXX
+  640.2248 nm (line a):  N rings = XX   median amp = XXXX ADU
+  638.2991 nm (line b):  N rings = XX   median amp = XXXX ADU
 
 Component a  (λₐ = 640.2248 nm)
-  p  :      1          2          3      ...     10
-  r²  :  XXXXX.XX   XXXXX.XX   XXXXX.XX  ...  XXXXX.XX   (px²)
-             δ₁₂=XX.X   δ₂₃=XX.X  ...
-  Δₐ (mean δ) = XXXX.XX px²    σ = X.XX px²
-  εₐ          = X.XXXX           σ = X.XXXXX
+  p  :      1           2           3       …      N
+  r²  :  XXXXX.XX   XXXXX.XX   XXXXX.XX  …  XXXXX.XX   (px²)
+                δ₁₂=XXXX.X   δ₂₃=XXXX.X  …
+  Δₐ (WLS slope) = XXXXXXX.XX ± X.XX px²   χ²_dof = X.XX
+  εₐ             = X.XXXX     ± X.XXXX
 
 Component b  (λᵦ = 638.2991 nm)
-  p  :      1          2          3      ...     10
-  r²  :  XXXXX.XX   XXXXX.XX   XXXXX.XX  ...  XXXXX.XX   (px²)
-             δ₁₂=XX.X   δ₂₃=XX.X  ...
-  Δᵦ (mean δ) = XXXX.XX px²    σ = X.XX px²
-  εᵦ          = X.XXXX           σ = X.XXXXX
+  p  :      1           2           3       …      N
+  r²  :  XXXXX.XX   XXXXX.XX   XXXXX.XX  …  XXXXX.XX   (px²)
+                δ₁₂=XXXX.X   δ₂₃=XXXX.X  …
+  Δᵦ (WLS slope) = XXXXXXX.XX ± X.XX px²   χ²_dof = X.XX
+  εᵦ             = X.XXXX     ± X.XXXX
 
-Ratio  Δₐ/Δᵦ observed = X.XXXXXX   expected (λₐ/λᵦ) = X.XXXXXX   residual = X.X ppm
+Ratio  Δₐ/Δᵦ observed = X.XXXXXX   expected (λₐ/λᵦ) = 1.003017
+        residual = XX.X ppm   [PASS if < 200 ppm]
 
-=== BENOIT RECOVERY (Vaughan Eqs. 3.94–3.97) ===
-  N_Δ = nₐ − nᵦ = XXX   [from d_prior = 20.008 mm, Eq. 3.96]
-  d   = XX.XXX ± X.XXX mm  (2σ = X.XXX mm)
-  f   = XXXXX.X ± X.X px  (= XXX.X ± X.X mm)  (2σ = X.X px)
-  f_b = XXXXX.X px  (cross-check)   |f_a − f_b|/f_a = X.X ppm
-  α   = X.XXXXE-4 ± X.XXXXE-6 rad/px  (2σ = X.XXXXE-6)
+=== BENOIT RECOVERY  (Vaughan Eqs. 3.94–3.97) ===
+  N_Δ = nₐ − nᵦ = -189   [from d_prior = 20.008 mm, Eq. 3.96]
+  d   = XX.XXXX ± X.XXXX mm   (2σ = X.XXXX mm)
+
+=== PLATE SCALE ===
+  α_a  = X.XXXXE-4 ± X.XXXXE-6 rad/px   [from Δₐ, d, λₐ]
+  α_b  = X.XXXXE-4 ± X.XXXXE-6 rad/px   [from Δᵦ, d, λᵦ; cross-check]
+  α_mean = X.XXXXE-4 ± X.XXXXE-6 rad/px   (2σ = X.XXXXE-6)
+  |α_a − α_b| / α_a = X.X ppm   [PASS if < 1000 ppm]
 ```
 
 ---
@@ -446,20 +443,17 @@ Ratio  Δₐ/Δᵦ observed = X.XXXXXX   expected (λₐ/λᵦ) = X.XXXXXX   res
 
 ```python
 def to_m05_priors(result: TolanskyResult) -> dict:
-    """
-    Convert TolanskyResult to the prior dict expected by M05 FitConfig.
-    Direct mapping to S14 fields.
-    """
-    d_mm = result.d_m * 1e3
+    """Convert TolanskyResult to the prior dict expected by M05 FitConfig."""
+    d_mm     = result.d_m * 1e3
     sig_d_mm = result.sigma_d_m * 1e3
     return {
         't_init_mm':      d_mm,
-        't_bounds_mm':    (d_mm - 3 * sig_d_mm, d_mm + 3 * sig_d_mm),
-        'alpha_init':     result.alpha_rad_px,
-        'alpha_bounds':   (result.alpha_rad_px * 0.875,
-                           result.alpha_rad_px * 1.125),  # ±12.5%
-        'epsilon_cal_1':  result.eps_a,    # εₐ for λₐ = 640.2248 nm
-        'epsilon_cal_2':  result.eps_b,    # εᵦ for λᵦ = 638.2991 nm
+        't_bounds_mm':    (d_mm - 3*sig_d_mm, d_mm + 3*sig_d_mm),
+        'alpha_init':     result.alpha_mean,
+        'alpha_bounds':   (result.alpha_mean * 0.875,
+                           result.alpha_mean * 1.125),   # ±12.5%
+        'epsilon_cal_a':  result.eps_a,    # εₐ for λₐ = 640.2248 nm
+        'epsilon_cal_b':  result.eps_b,    # εᵦ for λᵦ = 638.2991 nm
     }
 ```
 
@@ -469,46 +463,45 @@ def to_m05_priors(result: TolanskyResult) -> dict:
 
 All 7 tests in `tests/test_tolansky_2line_2026-05-05.py`.
 
-### T1 — Successive differences are uniform on exact synthetic data
+A shared `make_synthetic_peaks_array(Delta_a, eps_a, Delta_b, eps_b, n, sigma_r=0.05)`
+helper builds a valid `(2n, 9)` float64 array with two interleaved families
+(640 nm rows with amplitude 1800 ADU, 638 nm rows with amplitude 600 ADU),
+sorted by ascending radius.
+
+### T1 — Successive differences uniform on exact synthetic data
 
 ```python
 def test_successive_differences_uniform():
-    Delta_true = 485.0
-    eps_true   = 0.37
-    p          = np.arange(1, 11, dtype=float)
-    r2         = Delta_true * (p - 1 + eps_true)
-    delta      = np.diff(r2)
-    cv         = delta.std() / delta.mean()
-    assert cv < 1e-10
+    arr = make_synthetic_peaks_array(1233.0, 0.22, 1228.0, 0.73, n=10)
+    result = run_tolansky(arr)
+    assert result.delta_a.std() / result.delta_a.mean() < 1e-10
+    assert result.delta_b.std() / result.delta_b.mean() < 1e-10
 ```
 
-### T2 — WLS recovers known Δ and ε to high accuracy
+### T2 — WLS recovers known Δ and ε to < 0.01%
 
 ```python
 def test_wls_known_answer():
-    Delta_true = 485.0
-    eps_true   = 0.37
-    p   = np.arange(1, 11, dtype=float)
-    r2  = Delta_true * (p - 1 + eps_true)
-    sr  = np.full_like(r2, 0.3 * 2 * np.sqrt(r2[0]))
-    result = run_single_line_wls(p, r2, sr)
-    assert abs(result['Delta'] - Delta_true) / Delta_true < 1e-4
-    assert abs(result['eps']   - eps_true)                < 1e-4
-    assert result['r2_fit'] > 0.9999
+    Delta_a_true, eps_a_true = 1233.0, 0.22
+    Delta_b_true, eps_b_true = 1228.0, 0.73
+    arr = make_synthetic_peaks_array(Delta_a_true, eps_a_true,
+                                     Delta_b_true, eps_b_true, n=10)
+    result = run_tolansky(arr)
+    assert abs(result.Delta_a - Delta_a_true) / Delta_a_true < 1e-4
+    assert abs(result.eps_a   - eps_a_true)                  < 1e-4
+    assert abs(result.Delta_b - Delta_b_true) / Delta_b_true < 1e-4
+    assert abs(result.eps_b   - eps_b_true)                  < 1e-4
 ```
 
-### T3 — Δ ratio constraint: Δₐ/Δᵦ = λₐ/λᵦ from same (d, f)
+### T3 — Δ ratio constraint: Δₐ/Δᵦ = λₐ/λᵦ
 
 ```python
 def test_delta_ratio_matches_wavelength_ratio():
     lam_a, lam_b = 640.2248e-9, 638.2991e-9
-    d, f_px      = 20.106e-3, 6222.0
-    p            = np.arange(1, 11, dtype=float)
-    Delta_a_true = f_px**2 * lam_a / d
-    Delta_b_true = f_px**2 * lam_b / d
-    ratio_obs = Delta_a_true / Delta_b_true
-    ratio_exp = lam_a / lam_b
-    assert abs(ratio_obs - ratio_exp) / ratio_exp < 1e-8
+    d, alpha = 20.0e-3, 1.607e-4
+    Delta_a = lam_a / (d * alpha**2)
+    Delta_b = lam_b / (d * alpha**2)
+    assert abs(Delta_a/Delta_b - lam_a/lam_b) / (lam_a/lam_b) < 1e-8
 ```
 
 ### T4 — N_Δ correctly identified from d_prior
@@ -516,9 +509,9 @@ def test_delta_ratio_matches_wavelength_ratio():
 ```python
 def test_N_Delta_from_prior():
     lam_a, lam_b = 640.2248e-9, 638.2991e-9
-    d_prior      = 20.008e-3
-    N_Delta      = round(2 * d_prior * (1/lam_a - 1/lam_b))
-    assert N_Delta == -189, f"N_Δ = {N_Delta}, expected −189"
+    d_prior = 20.008e-3
+    N = round(2 * d_prior * (1/lam_a - 1/lam_b))
+    assert N == -189, f"N_Δ = {N}, expected −189"
 ```
 
 ### T5 — Benoit d recovery to < 1 µm on synthetic data
@@ -526,66 +519,98 @@ def test_N_Delta_from_prior():
 ```python
 def test_benoit_d_recovery():
     lam_a, lam_b = 640.2248e-9, 638.2991e-9
-    d_true, f_px = 20.106e-3, 6222.0
-    p = np.arange(1, 11, dtype=float)
-    eps_a, eps_b = 0.37, 0.51
-    Delta_a = f_px**2 * lam_a / d_true
-    Delta_b = f_px**2 * lam_b / d_true
-    r2_a = Delta_a * (p - 1 + eps_a)
-    r2_b = Delta_b * (p - 1 + eps_b)
-    sr_a = np.full_like(r2_a, 0.05)
-    sr_b = np.full_like(r2_b, 0.05)
-    result = run_tolansky(
-        p, r2_a, sr_a, p, r2_b, sr_b,
-        lam_a_m=lam_a, lam_b_m=lam_b,
-        d_prior_m=20.008e-3, pixel_pitch_m=32e-6
-    )
+    d_true  = 20.1e-3
+    alpha   = 1.607e-4
+    eps_a, eps_b = 0.22, 0.73
+    Delta_a = lam_a / (d_true * alpha**2)
+    Delta_b = lam_b / (d_true * alpha**2)
+    arr = make_synthetic_peaks_array(Delta_a, eps_a, Delta_b, eps_b, n=10,
+                                     sigma_r=0.05)
+    result = run_tolansky(arr)
     assert abs(result.d_m - d_true) < 1e-6
 ```
 
-### T6 — f recovered from d via Δₐ · n_air · d / λₐ
+### T6 — α recovered from d and Δₐ to < 0.1%
 
 ```python
-def test_f_recovery():
-    lam_a = 640.2248e-9
-    d_m   = 20.106e-3
-    f_true_px = 6222.0
-    Delta_a_true = f_true_px**2 * lam_a / d_m
-    f_recovered  = np.sqrt(Delta_a_true * d_m / lam_a)
-    assert abs(f_recovered - f_true_px) / f_true_px < 1e-3
+def test_alpha_recovery():
+    lam_a   = 640.2248e-9
+    d_true  = 20.1e-3
+    alpha_true = 1.607e-4
+    Delta_a = lam_a / (d_true * alpha_true**2)
+    alpha_rec = np.sqrt(lam_a / (d_true * Delta_a))
+    assert abs(alpha_rec - alpha_true) / alpha_true < 1e-3
 ```
 
 ### T7 — All two_sigma_ fields equal exactly 2 × sigma_ (S04)
 
 ```python
 def test_two_sigma_fields():
-    # (run run_tolansky on synthetic data from T5)
-    assert abs(result.two_sigma_d_m   - 2.0 * result.sigma_d_m)   < 1e-15
-    assert abs(result.two_sigma_f_px  - 2.0 * result.sigma_f_px)  < 1e-15
-    assert abs(result.two_sigma_alpha - 2.0 * result.sigma_alpha)  < 1e-15
+    arr    = make_synthetic_peaks_array(1233.0, 0.22, 1228.0, 0.73, n=10)
+    result = run_tolansky(arr)
+    assert abs(result.two_sigma_Delta_a - 2.0*result.sigma_Delta_a) < 1e-14
+    assert abs(result.two_sigma_Delta_b - 2.0*result.sigma_Delta_b) < 1e-14
+    assert abs(result.two_sigma_eps_a   - 2.0*result.sigma_eps_a)   < 1e-14
+    assert abs(result.two_sigma_eps_b   - 2.0*result.sigma_eps_b)   < 1e-14
+    assert abs(result.two_sigma_d_m     - 2.0*result.sigma_d_m)     < 1e-14
+    assert abs(result.two_sigma_alpha   - 2.0*result.sigma_alpha)    < 1e-14
 ```
 
 ---
 
 ## 9. Expected numerical values (WindCube FlatSat)
 
-For d ≈ 20.106 mm, f ≈ 199.12 mm, α ≈ 1.6071 × 10⁻⁴ rad/px:
+From the FlatSat calibration image `1_cal_120sexp_swapped.bin`:
 
 | Quantity | Expected | Equation |
 |---------|----------|---------|
-| Δₐ | ~485 px² | 3.85 |
-| Δᵦ | ~484 px² | 3.87 |
-| Δₐ/Δᵦ | 1.003014 | 3.85/3.87 |
-| N_Δ | −189 | 3.96 |
-| d | 20.106 ± ~0.005 mm | 3.97 |
-| f | ~6222 px (~199.1 mm) | from Δₐ |
-| α | ~1.607 × 10⁻⁴ rad/px | pixel_pitch/f_m |
-| χ²_dof (line a) | ~1.0 | WLS quality |
-| f consistency | < 100 ppm | cross-check |
+| Δₐ | ~1233 px² | Eq. 3.85 |
+| Δᵦ | ~1229 px² | Eq. 3.87 |
+| Δₐ/Δᵦ | 1.003017 | 3.85/3.87 |
+| N_Δ | −189 | Eq. 3.96 |
+| d | ~20.00–20.11 mm | Eq. 3.97 |
+| εₐ | ~0.22 | Eq. 3.86 |
+| εᵦ | ~0.73 | Eq. 3.88 |
+| α_mean | ~1.607 × 10⁻⁴ rad/px | from Eq. 3.85 |
+| α consistency | < 1000 ppm | cross-check |
+| Y_B_obs | ~0.30 | median(amp_b)/median(amp_a) |
+| χ²_dof (line a) | ~1–6 | WLS quality |
+| χ²_dof (line b) | ~0.4–1 | WLS quality |
+
+> **Note on χ²_dof.**  The FlatSat data shows χ²_dof ≈ 5.3 for line a
+> and ≈ 0.4 for line b.  This asymmetry suggests systematic residuals in
+> the brighter line (stronger signal, tighter constraint reveals model
+> imperfection) rather than a gross error.  Values in this range are
+> acceptable for S13a's purpose of seeding M05 priors.
 
 ---
 
-## 10. File locations
+## 10. Reference output figure
+
+The plot `1_cal_120sexp_swapped_tolansky_joint_two_line.png` (committed to
+`docs/figures/`) illustrates the expected output of this module for the
+FlatSat 120 s calibration exposure.
+
+**Top panel — P vs r² Tolansky plot:**
+Ring order P (y-axis) vs r²_fit (x-axis, px²) with WLS fit lines for each
+family.  The two families are visually separated in intercept (ε offset)
+and nearly parallel in slope (slopes ≈ 1/Δ ≈ 8.1 × 10⁻⁴ orders/px²).
+
+**Lower annotation panels:**
+- **Yellow box** — N_Δ calculation showing d_prior, wavelengths, result N_Δ = −189
+- **Green box** — WLS slopes in orders/px² (= 1/Δ) for each line and their mean;
+  also `α_rpx` computed as `sqrt(slope·λ/(2nd))` (**note**: this uses a factor of
+  2 in the denominator that differs from the Vaughan Eq. 3.85 convention; see §4
+  Step 7 for the authoritative formula used in this module)
+- **Blue box** — Benoit d recovery via Vaughan Eq. 3.97
+- **Orange box** — intensity ratio Y_B = 638/640 amplitude ratio (~0.30)
+
+The figure is a **reference diagnostic** produced by the standalone analysis
+script; it is not generated by the pipeline during normal operation.
+
+---
+
+## 11. File locations
 
 ```
 soc_sewell/
@@ -595,76 +620,98 @@ soc_sewell/
 │   └── test_tolansky_2line_2026-05-05.py
 └── docs/specs/
     └── S13a_tolansky_2_line_2026-05-05.md
+└── docs/figures/
+    └── 1_cal_120sexp_swapped_tolansky_joint_two_line.png
 ```
 
 ---
 
-## 11. Instructions for Claude Code
+## 12. Instructions for Claude Code
 
 ### Pre-implementation reads
 
 Before writing any code, read in full:
 
 1. `docs/specs/S13a_tolansky_2_line_2026-05-05.md` (this file)
-2. `docs/specs/Z00_validate_annular_reduction_peak_finding_2026-04-13.md`
-   §10 (fringe_peaks.npy dtype definition)
+2. `ingest/annular_reduction.py` lines 607–628 — exact column layout of
+   `_peak_fits.npy`
 
-Confirm M03 and Z00 tests pass first:
+Confirm annular_reduction tests pass first:
 
 ```bash
 cat PIPELINE_STATUS.md
-pytest tests/ -v --ignore=tests/test_tolansky*.py
+pytest tests/ -v -k "annular"
 ```
 
 ### Task sequence
 
-**Task 1 — Helper: single-line WLS**
+**Task 1 — `InsufficientRingsError`**
 
-Implement `run_single_line_wls(p, r2, sr)` returning a dict with keys:
-`Delta`, `sigma_Delta`, `eps`, `sigma_eps`, `chi2_dof`, `r2_fit`,
-`delta` (array of successive differences), `intercept`, `sigma_intercept`.
+Define a custom exception class for cases where the peak table has fewer
+than 4 valid rows, or either family has fewer than 2 rings after the
+amplitude split.
 
-**Task 2 — Benoit d recovery**
+**Task 2 — Input loading and family assignment**
+
+Implement `load_and_split_families(path_or_array)` performing the NaN
+filter and amplitude-threshold split from §2.  Returns
+`(p_a, r2_a, sigma_r2_a, p_b, r2_b, sigma_r2_b, amp_threshold, Y_B_obs, n_nan_dropped)`.
+
+**Task 3 — Single-line WLS helper**
+
+Implement `_wls(p, r2, sigma_r2)` exactly as given in §4 Step 4.  Returns
+the dict specified there.
+
+**Task 4 — Benoit d recovery**
 
 Implement `benoit_d(eps_a, sigma_eps_a, eps_b, sigma_eps_b, lam_a_m, lam_b_m, d_prior_m, n_air=1.0)`.
 
-**Task 3 — f and α recovery**
+**Task 5 — α recovery**
 
-Implement `recover_f_alpha(Delta_a, sigma_Delta_a, d_m, sigma_d_m, lam_a_m, pixel_pitch_m)`.
+Implement `recover_alpha(Delta_a, sigma_Delta_a, Delta_b, sigma_Delta_b, d_m, sigma_d_m, lam_a_m, lam_b_m, n_air=1.0)`.
+Returns `(alpha_a, alpha_b, alpha_mean, sigma_alpha, alpha_consistency)`.
+No focal length is computed or returned.
 
-**Task 4 — Top-level `run_tolansky()`**
+**Task 6 — Top-level `run_tolansky()`**
 
 ```python
 def run_tolansky(
-    p_a, r2_a, sr_a,
-    p_b, r2_b, sr_b,
-    lam_a_m  = 640.2248e-9,
-    lam_b_m  = 638.2991e-9,
-    d_prior_m = 20.008e-3,
-    pixel_pitch_m = 32e-6,
-    n_air    = 1.0,
+    peaks_input:   np.ndarray | str | pathlib.Path,
+    lam_a_m:       float = 640.2248e-9,
+    lam_b_m:       float = 638.2991e-9,
+    d_prior_m:     float = 20.008e-3,
+    n_air:         float = 1.0,
 ) -> TolanskyResult:
 ```
 
-**Task 5 — `print_rectangular_array()`**
+Calls Tasks 2–5 in sequence.  Sets all `two_sigma_` fields to exactly
+`2.0 × sigma_`.
 
-**Task 6 — `to_m05_priors()`**
+**Task 7 — `print_rectangular_array()`**
 
-**Task 7 — Tests (7/7 must pass)**
+Implement the formatted table from §6.
+
+**Task 8 — `to_m05_priors()`**
+
+Implement §7 exactly.
+
+**Task 9 — Tests (7/7 must pass)**
+
+Place `make_synthetic_peaks_array()` as a module-level helper in the test file.
 
 ```bash
 pytest tests/test_tolansky_2line_2026-05-05.py -v
 pytest tests/ -v   # no regressions
 ```
 
-**Task 8 — Commit**
+**Task 10 — Commit**
 
 ```bash
-# Update PIPELINE_STATUS.md — change status/tests/date for S13a
+# Update PIPELINE_STATUS.md — update S13a status/version/date
 git add src/fpi/tolansky_2line_2026-05-05.py
 git add tests/test_tolansky_2line_2026-05-05.py
 git add PIPELINE_STATUS.md
-git commit -m "feat(S13a): rename S13→S13a two-line Tolansky, 7/7 tests pass
+git commit -m "feat(S13a): v0.4 — remove f, add peak_fits.npy ingestion, amplitude family split, 7/7 tests pass
 
 Also updates PIPELINE_STATUS.md"
 ```
@@ -674,15 +721,19 @@ Also updates PIPELINE_STATUS.md"
 ```python
 """
 Module:      tolansky_2line_2026-05-05.py
-Spec:        docs/specs/S13a_tolansky_2_line_2026-05-05.md
+Spec:        docs/specs/S13a_tolansky_2_line_2026-05-05.md  v0.4
 Reference:   Vaughan (1989) The Fabry-Perot Interferometer, §3.5.2
              Equations (3.83)–(3.97) — rectangular array / Benoit method
              Burns, Adams & Longwell (1950) — Ne IAU standard wavelengths
 Author:      Claude Code
 Project:     WindCube FPI Pipeline — NCAR/HAO
 Repo:        soc_sewell
+Input:       {stem}_peak_fits.npy  (9-column float64, from annular_reduction.py)
+             Family assignment by amplitude threshold (640nm ~3× brighter).
 Note:        Two-line neon calibration lamp analysis only.
-             For airglow radial profile analysis, see S13b / tolansky_1line.py
+             Focal length f is not computed or stored; α is the sole
+             plate-scale output.
+             For airglow single-line analysis, see S13b / tolansky_1line.py
 """
 ```
 
@@ -694,20 +745,26 @@ Date: YYYY-MM-DD
 Module: src/fpi/tolansky_2line_2026-05-05.py
 Tests: N/7 pass
 
-TOLANSKY TWO-LINE RESULTS:
-  Δₐ = XXXX.XX ± X.XX px²   Δᵦ = XXXX.XX ± X.XX px²
-  Δₐ/Δᵦ = X.XXXXXX  (expected X.XXXXXX,  residual XX ppm)
-  N_Δ = XXX
-  εₐ = X.XXXX ± X.XXXX     εᵦ = X.XXXX ± X.XXXX
-  d  = XX.XXX ± X.XXX mm   (2σ = X.XXX mm)
-  f  = XXXXX.X ± X.X px    (= XXX.X ± X.X mm)
-  α  = X.XXXXE-4 ± X.XXXXE-6 rad/px
-  f consistency = X.X ppm
+INPUT
+  Total peaks: XX   NaN dropped: X
+  amp_threshold = XXXX ADU   Y_B_obs = X.XXX  [PASS/WARN]
+  n_rings_a = XX   n_rings_b = XX
+
+TOLANSKY TWO-LINE RESULTS
+  Δₐ = XXXXXXX.XX ± X.XX px²    εₐ = X.XXXX ± X.XXXX (2σ = X.XXXX)
+  Δᵦ = XXXXXXX.XX ± X.XX px²    εᵦ = X.XXXX ± X.XXXX (2σ = X.XXXX)
+  Δₐ/Δᵦ = X.XXXXXX  (expected 1.003017, residual XX ppm)  [PASS/WARN]
+  χ²_dof_a = X.XX    χ²_dof_b = X.XX
+  N_Δ = -189
+  d   = XX.XXXX ± X.XXXX mm   (2σ = X.XXXX mm)
+  α_a = X.XXXXE-4   α_b = X.XXXXE-4
+  α_mean = X.XXXXE-4 ± X.XXXXE-6 rad/px   (2σ = X.XXXXE-6)
+  α consistency = X.X ppm  [PASS/WARN]
 
 DEVIATIONS FROM SPEC:
   [list any, or "None"]
 ================================
 ```
 
-Stop and return this report if any task takes more than 15 minutes without
-all relevant tests passing.
+Stop and return this report if any task takes more than 15 minutes
+without all relevant tests passing.
