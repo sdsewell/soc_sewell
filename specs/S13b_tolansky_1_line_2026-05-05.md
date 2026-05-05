@@ -4,7 +4,6 @@
 **Spec file:** `docs/specs/S13b_tolansky_1_line_2026-05-05.md`
 **Project:** WindCube FPI Pipeline
 **Institution:** NCAR / High Altitude Observatory (HAO)
-**Status:** v0.2 — corrected 2026-05-05; input is pre-computed `_peak_fits.npy`
 **Depends on:** `annular_reduction.py` — provides `{stem}_peak_fits.npy`
 **Used by:**
   - M05 (S14) — optional pre-fit check of plate scale α consistency

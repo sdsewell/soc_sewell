@@ -2,16 +2,24 @@
 # S03 — Physical Constants
 # soc_sewell/src/constants.py
 #
-# Spec:        S03_physical_constants_2026-04-05.md
-# Spec date:   2026-04-05
-# Generated:   2026-04-05  (Claude Code)
-# Tool:        Claude Code
-# Last tested: 2026-04-05  (8/8 tests pass, pytest 8.x)
+# Spec:        S03_physical_constants_2026-05-05.md
+# Spec date:   2026-05-05
+# Generated:   2026-05-05  (Claude AI / Claude Code)
+# Last tested: 2026-05-05
 # Depends on:  nothing
 #
 # Single source of truth for every physical, spectroscopic, geodetic, orbital,
 # and instrument constant used by the WindCube FPI pipeline.
 # No other module may hardcode a value that appears in this table.
+#
+# Key changes from 2026-04-29 revision:
+#   - OI_WAVELENGTH_M, NE_WAVELENGTH_{1,2}_M now carry VACUUM values (Edlén)
+#   - _AIR_M variants retained for FSR calculations and Edlén consistency tests
+#   - All deprecated backward-compat aliases removed
+#   - FOCAL_LENGTH_M removed; ALPHA_RAD_PX is a hardcoded Tolansky primary
+#   - PLATE_SCALE_RPX and PLATE_SCALE_RAD_PX removed
+#   - §3.4b merged into §3.5; ETALON_GAP_M updated to Tolansky value 20.106 mm
+#   - ETALON_GAP_ICOS_M = 20.008 mm retained for N_int integer disambiguation only
 # =============================================================================
 
 import math
@@ -91,85 +99,80 @@ WGS84_A_M  = 6_378_137.0              # m  — equatorial semi-major axis (exact
 WGS84_B_M  = 6_356_752.314_245        # m  — polar semi-minor axis (derived)
 WGS84_F    = 1.0 / 298.257_223_563    # —  — flattening parameter (exact)
 WGS84_E2   = 1.0 - (WGS84_B_M / WGS84_A_M) ** 2  # —  — first eccentricity squared
-# WGS84_E2 = 6.694379990141317e-3; computed to maintain consistency with B and A
+# WGS84_E2 ≈ 6.694379990141317e-3; computed for consistency with B and A
 
 # ---------------------------------------------------------------------------
 # 3.3 Spectroscopic constants — OI airglow target line
 # Source: NIST Atomic Spectra Database (NIST ASD)
 #
-# NIST ASD and Burns et al. (1950) report air wavelengths for visible lines
-# (standard dry air, 15 °C, 101 325 Pa). Vacuum values are Edlén-derived.
+# Vacuum wavelength is canonical (WindCube observes from orbit).
+# Air wavelength retained for FSR calculations and Edlén consistency tests.
 #
 # LEGACY CORRECTIONS:
 #   (a) OI_WAVELENGTH_VACUUM_M = 630.0304e-9 was MISLABELLED;
-#       630.0304 nm is the AIR wavelength. Symbol renamed and correct vacuum
-#       value (629.9582 nm) added.
+#       630.0304 nm is the AIR wavelength. Symbol removed.
 #   (b) OI_WAVELENGTH_VAC_M = 630.2010e-9 was an unrecognised erroneous
 #       value. Removed.
 # ---------------------------------------------------------------------------
-OI_WAVELENGTH_AIR_M = 630.0304e-9      # m — NIST ASD air wavelength (canonical)
-OI_WAVELENGTH_VAC_M = _air_to_vac_nm(OI_WAVELENGTH_AIR_M * 1e9) * 1e-9
-# OI_WAVELENGTH_VAC_M ≈ 629.9582e-9 m; Δ ≈ −72.2 pm
-
-# Deprecated alias — do not use in new code
-OI_WAVELENGTH_M = OI_WAVELENGTH_AIR_M  # backward-compat alias
+OI_WAVELENGTH_AIR_M = 630.0304e-9      # m — NIST ASD air wavelength; retain for FSR calcs
+OI_WAVELENGTH_M     = _air_to_vac_nm(OI_WAVELENGTH_AIR_M * 1e9) * 1e-9
+# OI_WAVELENGTH_M ≈ 629.9582e-9 m — canonical vacuum rest wavelength (Edlén 1966)
+# Doppler formula (vacuum convention):
+# v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_M) / OI_WAVELENGTH_M
+# Positive v_rel = recession (redshift, source moving away from spacecraft).
 
 OXYGEN_MASS_KG = 2.6567e-26            # kg — one oxygen-16 atom
-
-# Doppler formula (air convention):
-# v_rel = SPEED_OF_LIGHT_MS * (lambda_c - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
-# Positive v_rel = recession (redshift, source moving away from spacecraft).
 
 # ---------------------------------------------------------------------------
 # 3.4 Spectroscopic constants — neon calibration lamp
 # Source: NIST ASD (Ne I, air wavelengths); Burns, Adams & Longwell (1950)
 #
-# Both air and vacuum wavelengths are provided. All FSR / beat-period
-# calculations use air wavelengths (consistent with FPI calibration convention).
+# Vacuum wavelengths are canonical. Air wavelengths retained for FSR /
+# beat-period calculations (consistent with FPI calibration convention).
+# No deprecated aliases.
 # ---------------------------------------------------------------------------
-NE_WAVELENGTH_1_AIR_M = 640.2248e-9   # m — primary Ne line, air; intensity 1.0
-NE_WAVELENGTH_1_VAC_M = _air_to_vac_nm(NE_WAVELENGTH_1_AIR_M * 1e9) * 1e-9
-# NE_WAVELENGTH_1_VAC_M ≈ 640.1426e-9 m; Δ ≈ −82.2 pm
+NE_WAVELENGTH_1_AIR_M = 640.2248e-9   # m — primary Ne line, air (Burns 1950 / NIST)
+NE_WAVELENGTH_1_M     = _air_to_vac_nm(NE_WAVELENGTH_1_AIR_M * 1e9) * 1e-9
+# NE_WAVELENGTH_1_M ≈ 640.1426e-9 m — canonical vacuum; Δ ≈ −82.2 pm
 
-NE_WAVELENGTH_2_AIR_M = 638.2991e-9   # m — secondary Ne line, air; intensity 0.8
-NE_WAVELENGTH_2_VAC_M = _air_to_vac_nm(NE_WAVELENGTH_2_AIR_M * 1e9) * 1e-9
-# NE_WAVELENGTH_2_VAC_M ≈ 638.2189e-9 m; Δ ≈ −80.2 pm
+NE_WAVELENGTH_2_AIR_M = 638.2991e-9   # m — secondary Ne line, air (Burns 1950 / NIST)
+NE_WAVELENGTH_2_M     = _air_to_vac_nm(NE_WAVELENGTH_2_AIR_M * 1e9) * 1e-9
+# NE_WAVELENGTH_2_M ≈ 638.2189e-9 m — canonical vacuum; Δ ≈ −80.2 pm
 
 NE_INTENSITY_1 = 1.0                  # — reference intensity
 NE_INTENSITY_2 = 0.8                  # — ratio of secondary to primary
 
-# Deprecated aliases — do not use in new code
-NE_WAVELENGTH_1_M = NE_WAVELENGTH_1_AIR_M
-NE_WAVELENGTH_2_M = NE_WAVELENGTH_2_AIR_M
-
 # ---------------------------------------------------------------------------
-# 3.4b Authoritative gap and F01 calibration constants
-# ---------------------------------------------------------------------------
-D_25C_MM          = 20.008e-3       # m; ICOS build − Pat/Nir pre-load correction
-PLATE_SCALE_RPX   = 1.6000e-4        # Plate Scale Initial Guess rad/px; 2x2 binned (32microns/200mm focal length)
-R_REFL_FLATSAT    = 0.53             # FlatSat effective reflectivity
-
-# ---------------------------------------------------------------------------
-# 3.5 Etalon and optical constants
-# Sources: ICOS build report GNL-4096-R iss1; FlatSat calibration; WindCube optical design
+# 3.5 Etalon, optical, and calibration constants
+# Sources: ICOS build report GNL-4096-R iss1; FlatSat calibration;
+#          Tolansky two-line analysis of real neon calibration image
+#          (S13 / Z01, 2026-04-21).
 #
-# LEGACY CORRECTION (etalon gap): FlatSat code used ETALON_GAP_M = 20.670e-3 m.
-# That value arises from an FSR-period ambiguity and is wrong. The ICOS
-# mechanical measurement of 20.008 mm is the correct value.
+# Gap note: ETALON_GAP_M is the Tolansky-recovered OPERATIONAL gap.
+#   Use it for all FSR and fitting calculations.
+#   ETALON_GAP_ICOS_M is the ICOS spacer measurement; use it ONLY to
+#   resolve the FSR-period integer N_int = −189. Never substitute for
+#   ETALON_GAP_M.
 #
-# LEGACY CORRECTION (depression angle): see Section 3.7.
+# Plate scale note: ALPHA_RAD_PX is hardcoded from the Tolansky two-line
+#   joint fit (1.6071e-4 rad/px).  The nominal design value
+#   (32 µm / 200 mm = 1.60e-4 rad/px) is ~0.4 % lower and must NOT be
+#   used in fitting code.  FOCAL_LENGTH_M is not defined in this module;
+#   the plate scale is more directly and more accurately recovered from the
+#   Tolansky analysis than from the COTS lens specification.
 # ---------------------------------------------------------------------------
-ETALON_GAP_M           = 20.008e-3   # m — ICOS build report §7.4 (spacer measurement)
-ETALON_GAP_TOLERANCE_M = 0.010e-3    # m — manufacturing tolerance ±0.010 mm
-ETALON_R_COATING       = 0.80        # — — as-deposited coating reflectivity at 630 nm
-ETALON_R_INSTRUMENT    = 0.53        # — — effective instrument R from FlatSat fringe contrast
-ETALON_N               = 1.0         # — — refractive index of etalon gap (air/vacuum)
-FOCAL_LENGTH_M         = 0.200       # m — FPI imaging lens focal length
-CCD_PIXEL_UM           = 16.0        # µm — CCD97-00 native pixel pitch (unbinned)
-CCD_PIXEL_2X2_UM       = 32.0        # µm — effective pixel pitch after 2×2 binning
-ALPHA_RAD_PX           = CCD_PIXEL_2X2_UM * 1e-6 / FOCAL_LENGTH_M
-# ALPHA_RAD_PX = 32e-6 / 0.200 = 1.60e-4 rad/px
-# Maps pixel radius r (px) to angle from optical axis: θ(r) ≈ ALPHA_RAD_PX * r
+ETALON_GAP_M            = 20.106e-3   # m — Tolansky two-line (S13/Z01); AUTHORITATIVE
+ETALON_GAP_ICOS_M       = 20.008e-3   # m — ICOS spacer; integer N_int disambiguation ONLY
+ETALON_GAP_TOLERANCE_M  = 0.010e-3    # m — ICOS manufacturing tolerance ±0.010 mm
+ETALON_R_COATING        = 0.80        # — — as-deposited coating reflectivity at 630 nm
+ETALON_R_INSTRUMENT     = 0.53        # — — effective instrument R from FlatSat fringe contrast
+R_REFL_FLATSAT          = ETALON_R_INSTRUMENT   # alias for M01/M03 fringe model code
+ETALON_N                = 1.0         # — — refractive index of etalon gap (air/vacuum)
+ALPHA_RAD_PX            = 1.6071e-4   # rad/px — Tolansky two-line joint fit; 2×2 binned
+#   (nominal design: 32e-6 m / 0.200 m = 1.60e-4 rad/px — do NOT use in fits)
+R_MAX_PX                = 110         # px — FlatSat/flight usable radius for M03
+CCD_PIXEL_UM            = 16.0        # µm — CCD97-00 native pixel pitch (unbinned)
+CCD_PIXEL_2X2_UM        = 32.0        # µm — effective pixel pitch after 2×2 binning
 
 # ---------------------------------------------------------------------------
 # 3.6 CCD detector constants
@@ -233,10 +236,9 @@ def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
 
     Examples
     --------
-    compute_depression_angle(510.0, 250.0)  ->  15.73°  (nominal WindCube)
+    compute_depression_angle(510.0, 250.0)  ->  15.79°  (nominal WindCube)
     compute_depression_angle(500.0, 250.0)  ->  15.45°  (lower orbit bound)
     compute_depression_angle(550.0, 250.0)  ->  16.75°  (upper orbit bound)
-    compute_depression_angle(525.0, 250.0)  ->  15.18°  (old wrong altitude)
 
     Notes
     -----
@@ -256,7 +258,7 @@ def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
 # Computed from primary constants — NOT hardcoded.
 # Updates automatically if SC_ALTITUDE_KM or TP_ALTITUDE_KM changes.
 DEPRESSION_ANGLE_DEG = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
-# Nominal result: ~15.73° for SC_ALTITUDE_KM=510.0, TP_ALTITUDE_KM=250.0
+# Nominal result: ~15.79° for SC_ALTITUDE_KM=510.0, TP_ALTITUDE_KM=250.0
 
 # ---------------------------------------------------------------------------
 # 3.8 Wind measurement and error budget
@@ -273,26 +275,23 @@ LAT_RANGE_DEG         = (-40.0, 40.0)  # deg — primary science latitude band (
 # Do not redefine these in other modules — import from here.
 # =============================================================================
 
-# Etalon FSR at primary neon line (m)
-# FSR = lambda^2 / (2 * t)
+# Etalon FSR at primary neon line (m) — uses air wavelength per design convention
+# FSR = lambda^2 / (2 * d)
 ETALON_FSR_NE1_M = NE_WAVELENGTH_1_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
-# = (640.2248e-9)^2 / (2 * 20.008e-3) ≈ 1.024e-11 m = 10.24 pm
+# = (640.2248e-9)^2 / (2 * 20.106e-3) ≈ 1.027e-11 m = 10.27 pm
 
-# Etalon FSR at OI 630.0304 nm (m)
+# Etalon FSR at OI 630 nm (m) — uses air wavelength per design convention
 ETALON_FSR_OI_M = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
-# = (630.0304e-9)^2 / (2 * 20.008e-3) ≈ 9.92e-12 m = 9.92 pm
+# = (630.0304e-9)^2 / (2 * 20.106e-3) ≈ 9.90e-12 m = 9.90 pm
 
 # Velocity equivalent of one FSR at OI 630 nm (m/s)
-# delta_v = c * FSR / lambda
-VELOCITY_PER_FSR_MS = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_AIR_M
-# ≈ 4720 m/s
+# Uses vacuum rest wavelength in denominator (canonical convention)
+VELOCITY_PER_FSR_MS = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_M
+# ≈ 4712 m/s
 
-# Neon line separation in wavelength (m) and in FSR units
-NE_DELTA_LAMBDA_M  = NE_WAVELENGTH_1_AIR_M - NE_WAVELENGTH_2_AIR_M   # 1.9257e-9 m
-NE_SEPARATION_FSR  = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M    # ≈ 187.9 FSR
-
-# CCD plate scale (= ALPHA_RAD_PX; provided here under the plate-scale name as well)
-PLATE_SCALE_RAD_PX = CCD_PIXEL_2X2_UM * 1e-6 / FOCAL_LENGTH_M   # = ALPHA_RAD_PX
+# Neon line separation in wavelength (m) and in FSR units — air wavelengths
+NE_DELTA_LAMBDA_M  = NE_WAVELENGTH_1_AIR_M - NE_WAVELENGTH_2_AIR_M   # ≈ 1.9257e-9 m
+NE_SEPARATION_FSR  = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M             # ≈ 187.4 FSR
 
 # =============================================================================
 # S04 — Quality Flags (bitmask convention)

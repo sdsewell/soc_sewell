@@ -111,11 +111,12 @@ class TolanskyResult:
     sigma_r_sq: np.ndarray   # 1σ uncertainty on r²  = 2r·σ_r
 
     # ── Weighted least-squares fit ──────────────────────────────────────────
-    slope:        float      # S = f² λ / (n d)
+    slope:        float      # S = Δ = f² λ / (n d)
     sigma_slope:  float      # 1σ uncertainty on S
     intercept:    float      # b = S(ε − 1)
     sigma_int:    float      # 1σ uncertainty on b
     r2_fit:       float      # coefficient of determination R²
+    chi2_dof:     float      # reduced chi-square  χ²/(N−2)
 
     # ── Derived diagnostics ─────────────────────────────────────────────────
     epsilon:       float       # fractional order at centre  (0 ≤ ε < 1)
@@ -253,12 +254,13 @@ class TolanskyAnalyser:
         sigma_S = np.sqrt(sw   / delta)
         sigma_b = np.sqrt(swxx / delta)
 
-        y_hat  = S * x + b
-        ss_res = (w * (y - y_hat)**2).sum()
-        ss_tot = (w * (y - swy / sw)**2).sum()
-        R2     = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        y_hat    = S * x + b
+        ss_res   = (w * (y - y_hat)**2).sum()
+        ss_tot   = (w * (y - swy / sw)**2).sum()
+        R2       = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        chi2_dof = ss_res / max(len(x) - 2, 1)
 
-        return S, sigma_S, b, sigma_b, R2
+        return S, sigma_S, b, sigma_b, R2, chi2_dof
 
     # ── Step 3: fractional order ε ────────────────────────────────────────────
 
@@ -329,7 +331,7 @@ class TolanskyAnalyser:
         """Execute all five steps and return a TolanskyResult."""
         r_sq, sigma_r_sq = self._derive_r_squared()
         w                = 1.0 / sigma_r_sq**2
-        S, sS, b, sb, R2 = self._wls(self.p, r_sq, w)
+        S, sS, b, sb, R2, chi2_dof = self._wls(self.p, r_sq, w)
         eps, seps        = self._epsilon(S, b, sS, sb)
         delta, sdelta    = self._successive_diffs(r_sq, sigma_r_sq)
         rec_d, sd, rec_lam, slam = self._recover(S, sS)
@@ -339,7 +341,7 @@ class TolanskyAnalyser:
             r_sq=r_sq, sigma_r_sq=sigma_r_sq,
             slope=S, sigma_slope=sS,
             intercept=b, sigma_int=sb,
-            r2_fit=R2,
+            r2_fit=R2, chi2_dof=chi2_dof,
             epsilon=eps, sigma_epsilon=seps,
             delta_r_sq=delta, sigma_delta=sdelta,
             recovered_d=rec_d,  sigma_d=sd,
@@ -354,6 +356,7 @@ class TolanskyAnalyser:
         if self.result is None:
             self.run()
         res = self.result
+        assert res is not None
         u, u2 = self.r_unit, f"{self.r_unit}²"
 
         hdr = (f"{'p':>4}  {'r':>10}  {'σ_r':>10}  "
@@ -374,11 +377,11 @@ class TolanskyAnalyser:
                   f"{res.r_sq[i]:>13.5f}  {res.sigma_r_sq[i]:>12.5f}  "
                   f"{ds}  {sds}")
         print(sep)
-        print(f"\n  Weighted linear fit:   r² = S · p + b")
-        print(f"    Slope       S = {res.slope:.6g} ± {res.sigma_slope:.6g}  {u2}/fringe")
-        print(f"    Intercept   b = {res.intercept:.6g} ± {res.sigma_int:.6g}  {u2}")
-        print(f"    R²            = {res.r2_fit:.7f}")
-        print(f"    ε (frac. order at centre) = {res.epsilon:.5f} ± {res.sigma_epsilon:.5f}")
+        print(f"\n  Weighted linear fit:   r² = Δ · p + b")
+        print(f"    Δ (slope)   = {res.slope:.6g} ± {2*res.sigma_slope:.6g}  {u2}/fringe  (2σ)")
+        print(f"    Intercept b = {res.intercept:.6g} ± {res.sigma_int:.6g}  {u2}")
+        print(f"    χ²_ν        = {res.chi2_dof:.4f}")
+        print(f"    ε (frac. order at centre) = {res.epsilon:.5f} ± {2*res.sigma_epsilon:.5f}  (2σ)")
         cv = res.delta_r_sq.std() / abs(res.delta_r_sq.mean()) * 100
         print(f"    Δ(r²) mean  = {res.delta_r_sq.mean():.6g}  "
               f"std = {res.delta_r_sq.std():.6g}  "
@@ -393,7 +396,8 @@ class TolanskyAnalyser:
 
     # ── Public: plot ──────────────────────────────────────────────────────────
 
-    def plot(self, save_path: Optional[str] = None) -> plt.Figure:
+    def plot(self, save_path: Optional[str] = None,
+             peaks_filename: Optional[str] = None) -> plt.Figure:
         """
         Four-panel diagnostic figure:
           A) Tolansky plot: r² vs p with weighted fit and ±1σ error bars
@@ -404,20 +408,21 @@ class TolanskyAnalyser:
         if self.result is None:
             self.run()
         res = self.result
+        assert res is not None
         u, u2 = self.r_unit, f"{self.r_unit}²"
 
-        DARK   = '#0d1117'
-        PANEL  = '#161b22'
-        BORDER = '#30363d'
-        ACCENT = '#58a6ff'
-        GREEN  = '#3fb950'
-        RED    = '#f85149'
-        YELLOW = '#d29922'
-        GRAY   = '#8b949e'
-        WHITE  = '#e6edf3'
+        BG     = 'white'
+        PANEL  = '#f6f8fa'
+        BORDER = '#d0d7de'
+        ACCENT = '#0969da'
+        GREEN  = '#1a7f37'
+        RED    = '#cf222e'
+        YELLOW = '#9a6700'
+        GRAY   = '#57606a'
+        TEXT   = '#1f2328'
 
-        fig = plt.figure(figsize=(14, 10), facecolor=DARK)
-        fig.patch.set_facecolor(DARK)
+        fig = plt.figure(figsize=(14, 10), facecolor=BG)
+        fig.patch.set_facecolor(BG)
         gs  = gridspec.GridSpec(2, 2, figure=fig,
                                 hspace=0.44, wspace=0.37,
                                 left=0.09, right=0.97,
@@ -429,12 +434,12 @@ class TolanskyAnalyser:
 
         for ax in [ax_tol, ax_res, ax_dr2, ax_txt]:
             ax.set_facecolor(PANEL)
-            ax.tick_params(colors=WHITE, which='both', direction='in')
+            ax.tick_params(colors=TEXT, which='both', direction='in')
             for sp in ax.spines.values():
                 sp.set_edgecolor(BORDER)
-            ax.xaxis.label.set_color(WHITE)
-            ax.yaxis.label.set_color(WHITE)
-            ax.title.set_color(WHITE)
+            ax.xaxis.label.set_color(TEXT)
+            ax.yaxis.label.set_color(TEXT)
+            ax.title.set_color(TEXT)
 
         p_fine    = np.linspace(res.p[0] - 0.3, res.p[-1] + 0.3, 300)
         fit_line  = res.slope * p_fine + res.intercept
@@ -451,9 +456,9 @@ class TolanskyAnalyser:
         ax_tol.set_xlabel("Fringe index  $p$", fontsize=11)
         ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
         ax_tol.set_title("A — Tolansky Plot", fontsize=11, fontweight='bold', pad=7)
-        ax_tol.legend(fontsize=8.5, facecolor=PANEL, labelcolor=WHITE,
+        ax_tol.legend(fontsize=8.5, facecolor=PANEL, labelcolor=TEXT,
                       edgecolor=BORDER, framealpha=0.9)
-        ax_tol.text(0.97, 0.05, f"$R^2 = {res.r2_fit:.6f}$",
+        ax_tol.text(0.97, 0.05, f"$\\chi^2_\\nu = {res.chi2_dof:.4f}$",
                     transform=ax_tol.transAxes,
                     ha='right', va='bottom', fontsize=9, color=GREEN)
 
@@ -474,7 +479,7 @@ class TolanskyAnalyser:
         ax_dr2.axhline(dmean, color=GREEN, lw=1.3, ls='--',
                        label=f"Mean = {dmean:.4g}")
         ax_dr2.axhline(res.slope, color=ACCENT, lw=1.0, ls=':',
-                       label=f"Slope S = {res.slope:.4g}")
+                       label=f"Δ = {res.slope:.4g}")
         ax_dr2.errorbar(p_mid, res.delta_r_sq, yerr=res.sigma_delta,
                         fmt='^', color=RED, ecolor=GRAY,
                         capsize=4, ms=7, lw=1.4, zorder=3)
@@ -482,7 +487,7 @@ class TolanskyAnalyser:
         ax_dr2.set_ylabel(f"$\\Delta(r^2)$  [{u2}]", fontsize=11)
         ax_dr2.set_title("C — Successive  $\\Delta(r^2)$",
                           fontsize=11, fontweight='bold', pad=7)
-        ax_dr2.legend(fontsize=8.5, facecolor=PANEL, labelcolor=WHITE,
+        ax_dr2.legend(fontsize=8.5, facecolor=PANEL, labelcolor=TEXT,
                       edgecolor=BORDER, framealpha=0.9)
         cv_col   = GREEN if cv < 2 else (YELLOW if cv < 5 else RED)
         cv_label = "✓ parallel" if cv < 5 else "⚠ check alignment"
@@ -493,7 +498,7 @@ class TolanskyAnalyser:
 
         # ── D: Summary ────────────────────────────────────────────────────────
         ax_txt.axis('off')
-        known_str = (f"λ = {self.lam_nm:.2f} nm  (known)"
+        known_str = ("OI 630.0304 nm  (vac, known)"
                      if self.lam_nm is not None
                      else f"d = {self.d:.6g} {u}  (known)")
         f_str = (f"f = {self.f:.6g} {u}"
@@ -507,29 +512,28 @@ class TolanskyAnalyser:
         else:
             rec_line = "(provide f to recover physical param)"
 
+        chi2_col = GREEN if 0.5 < res.chi2_dof < 2.0 else YELLOW
         lines = [
-            ("TOLANSKY SUMMARY",          WHITE,  11,   'bold'),
-            ("",                          WHITE,   3,   'normal'),
-            (f"N rings : {len(res.p)}",   GRAY,   9.5, 'normal'),
-            (f"n (gap) : {self.n:.3f}",   GRAY,   9.5, 'normal'),
-            (f"{f_str}",                  GRAY,   9.5, 'normal'),
-            (f"{known_str}",              GRAY,   9.5, 'normal'),
-            ("",                          WHITE,   3,   'normal'),
-            ("── Fit ──────────────────", BORDER, 8.5, 'normal'),
-            (f"S  = {res.slope:.5g} ± {res.sigma_slope:.3g}  {u2}/fr",
+            ("TOLANSKY SUMMARY",                        TEXT,     11,  'bold'),
+            ("",                                        TEXT,      3,  'normal'),
+            (f"N rings : {len(res.p)}",                 GRAY,    9.5,  'normal'),
+            (f"n (gap) : {self.n:.3f}",                 GRAY,    9.5,  'normal'),
+            (f"{f_str}",                                GRAY,    9.5,  'normal'),
+            (f"{known_str}",                            GRAY,    9.5,  'normal'),
+            ("",                                        TEXT,      3,  'normal'),
+            ("── WLS Fit ─────────────────────",        BORDER,  8.5,  'normal'),
+            (f"Δ     = {res.slope:.5g}  {u2}/fr",       ACCENT,  9.5,  'normal'),
+            (f"2σ_Δ  = ±{2*res.sigma_slope:.3g}  {u2}/fr",
              ACCENT, 9.5, 'normal'),
-            (f"b  = {res.intercept:.5g} ± {res.sigma_int:.3g}  {u2}",
-             ACCENT, 9.5, 'normal'),
-            (f"R² = {res.r2_fit:.7f}",
-             GREEN if res.r2_fit > 0.9999 else YELLOW, 9.5, 'normal'),
-            (f"ε  = {res.epsilon:.5f} ± {res.sigma_epsilon:.5f}",
-             ACCENT, 9.5, 'normal'),
+            (f"ε     = {res.epsilon:.5f}",              ACCENT,  9.5,  'normal'),
+            (f"2σ_ε  = ±{2*res.sigma_epsilon:.5f}",    ACCENT,  9.5,  'normal'),
+            (f"χ²_ν  = {res.chi2_dof:.4f}",            chi2_col, 9.5,  'normal'),
             (f"CV(Δr²) = {cv:.2f} %  "
              f"{'✓' if cv < 5 else '⚠'}",
              cv_col, 9.5, 'normal'),
-            ("",                          WHITE,   3,   'normal'),
-            ("── Recovered ───────────", BORDER,  8.5, 'normal'),
-            (rec_line,                    GREEN,  10,   'bold'),
+            ("",                                        TEXT,      3,  'normal'),
+            ("── Recovered ───────────────────",        BORDER,  8.5,  'normal'),
+            (rec_line,                                  GREEN,    10,  'bold'),
         ]
         y = 0.97
         for text, color, size, weight in lines:
@@ -540,10 +544,10 @@ class TolanskyAnalyser:
             y -= size * 0.013 + 0.010
 
         fig.suptitle("Tolansky Method  —  FPI Fringe Ring Analysis",
-                     color=WHITE, fontsize=13, fontweight='bold', y=0.97)
+                     color=TEXT, fontsize=13, fontweight='bold', y=0.97)
 
         if save_path:
-            fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=DARK)
+            fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=BG)
             print(f"  Figure saved → {save_path}")
         return fig
 
@@ -636,7 +640,7 @@ if __name__ == "__main__":
     PIXEL_M         = 32e-6             # pixel pitch  [m]
     F_PX            = 200e-3 / PIXEL_M  # focal length  [px] = 6250.00
     N_GAP           = 1.0               # refractive index (vacuum gap)
-    LAM_NM          = 630.0             # airglow emission wavelength [nm] — set as needed
+    LAM_NM          = 630.0304          # OI 630.0304 nm vacuum rest wavelength
     D_ICOS_MM       = 20.008            # ICOS mechanical measurement  [mm]
     D_PX            = D_ICOS_MM * 1e-3 / PIXEL_M   # [px] = 625.25
     LAM_UNIT_PER_NM = 1e-9 / PIXEL_M   # nm → px  = 3.125e-5
