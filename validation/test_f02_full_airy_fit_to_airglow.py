@@ -18,7 +18,7 @@ from src.fpi.f02_full_airy_fit_to_airglow_image_2026_04_21 import (
     fit_airglow_fringe,
 )
 from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, InstrumentParams
-from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
 from src.constants import (
     OI_WAVELENGTH_VACUUM_M,
     ETALON_FSR_OI_M,
@@ -122,8 +122,8 @@ def _make_m04_m03_profile(
     add_noise: bool = False,
     rng: np.random.Generator = None,
 ) -> FringeProfile:
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
 
     params = InstrumentParams(
         t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha,
@@ -355,7 +355,7 @@ def test_t09_real_airglow_frame(cal):
     """Real airglow frame (if available) must produce chi2_red < 3.0."""
     import pathlib
     import numpy as np
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
 
     path = pathlib.Path(REAL_AIRGLOW_PATH)
     assert path.exists(), f"Real airglow file not found: {path}"

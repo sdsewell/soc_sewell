@@ -15,10 +15,10 @@ from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     NE_WAVELENGTH_1_M,
 )
-from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
-from src.fpi.m03_annular_reduction_2026_04_06 import reduce_calibration_frame
+from src.fpi.archive.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_calibration_frame
 from src.fpi.tolansky_2026_04_05 import TolanskyPipeline, TwoLineResult
-from src.fpi.m05_calibration_inversion_2026_04_06 import (
+from src.fpi.archive.m05_calibration_inversion_2026_04_06 import (
     FitConfig,
     FitFlags,
     fit_calibration_fringe,
@@ -221,7 +221,7 @@ def test_flatsat_data():
     Run on real FlatSat calibration profile.
     Expected: t_m near 20.008e-3 m, R near 0.53, chi2 in [0.8, 3.0].
     """
-    from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile
     fp  = FringeProfile.load("data/flatsat_cal_profile.npz")
     tol = TolanskyPipeline(fp).run()
     config = FitConfig(tolansky=tol)

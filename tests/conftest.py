@@ -9,8 +9,8 @@ import numpy as np
 from src.fpi import InstrumentParams
 from windcube.constants import NE_WAVELENGTH_1_AIR_M as NE_WAVELENGTH_1_M
 from src.fpi.m02_calibration_synthesis_2026_05_05 import synthesise_calibration_image
-from src.fpi.m03_annular_reduction_2026_04_06 import annular_reduce
-from src.fpi.m05_calibration_inversion_2026_04_06 import (
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import annular_reduce
+from src.fpi.archive.m05_calibration_inversion_2026_04_06 import (
     fit_calibration_fringe,
     FitConfig,
 )
@@ -86,8 +86,8 @@ def synthetic_cal_result():
 @pytest.fixture
 def synthetic_airglow_profile():
     """A noiseless FringeProfile from a 100 m/s airglow image."""
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
 
     params  = InstrumentParams()
     sci_m04 = synthesise_airglow_image(

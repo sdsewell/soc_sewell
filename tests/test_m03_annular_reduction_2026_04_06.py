@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 
 from src.fpi import InstrumentParams
-from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
-from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-from src.fpi.m03_annular_reduction_2026_04_06 import (
+from src.fpi.archive.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
+from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import (
     FringeProfile,
     PeakFit,
     QualityFlags,

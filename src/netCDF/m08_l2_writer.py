@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 import netCDF4 as nc
 import numpy as np
 
-from windcube.constants import D_25C_MM, F_TOLANSKY_MM
+from windcube.constants import D_25C_MM
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +91,6 @@ def create_l2_file(
     ds.orbit_mode = "SSO dawn-dusk, LTAN 0600/1800 ± 1 hr"
     ds.orbit_altitude_km = np.float32(510.0)
     ds.etalon_gap_mm = np.float32(D_25C_MM)       # best mechanical estimate at 25°C
-    ds.focal_length_mm = np.float32(F_TOLANSKY_MM)  # Z01 two-line neon fit result
     ds.references = "Sewell et al. (in prep)"
     ds.acknowledgements = "NSF CubeSat program; NCAR/HAO"
 

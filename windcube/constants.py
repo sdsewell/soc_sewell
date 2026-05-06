@@ -7,7 +7,6 @@ here rather than hardcoding.
 Sources:
   OI_WAVELENGTH_NM    : NIST ASD (https://physics.nist.gov/PhysRefData/ASD/lines_form.html)
   OI_WAVELENGTH_VAC_NM: derived via Edlén (1966) air-to-vacuum formula
-  F_TOLANSKY_MM       : Z01 two-line neon Tolansky fit (FlatSat) — focal length only
   ALPHA_RAD_PX        : S13a two-line neon Tolansky fit (2x2 binned, 2026-05-06)
   D_TOLANSKY_MM       : S13a two-line neon Tolansky fit (Benoit, 2026-05-06)
   ICOS_GAP_MM         : ICOS mechanical spacer measurement
@@ -19,7 +18,6 @@ Sources:
   NE_WAVELENGTH_1_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
   NE_WAVELENGTH_2_NM      : Ne 6382.9914 A, IAU standard "S" (Burns 1950), air
   NE_WAVELENGTH_2_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
-  F_NOMINAL_MM        : COTS lens nominal focal length
   R_REFL              : FlatSat effective etalon reflectivity
   R_MAX_PX            : FlatSat/flight maximum fringe radius
 """
@@ -104,9 +102,6 @@ SIGMA_D_TOLANSKY_MM: float = 0.0002   # 1σ [mm]
 # Old value 1.6071e-4 rad/px superseded.
 ALPHA_RAD_PX:       float = 1.6085e-4
 SIGMA_ALPHA_RAD_PX: float = 1.3478e-8   # 1σ [rad/px]
-
-# COTS imaging lens nominal focal length [mm]
-F_NOMINAL_MM: float = 200.0
 
 # FlatSat effective etalon reflectivity (dimensionless)
 R_REFL: float = 0.53

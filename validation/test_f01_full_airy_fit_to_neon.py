@@ -18,7 +18,7 @@ from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_21 import (
     CalibrationResult,
 )
 from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, airy_ideal
-from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
 from src.constants import NE_WAVELENGTH_1_M, D_25C_MM, PLATE_SCALE_RPX
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ def test_t05_real_image():
     n = len(data) // 2
     image = np.array(struct.unpack(f"{n}H", data), dtype=np.float64).reshape(256, 256)
 
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_calibration_frame
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_calibration_frame
     fp  = reduce_calibration_frame(image, r_max_px=_R_MAX, n_bins=_N_BINS)
     tol = _make_tolansky()
     res = fit_neon_fringe(fp, tol)

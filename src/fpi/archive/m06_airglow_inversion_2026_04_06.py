@@ -438,7 +438,7 @@ def fit_airglow_fringe(
     RuntimeError
         If parameter stderrs are non-finite after pseudoinverse fallback.
     """
-    from src.fpi.m03_annular_reduction_2026_04_06 import QualityFlags
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import QualityFlags
 
     # ---- Step 0: Validate inputs ----
     if profile.quality_flags & QualityFlags.CENTRE_FAILED:

@@ -199,7 +199,7 @@ def test_10_global_attributes(l2_path):
         "processing_level", "pipeline_version", "git_sha",
         "date_created", "wavelength_nm", "emission_species",
         "orbit_mode", "orbit_altitude_km",
-        "etalon_gap_mm", "focal_length_mm",
+        "etalon_gap_mm",
         "references", "acknowledgements",
     ]
     with nc.Dataset(l2_path) as ds:

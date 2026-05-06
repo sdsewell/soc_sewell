@@ -5,7 +5,7 @@ Spec: docs/specs/S15_m06_airglow_inversion_2026-04-06.md
 import numpy as np
 import pytest
 
-from src.fpi.m06_airglow_inversion_2026_04_06 import (
+from src.fpi.archive.m06_airglow_inversion_2026_04_06 import (
     AirglowFitResult,
     AirglowFitFlags,
     fit_airglow_fringe,
@@ -51,7 +51,7 @@ def test_doppler_formula_consistency(synthetic_airglow_profile, synthetic_cal_re
 
 def test_zero_wind_recovery(synthetic_cal_result):
     """A zero-wind airglow image must recover v_rel within ±5 m/s."""
-    from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
     from src.fpi import airy_modified
 
     # Build the test profile directly from M06's forward model parameterisation,
@@ -121,8 +121,8 @@ def test_known_wind_round_trip(synthetic_cal_result):
     The 20 m/s tolerance accounts for grid discretisation in the synthetic
     image (same inverse-crime effect seen in M05).
     """
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi import InstrumentParams
 
     cal = synthetic_cal_result
@@ -159,8 +159,8 @@ def test_noisy_round_trip_uncertainty_calibrated(synthetic_cal_result):
     Noisy round-trip at SNR ≈ 5: recovered v_rel within 3σ of truth.
     Also verify chi2_reduced ∈ [0.5, 3.0].
     """
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi import InstrumentParams
 
     cal = synthetic_cal_result
@@ -199,8 +199,8 @@ def test_scan_prevents_fsr_confusion(synthetic_cal_result):
     Inject v_rel = -300 m/s (blueshifted). The brute-force scan must find
     the correct λ_c; without it, LM starting from λ₀ would drift by ~4723 m/s.
     """
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi import InstrumentParams
 
     cal = synthetic_cal_result
@@ -233,7 +233,7 @@ def test_scan_prevents_fsr_confusion(synthetic_cal_result):
 
 def test_centre_failed_raises(synthetic_cal_result):
     """fit_airglow_fringe must raise ValueError for CENTRE_FAILED profile."""
-    from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
     import dataclasses
 
     # Build a minimal bad profile — just enough fields to reach the flag check
@@ -253,8 +253,8 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
     """
     At SNR ≈ 5, sigma_v_rel should be ≤ 2 × STM budget (9.8 m/s).
     """
-    from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
-    from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
+    from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import reduce_science_frame
     from src.fpi import InstrumentParams
 
     cal = synthetic_cal_result

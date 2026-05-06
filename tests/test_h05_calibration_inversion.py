@@ -12,7 +12,7 @@ import pytest
 
 from src.fpi import InstrumentParams
 from src.fpi.m02_calibration_synthesis_2026_05_05 import synthesise_calibration_image
-from src.fpi.m03_annular_reduction_2026_04_06 import annular_reduce
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import annular_reduce
 from src.fpi.m05_calibration_inversion_2026_05_05 import (
     CalibrationResult,
     FitConfig,
@@ -244,7 +244,7 @@ def test_flatsat_data():
     Run on real FlatSat calibration profile.
     Expected: t_m near 20.008e-3 m, R near 0.53, chi2 in [0.8, 3.0].
     """
-    from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile
     from src.two_d_one_d_reduction.tolansky import TolanskyPipeline
 
     fp  = FringeProfile.load("data/flatsat_cal_profile.npz")

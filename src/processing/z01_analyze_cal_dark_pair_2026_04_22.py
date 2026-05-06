@@ -36,7 +36,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.metadata.p01_image_metadata_2026_04_06 import ingest_real_image  # noqa: E402
-from src.fpi.m03_annular_reduction_2026_04_06 import (  # noqa: E402
+from src.fpi.archive.m03_annular_reduction_2026_04_06 import (  # noqa: E402
     azimuthal_variance_centre,
     estimate_centre_uncertainty,
     _variance_cost,

@@ -17,7 +17,7 @@ from windcube.constants import (
     NE_WAVELENGTH_1_AIR_M as NE_WAVELENGTH_1_M,
     NE_WAVELENGTH_2_AIR_M as NE_WAVELENGTH_2_M,
 )
-from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
+from src.fpi.archive.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
 
 
 # ---------------------------------------------------------------------------

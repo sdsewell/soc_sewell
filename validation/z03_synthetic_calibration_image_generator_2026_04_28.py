@@ -38,7 +38,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.fpi.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
+from src.fpi.archive.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
 
 # ---------------------------------------------------------------------------
 # Module-level fixed constants (§7)

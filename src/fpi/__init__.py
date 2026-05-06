@@ -20,27 +20,9 @@ from src.fpi.m02_calibration_synthesis_2026_05_05 import (  # noqa: F401
     radial_profile_to_image,
     synthesise_calibration_image,
 )
-from src.fpi.m03_annular_reduction_2026_04_06 import (  # noqa: F401
-    CentreResult,
-    FringeProfile,
-    PeakFit,
-    QualityFlags,
-    annular_reduce,
-    azimuthal_variance_centre,
-    coarse_centre_com,
-    estimate_centre_uncertainty,
-    find_centre,
-    make_master_dark,
-    reduce_calibration_frame,
-    reduce_science_frame,
-    resolve_seed,
-    subtract_dark,
-)
-from src.fpi.m04_airglow_synthesis_2026_04_05 import (  # noqa: F401
+from src.fpi.m03_airglow_synthesis_2026_05_05 import (  # noqa: F401
     add_gaussian_noise,
-    lambda_c_to_v_rel,
     synthesise_airglow_image,
-    v_rel_to_lambda_c,
 )
 from src.fpi.m05_calibration_inversion_2026_05_05 import (  # noqa: F401
     CalibrationResult,
@@ -52,12 +34,4 @@ from src.fpi.m06_airglow_inversion_2026_05_05 import (  # noqa: F401
     AirglowFitFlags,
     AirglowFitResult,
     fit_airglow_fringe,
-)
-from src.fpi.m07_wind_retrieval_2026_04_06 import (  # noqa: F401
-    WindObservation,
-    WindResult,
-    WindResultFlags,
-    compute_sensitivity_coefficients,
-    pair_observations,
-    retrieve_wind_vectors,
 )
