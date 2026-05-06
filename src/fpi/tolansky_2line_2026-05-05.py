@@ -683,8 +683,7 @@ def plot_tolansky_result(
     # Each entry: (text, color, size, weight, fontstyle, extra_gap_before)
     # extra_gap_before adds a small visual separator before section headers
     lines_txt = [
-        ("TWO-LINE TOLANSKY SUMMARY",                                  BLACK,   10.5, "bold",   "normal", 0.00),
-        ("── Family assignment ─────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
+        ("── Family assignment ─────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.00),
         (f"  N rings: {r.n_peaks_total} total"
          f"  ({r.n_rings_a} line a + {r.n_rings_b} line b)"
          f"   NaN dropped: {r.n_nan_dropped}",                         GRAY,    8.5,  "normal", "normal", 0.00),
