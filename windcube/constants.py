@@ -157,3 +157,10 @@ ALPHA_RAD_PER_PX: float = 1.6071e-4        # rad / binned pixel
 ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit
 TANGENT_ALTITUDE_M: float = 250_000.0     # m, nominal thermospheric tangent height
 VER_LAYER_TOP_M:    float = 490_000.0     # m, upper bound of emission layer for LOS integration
+
+# --- Observation regime velocity bounds (H03) ---
+# Cross-track (even orbits): thermospheric wind projected onto LOS
+V_REL_CROSSTRACK_MAX_MS  =  1000.0   # m/s; symmetric: valid range [-1000, +1000]
+# Along-track (odd orbits): spacecraft orbital velocity + wind projected onto LOS
+V_REL_ALONGTRACK_MIN_MS  = -8000.0   # m/s; lower bound (maximum blueshift)
+V_REL_ALONGTRACK_MAX_MS  = -6000.0   # m/s; upper bound (minimum blueshift)

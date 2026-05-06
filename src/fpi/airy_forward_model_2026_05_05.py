@@ -268,17 +268,18 @@ def airy_modified(
 def build_instrument_matrix(
     r: np.ndarray,           # radial bin centres, pixels, shape (R,)
     wavelengths: np.ndarray, # wavelength bin centres, metres, shape (L,)
-    t: float,
-    R_refl: float,
-    alpha: float,
-    n: float,
-    r_max: float,
-    I0: float,
-    I1: float,
-    I2: float,
-    sigma0: float,
-    sigma1: float,
-    sigma2: float,
+    t,                       # float gap (m) OR InstrumentParams (duck-typing)
+    R_refl: float = None,
+    alpha: float = None,
+    n: float = None,
+    r_max: float = None,
+    I0: float = None,
+    I1: float = None,
+    I2: float = None,
+    sigma0: float = None,
+    sigma1: float = None,
+    sigma2: float = None,
+    n_subpixels: int = 1,    # accepted for API compatibility; currently unused
 ) -> np.ndarray:
     """
     Build the instrument matrix A of shape (R, L).
@@ -288,17 +289,28 @@ def build_instrument_matrix(
         s = A @ y + B    (Harding Eq. 16)
     where y is the source spectrum (counts/m), B is the CCD bias vector.
 
+    Supports two calling conventions:
+      build_instrument_matrix(r, wavelengths, t, R_refl, alpha, ...)   # 13-arg
+      build_instrument_matrix(r, wavelengths, params, n_subpixels=N)   # InstrumentParams
+
     Parameters
     ----------
     r           : radial bin centres in pixels, shape (R,)
     wavelengths : wavelength bin centres in metres, shape (L,)
                   Use L=101 for inversion, L=300 for synthesis.
+    n_subpixels : accepted for API compatibility; not used in computation.
 
     Returns
     -------
     A : np.ndarray, shape (R, L)
         All values >= 0. No NaN or Inf for valid inputs.
     """
+    if hasattr(t, "R_refl"):  # duck-type: InstrumentParams-like object
+        p = t
+        t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
+        r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
+        sigma0, sigma1, sigma2 = p.sigma0, p.sigma1, p.sigma2
+
     R_bins = len(r)
     L_bins = len(wavelengths)
     A = np.zeros((R_bins, L_bins))
