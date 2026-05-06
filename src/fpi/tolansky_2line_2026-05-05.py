@@ -566,11 +566,19 @@ def plot_tolansky_result(
     int_a = r.Delta_a * (r.eps_a - 1.0)
     int_b = r.Delta_b * (r.eps_b - 1.0)
     p_all  = np.concatenate([p_a, p_b])
-    p_fine = np.linspace(p_all.min() - 0.3, p_all.max() + 0.3, 300)
+    # Extend fit lines from p=0 so x-intercepts (where r²=0) are visible
+    p_fine = np.linspace(0.0, p_all.max() + 0.3, 300)
     fit_a  = r.Delta_a * p_fine + int_a
     fit_b  = r.Delta_b * p_fine + int_b
 
+    # x-intercepts: r²=0 → p = 1 − ε
+    p_int_a = 1.0 - r.eps_a
+    p_int_b = 1.0 - r.eps_b
+    data_max = max(r.r2_a.max(), r.r2_b.max()) * 1.05
+    y_min_tol = -0.05 * data_max   # small negative margin to show intercepts
+
     # ── A: Joint Tolansky plot ────────────────────────────────────────────────
+    ax_tol.axhline(0, color=GRAY, lw=0.7, ls=":", zorder=0)
     ax_tol.errorbar(p_a, r.r2_a, yerr=r.sigma_r2_a,
                     fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
                     lw=1.4, zorder=3,
@@ -583,13 +591,26 @@ def plot_tolansky_result(
                 label=f"Fit a:  Δ_a = {r.Delta_a:.4g}")
     ax_tol.plot(p_fine, fit_b, color=ORANGE, lw=1.8, ls="--", zorder=2,
                 label=f"Fit b:  Δ_b = {r.Delta_b:.4g}")
+    # Mark r²=0 intercepts with vertical tick marks and labels
+    ax_tol.scatter([p_int_a], [0], color=BLUE,   s=60, zorder=5,
+                   marker="|", linewidths=2.0)
+    ax_tol.scatter([p_int_b], [0], color=ORANGE, s=60, zorder=5,
+                   marker="|", linewidths=2.0)
+    ax_tol.text(p_int_a, y_min_tol * 0.75,
+                f"1−ε_a={p_int_a:.3f}", ha="center", va="top",
+                fontsize=8, color=BLUE, fontfamily="monospace")
+    ax_tol.text(p_int_b, y_min_tol * 0.75,
+                f"1−ε_b={p_int_b:.3f}", ha="center", va="top",
+                fontsize=8, color=ORANGE, fontfamily="monospace")
+    ax_tol.set_xlim(-0.2, p_all.max() + 0.5)
+    ax_tol.set_ylim(y_min_tol, data_max)
+    ax_tol.set_xticks(range(0, int(p_all.max()) + 1))
     ax_tol.set_xlabel("Fringe index  $p$", fontsize=11)
     ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
     ax_tol.set_title("A — Tolansky Plot  (both neon lines)",
                       fontsize=11, fontweight="bold", pad=7)
     ax_tol.legend(fontsize=8, facecolor="white", labelcolor=BLACK,
                   edgecolor=BLACK, framealpha=0.9, ncol=2)
-    chi2_mean = 0.5 * (r.chi2_dof_a + r.chi2_dof_b)
     ax_tol.text(0.97, 0.05,
                 f"$\\chi^2/\\nu$:  a={r.chi2_dof_a:.3f},  b={r.chi2_dof_b:.3f}",
                 transform=ax_tol.transAxes,
@@ -659,54 +680,51 @@ def plot_tolansky_result(
     chi_col_a = GREEN if r.chi2_dof_a < 2 else "goldenrod"
     chi_col_b = GREEN if r.chi2_dof_b < 2 else "goldenrod"
 
+    # Each entry: (text, color, size, weight, extra_gap_before)
+    # extra_gap_before adds a small visual separator before section headers
     lines_txt = [
-        ("TWO-LINE TOLANSKY SUMMARY",         BLACK,  11,   "bold"),
-        ("",                                  BLACK,   3,   "normal"),
-        ("── Family assignment ────────────",  GRAY,   8.5, "normal"),
-        (f"N rings total: {r.n_peaks_total}  "
-         f"(NaN dropped: {r.n_nan_dropped})",  GRAY,   9,   "normal"),
-        (f"Line a (640.2248 nm): {r.n_rings_a} rings",  BLUE,   9,   "normal"),
-        (f"Line b (638.2991 nm): {r.n_rings_b} rings",  ORANGE, 9,   "normal"),
-        (f"Y_B_obs = {r.Y_B_obs:.3f}  "
-         f"{'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}",
-         yb_col, 9, "normal"),
-        ("",                                  BLACK,   3,   "normal"),
-        ("── WLS fit results ──────────────",  GRAY,   8.5, "normal"),
-        (f"Δ_a = {r.Delta_a:.4g} ± {r.sigma_Delta_a:.3g}  px²/fr"
-         f"   χ²/ν={r.chi2_dof_a:.2f}",       BLUE,   9,   "normal"),
-        (f"ε_a = {r.eps_a:.6f} ± {r.sigma_eps_a:.2g}", BLUE, 9, "normal"),
-        (f"Δ_b = {r.Delta_b:.4g} ± {r.sigma_Delta_b:.3g}  px²/fr"
-         f"   χ²/ν={r.chi2_dof_b:.2f}",       ORANGE, 9,   "normal"),
-        (f"ε_b = {r.eps_b:.6f} ± {r.sigma_eps_b:.2g}", ORANGE, 9, "normal"),
-        (f"Δ_a/Δ_b = {r.Delta_ratio_obs:.6f}  "
-         f"(λ_a/λ_b = {r.Delta_ratio_expected:.6f},"
-         f"  Δ={ratio_ppm:.0f} ppm)",
-         ratio_col, 8.5, "normal"),
-        ("",                                  BLACK,   3,   "normal"),
-        ("── Benoit recovery ──────────────",  GRAY,   8.5, "normal"),
-        (f"N_Δ  = {r.N_Delta}   "
-         f"(ε_a − ε_b = {r.eps_a - r.eps_b:+.6f})",
-         BLACK, 9, "normal"),
-        (f"d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
-         f"   (2σ: ±{sig2_d_mm:.4f})",         GREEN,  9.5, "bold"),
-        ("",                                  BLACK,   3,   "normal"),
-        ("── Plate scale ──────────────────",  GRAY,   8.5, "normal"),
-        (f"α_a = {r.alpha_a:.4e} rad/px",     BLUE,   9,   "normal"),
-        (f"α_b = {r.alpha_b:.4e} rad/px",     ORANGE, 9,   "normal"),
-        (f"α   = {r.alpha_mean:.4e} ± {r.sigma_alpha:.2e} rad/px"
-         f"  (2σ: ±{r.two_sigma_alpha:.2e})",  "purple", 9.5, "bold"),
-        (f"consistency: {r.alpha_consistency*1e6:.1f} ppm  "
-         f"{'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
-         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal"),
+        ("TWO-LINE TOLANSKY SUMMARY",                                  BLACK,   10.5, "bold",   0.00),
+        ("── Family assignment ─────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+        (f"  N rings: {r.n_peaks_total} total"
+         f"  ({r.n_rings_a} line a + {r.n_rings_b} line b)"
+         f"   NaN dropped: {r.n_nan_dropped}",                         GRAY,    8.5,  "normal", 0.00),
+        (f"  Y_B_obs = {r.Y_B_obs:.3f}"
+         f"   {'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}"
+         f"   amp_threshold = {r.amp_threshold:.0f} ADU",              yb_col,  8.5,  "normal", 0.00),
+        ("── WLS fit results ───────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+        (f"  Δ_a = {r.Delta_a:.5g} ± {r.sigma_Delta_a:.3g} px²/fr"
+         f"   ε_a = {r.eps_a:.6f} ± {r.sigma_eps_a:.2g}"
+         f"   χ²/ν = {r.chi2_dof_a:.3f}",                             BLUE,    8.5,  "normal", 0.00),
+        (f"  Δ_b = {r.Delta_b:.5g} ± {r.sigma_Delta_b:.3g} px²/fr"
+         f"   ε_b = {r.eps_b:.6f} ± {r.sigma_eps_b:.2g}"
+         f"   χ²/ν = {r.chi2_dof_b:.3f}",                             ORANGE,  8.5,  "normal", 0.00),
+        (f"  Δ_a/Δ_b = {r.Delta_ratio_obs:.6f}"
+         f"   λ_a/λ_b = {r.Delta_ratio_expected:.6f}"
+         f"   Δ = {ratio_ppm:.0f} ppm"
+         f"   {'[PASS]' if ratio_ppm<200 else '[WARN]'}",             ratio_col, 8.5, "normal", 0.00),
+        ("── Benoit recovery ───────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+        (f"  N_Δ = {r.N_Delta}"
+         f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", 0.00),
+        (f"  d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
+         f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   0.00),
+        ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+        (f"  α_a = {r.alpha_a:.4e} rad/px"
+         f"   α_b = {r.alpha_b:.4e} rad/px",                          BLACK,   8.5,  "normal", 0.00),
+        (f"  α   = {r.alpha_mean:.4e} ± {r.sigma_alpha:.2e} rad/px"
+         f"   (2σ: ±{r.two_sigma_alpha:.2e})",                        "purple", 9.5, "bold",   0.00),
+        (f"  consistency: {r.alpha_consistency*1e6:.1f} ppm"
+         f"   {'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
+         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal", 0.00),
     ]
 
     y = 0.98
-    for text, color, size, weight in lines_txt:
-        ax_txt.text(0.04, y, text, transform=ax_txt.transAxes,
+    for text, color, size, weight, gap in lines_txt:
+        y -= gap
+        ax_txt.text(0.02, y, text, transform=ax_txt.transAxes,
                     ha="left", va="top", fontsize=size,
                     color=color, fontweight=weight,
                     fontfamily="monospace")
-        y -= size * 0.013 + 0.009
+        y -= size * 0.010 + 0.005
 
     fig.suptitle(
         "Tolansky Two-Line Analysis  "
