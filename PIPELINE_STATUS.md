@@ -14,6 +14,7 @@
 | S11  | M04         | impl   | passing  | 2026-04-06    |
 | S12  | M03         | impl   | passing  | 2026-04-06    |
 | S13  | Tolansky    | impl   | passing  | 2026-04-06    |
+| S13a | tolansky_2line_2026-05-05 | impl | 7/7 | 2026-05-05 |
 | S13b | tolansky_1line_2026-05-05 | impl | 6/6 | 2026-05-05 |
 | S14  | M05         | impl   | passing  | 2026-04-06    |
 | S15  | M06         | impl   | 8/8      | 2026-04-21    |
