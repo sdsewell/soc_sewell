@@ -42,7 +42,7 @@ from src.fpi.m04_airglow_synthesis_2026_04_05 import (  # noqa: F401
     synthesise_airglow_image,
     v_rel_to_lambda_c,
 )
-from src.fpi.m05_calibration_inversion_2026_04_06 import (  # noqa: F401
+from src.fpi.m05_calibration_inversion_2026_05_05 import (  # noqa: F401
     CalibrationResult,
     FitConfig,
     FitFlags,
