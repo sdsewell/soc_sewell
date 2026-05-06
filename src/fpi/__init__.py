@@ -15,7 +15,7 @@ from src.fpi.airy_forward_model_2026_05_05 import (  # noqa: F401
     psf_sigma,
     theta_from_r,
 )
-from src.fpi.m02_calibration_synthesis_2026_04_05 import (  # noqa: F401
+from src.fpi.m02_calibration_synthesis_2026_05_05 import (  # noqa: F401
     add_poisson_noise,
     radial_profile_to_image,
     synthesise_calibration_image,

@@ -208,22 +208,26 @@ def psf_sigma(
 
 
 def airy_modified(
-    r: np.ndarray,        # radial positions, pixels, shape (R,)
-    wavelength: float,    # wavelength, metres
-    t: float,             # etalon gap, metres
-    R_refl: float,        # plate reflectivity
-    alpha: float,         # magnification constant, rad/pixel
-    n: float,             # index of refraction
-    r_max: float,         # maximum radius, pixels
-    I0: float,            # average intensity
-    I1: float,            # linear vignetting
-    I2: float,            # quadratic vignetting
-    sigma0: float,        # average PSF width, pixels
-    sigma1: float,        # sine PSF variation
-    sigma2: float,        # cosine PSF variation
+    r: np.ndarray,
+    wavelength: float,
+    t_or_params,          # float (etalon gap, m) OR InstrumentParams
+    R_refl: float = None,
+    alpha: float = None,
+    n: float = None,
+    r_max: float = None,
+    I0: float = None,
+    I1: float = None,
+    I2: float = None,
+    sigma0: float = None,
+    sigma1: float = None,
+    sigma2: float = None,
 ) -> np.ndarray:
     """
     PSF-broadened Airy function at a single wavelength.
+
+    Accepts two calling conventions:
+      airy_modified(r, lam, params)               — 3-arg (H01 §6 spec form)
+      airy_modified(r, lam, t, R_refl, ..., sigma2) — 13-arg legacy form
 
     Applies a shift-variant Gaussian convolution to the ideal Airy
     function. Uses the mean sigma across the profile as the filter width
@@ -236,6 +240,13 @@ def airy_modified(
     -------
     A_mod : PSF-broadened CCD counts, shape (R,)
     """
+    if hasattr(t_or_params, "R_refl"):  # duck-type: any InstrumentParams-like object
+        p = t_or_params
+        t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
+        r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
+        sigma0, sigma1, sigma2 = p.sigma0, p.sigma1, p.sigma2
+    else:
+        t = t_or_params
     A_ideal = airy_ideal(r, wavelength, t, R_refl, alpha, n, r_max, I0, I1, I2)
     sigma = psf_sigma(r, r_max, sigma0, sigma1, sigma2)
     sigma_mean = float(np.mean(sigma))
