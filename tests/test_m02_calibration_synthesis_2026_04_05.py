@@ -11,7 +11,7 @@ All constants imported from M01, not from M02 directly.
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     NE_INTENSITY_2,
     NE_WAVELENGTH_1_M,

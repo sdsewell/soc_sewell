@@ -15,7 +15,7 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import least_squares
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     NE_WAVELENGTH_1_M,
     NE_WAVELENGTH_2_M,
     NE_INTENSITY_2,

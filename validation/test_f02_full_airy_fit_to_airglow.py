@@ -17,7 +17,7 @@ from src.fpi.f02_full_airy_fit_to_airglow_image_2026_04_21 import (
     AirglowFitResult,
     fit_airglow_fringe,
 )
-from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified, InstrumentParams
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, InstrumentParams
 from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
 from src.constants import (
     OI_WAVELENGTH_VACUUM_M,
@@ -309,7 +309,7 @@ def test_t08_sign_convention(cal):
     inward (smaller r).  Verify that injecting v=+200 m/s produces a profile
     whose peak is at strictly smaller r than the v=0 profile.
     """
-    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified as _am
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified as _am
 
     r_max = 128.0
     n_fine = 2000

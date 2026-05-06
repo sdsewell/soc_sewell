@@ -52,7 +52,7 @@ def test_doppler_formula_consistency(synthetic_airglow_profile, synthetic_cal_re
 def test_zero_wind_recovery(synthetic_cal_result):
     """A zero-wind airglow image must recover v_rel within ±5 m/s."""
     from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
-    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified
 
     # Build the test profile directly from M06's forward model parameterisation,
     # bypassing the M04→M03 pipeline.  This avoids the "inverse crime" systematic
@@ -123,7 +123,7 @@ def test_known_wind_round_trip(synthetic_cal_result):
     """
     from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
     cal = synthetic_cal_result
     params = InstrumentParams(
@@ -161,7 +161,7 @@ def test_noisy_round_trip_uncertainty_calibrated(synthetic_cal_result):
     """
     from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
     cal = synthetic_cal_result
     params = InstrumentParams(
@@ -201,7 +201,7 @@ def test_scan_prevents_fsr_confusion(synthetic_cal_result):
     """
     from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
     cal = synthetic_cal_result
     params = InstrumentParams(
@@ -255,7 +255,7 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
     """
     from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
     from src.fpi.m03_annular_reduction_2026_04_06 import reduce_science_frame
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
 
     cal = synthetic_cal_result
     params = InstrumentParams(

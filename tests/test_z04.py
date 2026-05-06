@@ -60,7 +60,7 @@ _save_csv                 = _z04._save_csv
 @pytest.fixture(scope="module")
 def priors():
     """InstrumentParams + CalibrationResult, built once per test session."""
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
     cal    = _build_calibration_result()
     params = InstrumentParams()
     return {"params": params, "cal": cal}

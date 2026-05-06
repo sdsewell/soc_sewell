@@ -77,7 +77,7 @@ if str(_REPO) not in sys.path:
 
 # ── pipeline imports ─────────────────────────────────────────────────────────
 try:
-    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified
     _M01_AVAILABLE = True
 except ImportError:
     _M01_AVAILABLE = False

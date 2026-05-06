@@ -939,7 +939,7 @@ def stage_j_calibration(cal_results: dict, checks_d: list):
     ax01.legend(fontsize=8)
 
     # Panel (1,0): M05 Airy fit vs data
-    from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified, NE_WAVELENGTH_1_M
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, NE_WAVELENGTH_1_M
     r_fit  = fp_cal.r_grid
     model  = airy_modified(
         r_fit, NE_WAVELENGTH_1_M,

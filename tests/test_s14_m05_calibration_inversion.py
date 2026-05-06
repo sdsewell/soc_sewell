@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     NE_WAVELENGTH_1_M,
 )

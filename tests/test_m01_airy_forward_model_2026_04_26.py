@@ -19,7 +19,7 @@ Spec deviations (reported to user):
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_26 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_26 import (
     InstrumentParams,
     airy_ideal,
     airy_modified,

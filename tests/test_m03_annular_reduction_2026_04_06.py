@@ -9,7 +9,7 @@ Run with:    pytest tests/test_m03_annular_reduction_2026_04_06.py -v
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
 from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
 from src.fpi.m04_airglow_synthesis_2026_04_05 import synthesise_airglow_image
 from src.fpi.m03_annular_reduction_2026_04_06 import (

@@ -9,7 +9,7 @@ Run with:    pytest tests/test_m01_airy_forward_model_2026_04_05.py -v
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     airy_ideal,
     airy_modified,

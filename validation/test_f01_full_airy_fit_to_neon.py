@@ -17,7 +17,7 @@ from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_21 import (
     CalibrationFitFlags,
     CalibrationResult,
 )
-from src.fpi.m01_airy_forward_model_2026_04_05 import airy_modified, airy_ideal
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, airy_ideal
 from src.fpi.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
 from src.constants import NE_WAVELENGTH_1_M, D_25C_MM, PLATE_SCALE_RPX
 
@@ -252,7 +252,7 @@ def test_t05_real_image():
 
 def test_t06_zero_psf_identity():
     """airy_modified with sigma0=sigma1=sigma2=0 must equal airy_ideal."""
-    from src.fpi.m01_airy_forward_model_2026_04_05 import InstrumentParams
+    from src.fpi.archive.m01_airy_forward_model_2026_04_05 import InstrumentParams
     p   = InstrumentParams(sigma0=0.0, sigma1=0.0, sigma2=0.0)
     r   = np.linspace(0.0, p.r_max, 300)
     lam = NE_WAVELENGTH_1_M

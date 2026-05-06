@@ -9,7 +9,7 @@ Run with:    pytest tests/test_m04_airglow_synthesis_2026_04_05.py -v
 import numpy as np
 import pytest
 
-from src.fpi.m01_airy_forward_model_2026_04_05 import (
+from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     InstrumentParams,
     OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
