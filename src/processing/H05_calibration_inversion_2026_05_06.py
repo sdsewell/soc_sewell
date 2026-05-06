@@ -50,7 +50,7 @@ from typing import Optional
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.fpi.airy_forward_model_2026_05_06 import (   # noqa: E402
+from src.fpi.airy_forward_model_2026_05_05 import (   # noqa: E402
     InstrumentParams,
     airy_modified,
     phase_correct_gap,
@@ -107,27 +107,40 @@ class _TolanskyShim:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_profile(path: pathlib.Path, r_max_px: float):
+def _load_profile(
+    path: pathlib.Path, r_max_px: float
+) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
-    Load a .npy profile file tabulated vs r² and return (r_grid, profile_adu).
+    Load a .npy profile file tabulated vs r².
+
+    Returns (r_grid, profile_adu, sigma_adu_or_none).
+    sigma_adu_or_none is None when the file does not contain a SEM row;
+    callers should fall back to _estimate_sigma() in that case.
 
     Accepted shapes:
-      (N,)   — profile only; r² inferred as linspace(0, r_max²*N/(N-1), N)
-               This is a last resort — always prefer an explicit r² axis.
+      (N,)   — profile only; r² inferred as linspace(0, r_max², N)
+               Last resort — always prefer an explicit r² axis.
       (2, N) — row 0 = r² (px²), row 1 = profile (ADU)
+      (3, N) — row 0 = r² (px²), row 1 = profile (ADU), row 2 = SEM (ADU)
+               Preferred format produced by annular_reduction.py.
       (N, 2) — col 0 = r² (px²), col 1 = profile (ADU)
     """
     arr = np.load(path)
+    sigma: Optional[np.ndarray] = None
 
     if arr.ndim == 1:
         log.warning(
             "Profile is 1D — no explicit r² axis. "
             "Inferring r² as linspace(0, r_max², N). "
-            "Prefer saving as (2,N) with explicit r² column."
+            "Prefer saving as (3,N) with explicit r² and SEM rows."
         )
         n    = len(arr)
         r2   = np.linspace(0.0, r_max_px ** 2, n)
         prof = arr.astype(float)
+    elif arr.ndim == 2 and arr.shape[0] == 3:
+        r2    = arr[0].astype(float)
+        prof  = arr[1].astype(float)
+        sigma = arr[2].astype(float)
     elif arr.ndim == 2 and arr.shape[0] == 2:
         r2   = arr[0].astype(float)
         prof = arr[1].astype(float)
@@ -137,11 +150,11 @@ def _load_profile(path: pathlib.Path, r_max_px: float):
     else:
         raise ValueError(
             f"Unexpected array shape {arr.shape}. "
-            "Expected (N,), (2,N), or (N,2)."
+            "Expected (N,), (2,N), (3,N), or (N,2)."
         )
 
     r_grid = np.sqrt(np.maximum(r2, 0.0))   # convert r² → r (pixels)
-    return r_grid, prof
+    return r_grid, prof, sigma
 
 
 def _estimate_sigma(profile: np.ndarray) -> np.ndarray:
@@ -441,12 +454,14 @@ def main():
           f"(should be ε_a = {eps_a:.6f})")
 
     # ---- 4. Load profile and build FringeProfile shim --------------------
-    r_grid, profile_adu = _load_profile(npy_path, r_max_px)
+    r_grid, profile_adu, sigma_loaded = _load_profile(npy_path, r_max_px)
 
     # Restrict to r <= r_max_px
-    in_range = r_grid <= r_max_px
+    in_range    = r_grid <= r_max_px
     r_grid      = r_grid[in_range]
     profile_adu = profile_adu[in_range]
+    if sigma_loaded is not None:
+        sigma_loaded = sigma_loaded[in_range]
 
     if len(r_grid) < 30:
         raise ValueError(
@@ -454,8 +469,18 @@ def main():
             "check r_max or file format."
         )
 
-    sigma_adu = _estimate_sigma(profile_adu)
-    masked    = np.zeros(len(r_grid), dtype=bool)  # no bins masked
+    if sigma_loaded is not None:
+        # Replace non-finite SEM (masked/sparse bins) with estimated fallback
+        bad = ~np.isfinite(sigma_loaded)
+        if bad.any():
+            sigma_loaded[bad] = _estimate_sigma(profile_adu)[bad]
+        sigma_adu = sigma_loaded
+        print(f"  SEM loaded from file ({bad.sum()} bins estimated by fallback)")
+    else:
+        sigma_adu = _estimate_sigma(profile_adu)
+        print("  SEM estimated from local scatter (no SEM row in file)")
+
+    masked = np.zeros(len(r_grid), dtype=bool)  # no bins masked
 
     fp = _FringeProfile(
         profile       = profile_adu,

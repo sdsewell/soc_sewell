@@ -34,10 +34,11 @@ Outputs (all saved alongside the input .npy, sharing its stem)
       with the (2, N) branch of that script's array-shape handling.
 
   <stem>_profile_vs_r2.npy
-      2-D float64 array, shape (2, n_bins).
-        row 0 : r2_grid (px²) — bin-centre radii squared
-        row 1 : profile (ADU) — mean intensity per bin
-      Same layout as _profile_vs_r.npy; x-axis is r² for Tolansky analysis.
+      2-D float64 array, shape (3, n_bins).
+        row 0 : r2_grid       (px²) — bin-centre radii squared
+        row 1 : profile       (ADU) — mean intensity per bin
+        row 2 : sigma_profile (ADU) — SEM per bin (np.inf for masked/sparse bins)
+      x-axis is r² for Tolansky/H05 calibration inversion analysis.
 
   <stem>_peak_fits.npy
       2-D float64 array, one row per detected fringe peak.  9 columns:
@@ -841,8 +842,8 @@ def main() -> None:
 
     profile_r2_path = src.with_name(src.stem + "_profile_vs_r2.npy")
     np.save(profile_r2_path,
-            np.array([fp.r2_grid, fp.profile], dtype=np.float64))
-    print(f"Profile vs r²  saved : {profile_r2_path}  shape (2, {fp.n_bins})")
+            np.array([fp.r2_grid, fp.profile, fp.sigma_profile], dtype=np.float64))
+    print(f"Profile vs r²  saved : {profile_r2_path}  shape (3, {fp.n_bins})")
 
     # -- Plotting --------------------------------------------------------------
     n_peaks    = len(fp.peak_fits)
