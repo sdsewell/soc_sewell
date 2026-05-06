@@ -48,7 +48,7 @@ from src.fpi.m05_calibration_inversion_2026_05_05 import (  # noqa: F401
     FitFlags,
     fit_calibration_fringe,
 )
-from src.fpi.m06_airglow_inversion_2026_04_06 import (  # noqa: F401
+from src.fpi.m06_airglow_inversion_2026_05_05 import (  # noqa: F401
     AirglowFitFlags,
     AirglowFitResult,
     fit_airglow_fringe,
