@@ -393,12 +393,20 @@ def _load_profile(path, r_max_px):
 
 
 def _estimate_sigma(profile):
-    n, half = len(profile), 2
-    sigma = np.empty(n)
-    for i in range(n):
-        lo, hi = max(0, i - half), min(n, i + half + 1)
-        sigma[i] = float(np.std(profile[lo:hi]))
-    return np.maximum(sigma, max(1.0, float(np.median(profile)) * 0.005))
+    """
+    Per-bin 1σ uncertainty estimate.
+
+    Uses sqrt(signal) Poisson noise as the primary estimate — physically
+    correct for a photon-counting EMCCD.  A minimum floor of 1 ADU is
+    applied to prevent division-by-zero in bins with very low signal.
+
+    The old rolling-std estimator produced nearly identical sigma values
+    at every bin, making the LM Jacobian near-singular and causing the
+    covariance matrix (and all reported 1σ uncertainties) to collapse to
+    zero.  Poisson-based sigma varies with signal level, which keeps the
+    Jacobian well-conditioned.
+    """
+    return np.maximum(np.sqrt(np.maximum(profile, 1.0)), 1.0)
 
 
 # ---------------------------------------------------------------------------
