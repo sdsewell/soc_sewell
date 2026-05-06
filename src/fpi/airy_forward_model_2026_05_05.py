@@ -154,7 +154,7 @@ def intensity_envelope(
 def airy_ideal(
     r: np.ndarray,
     wavelength: float,
-    t_or_params,          # float (etalon gap, m) OR InstrumentParams
+    t,          # float (etalon gap, m) OR InstrumentParams
     R_refl: float = None,
     alpha: float = None,
     n: float = None,
@@ -179,12 +179,10 @@ def airy_ideal(
     -------
     A : CCD counts, shape (R,), values in [I(r)/(1+F), I(r)]
     """
-    if hasattr(t_or_params, "R_refl"):  # duck-type: any InstrumentParams-like object
-        p = t_or_params
+    if hasattr(t, "R_refl"):  # duck-type: any InstrumentParams-like object
+        p = t
         t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
         r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
-    else:
-        t = t_or_params
     theta = theta_from_r(r, alpha)
     I_env = intensity_envelope(r, r_max, I0, I1, I2)
     F = 4.0 * R_refl / (1.0 - R_refl) ** 2
@@ -220,7 +218,7 @@ def psf_sigma(
 def airy_modified(
     r: np.ndarray,
     wavelength: float,
-    t_or_params,          # float (etalon gap, m) OR InstrumentParams
+    t,          # float (etalon gap, m) OR InstrumentParams
     R_refl: float = None,
     alpha: float = None,
     n: float = None,
@@ -250,13 +248,11 @@ def airy_modified(
     -------
     A_mod : PSF-broadened CCD counts, shape (R,)
     """
-    if hasattr(t_or_params, "R_refl"):  # duck-type: any InstrumentParams-like object
-        p = t_or_params
+    if hasattr(t, "R_refl"):  # duck-type: any InstrumentParams-like object
+        p = t
         t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
         r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
         sigma0, sigma1, sigma2 = p.sigma0, p.sigma1, p.sigma2
-    else:
-        t = t_or_params
     A_ideal = airy_ideal(r, wavelength, t, R_refl, alpha, n, r_max, I0, I1, I2)
     sigma = psf_sigma(r, r_max, sigma0, sigma1, sigma2)
     sigma_mean = float(np.mean(sigma))

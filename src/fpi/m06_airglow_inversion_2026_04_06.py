@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 import numpy as np
 from scipy.optimize import least_squares
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified
+from src.fpi import airy_modified
 from src.constants import (
     OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,

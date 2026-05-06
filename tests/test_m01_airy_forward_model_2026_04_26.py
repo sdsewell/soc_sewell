@@ -19,7 +19,7 @@ Spec deviations (reported to user):
 import numpy as np
 import pytest
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_26 import (
+from src.fpi import (
     InstrumentParams,
     airy_ideal,
     airy_modified,
@@ -27,10 +27,10 @@ from src.fpi.archive.m01_airy_forward_model_2026_04_26 import (
     intensity_envelope,
     make_wavelength_grid,
     psf_sigma,
-    OI_WAVELENGTH_M,
     make_ne_spectrum,
     make_airglow_spectrum,
 )
+from windcube.constants import OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M
 
 
 # ---------------------------------------------------------------------------

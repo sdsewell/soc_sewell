@@ -15,11 +15,11 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import least_squares
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
-    NE_WAVELENGTH_1_M,
-    NE_WAVELENGTH_2_M,
+from src.fpi import airy_modified
+from windcube.constants import (
+    NE_WAVELENGTH_1_AIR_M as NE_WAVELENGTH_1_M,
+    NE_WAVELENGTH_2_AIR_M as NE_WAVELENGTH_2_M,
     NE_INTENSITY_2,
-    airy_modified,
 )
 from src.constants import (
     ETALON_GAP_M,

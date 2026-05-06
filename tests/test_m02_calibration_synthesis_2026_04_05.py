@@ -11,12 +11,11 @@ All constants imported from M01, not from M02 directly.
 import numpy as np
 import pytest
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
-    InstrumentParams,
+from src.fpi import InstrumentParams, airy_modified
+from windcube.constants import (
     NE_INTENSITY_2,
-    NE_WAVELENGTH_1_M,
-    NE_WAVELENGTH_2_M,
-    airy_modified,
+    NE_WAVELENGTH_1_AIR_M as NE_WAVELENGTH_1_M,
+    NE_WAVELENGTH_2_AIR_M as NE_WAVELENGTH_2_M,
 )
 from src.fpi.m02_calibration_synthesis_2026_04_05 import synthesise_calibration_image
 

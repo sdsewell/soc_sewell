@@ -9,9 +9,9 @@ Run with:    pytest tests/test_m04_airglow_synthesis_2026_04_05.py -v
 import numpy as np
 import pytest
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
-    InstrumentParams,
-    OI_WAVELENGTH_M,
+from src.fpi import InstrumentParams
+from windcube.constants import (
+    OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
 )
 from src.fpi.m04_airglow_synthesis_2026_04_05 import (

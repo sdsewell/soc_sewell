@@ -9,7 +9,7 @@ Run with:    pytest tests/test_m01_airy_forward_model_2026_04_05.py -v
 import numpy as np
 import pytest
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
+from src.fpi import (
     InstrumentParams,
     airy_ideal,
     airy_modified,
@@ -17,8 +17,8 @@ from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
     intensity_envelope,
     make_wavelength_grid,
     psf_sigma,
-    OI_WAVELENGTH_M,
 )
+from windcube.constants import OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M
 
 
 # ---------------------------------------------------------------------------

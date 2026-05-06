@@ -13,13 +13,12 @@ Design note: OI 630 nm source is a spectral delta function.
 
 import numpy as np
 
-from src.fpi.archive.m01_airy_forward_model_2026_04_05 import (
-    InstrumentParams,
-    OI_WAVELENGTH_M,
+from src.fpi import InstrumentParams, airy_modified
+from src.fpi.m02_calibration_synthesis_2026_05_05 import radial_profile_to_image
+from windcube.constants import (
+    OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
-    airy_modified,
 )
-from src.fpi.m02_calibration_synthesis_2026_04_05 import radial_profile_to_image
 
 
 def v_rel_to_lambda_c(
