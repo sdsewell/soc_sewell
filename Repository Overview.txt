@@ -38,7 +38,7 @@
     Niciejewski et al. (1992) SPIE 1745
     Mulligan (1986) J. Phys. E 19, 545
 
-5) tolansky_2_line.py
+5) tolansky_2line.py
     Follows Vaughan and uses Benoit's method of exact fractions to extract an accurate value for etalon gap
     'd' given the two well known wavelengths present in the neon calibraton lamp (and which are passed by
     the 640 +/- 5 nm bandpass filter)

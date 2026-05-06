@@ -1,8 +1,7 @@
 """
-tolansky.py
+tolansky-2line.py
 ===========
 Standalone Tolansky method for Fabry-Perot Interferometer characterisation.
-
 (example calibration data contained in 2027-01-01T00-00-00Z_science_ROI_L1.1_peak_fits.npy)
 
 INPUT
@@ -11,8 +10,6 @@ A table of fringe measurements :
     p        : fringe index array  (1 = innermost ring, 2, 3, ...)
     r        : ring radius array   [any consistent length unit, e.g. mm or px]
     sigma_r  : 1-sigma uncertainty on each radius measurement (same unit as r)
-
-The code derives:
     r_sq       = r²
     sigma_r_sq = 2 r · sigma_r        (first-order Gaussian propagation)
 
