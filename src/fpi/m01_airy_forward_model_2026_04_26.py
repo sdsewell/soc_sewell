@@ -46,7 +46,7 @@ OXYGEN_MASS_KG     = 2.6567e-26     # kg, one O-16 atom (S03)
 # Neon calibration lamp lines
 NE_WAVELENGTH_1_M  = 640.2248e-9    # m, primary Ne line (S03)
 NE_WAVELENGTH_2_M  = 638.2991e-9    # m, secondary Ne line (S03)
-NE_INTENSITY_2     = 0.8            # relative intensity of secondary line
+NE_INTENSITY_2     = 0.36           # relative intensity of secondary line (weak/strong)
 
 
 # ---------------------------------------------------------------------------
