@@ -152,21 +152,25 @@ def intensity_envelope(
 
 
 def airy_ideal(
-    r: np.ndarray,        # radial positions, pixels, shape (R,)
-    wavelength: float,    # wavelength, metres
-    t: float,             # etalon gap, metres
-    R_refl: float,        # plate reflectivity, dimensionless
-    alpha: float,         # magnification constant, rad/pixel
-    n: float,             # index of refraction (1.0 for air gap)
-    r_max: float,         # maximum radius, pixels
-    I0: float,            # average intensity, counts
-    I1: float,            # linear vignetting coefficient
-    I2: float,            # quadratic vignetting coefficient
+    r: np.ndarray,
+    wavelength: float,
+    t_or_params,          # float (etalon gap, m) OR InstrumentParams
+    R_refl: float = None,
+    alpha: float = None,
+    n: float = None,
+    r_max: float = None,
+    I0: float = None,
+    I1: float = None,
+    I2: float = None,
 ) -> np.ndarray:
     """
     Ideal (unbroadened) Airy transmission function at a single wavelength.
 
     A(r; λ) = I(r) / [1 + F · sin²(π · 2nt·cos(θ(r)) / λ)]
+
+    Accepts two calling conventions:
+      airy_ideal(r, lam, params)                    — 3-arg (H01 §6 spec form)
+      airy_ideal(r, lam, t, R_refl, ..., I2)        — 10-arg legacy form
 
     Uses exact cosine (not small-angle approximation).
     Finesse coefficient F = 4R/(1-R)² computed internally.
@@ -175,6 +179,12 @@ def airy_ideal(
     -------
     A : CCD counts, shape (R,), values in [I(r)/(1+F), I(r)]
     """
+    if hasattr(t_or_params, "R_refl"):  # duck-type: any InstrumentParams-like object
+        p = t_or_params
+        t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
+        r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
+    else:
+        t = t_or_params
     theta = theta_from_r(r, alpha)
     I_env = intensity_envelope(r, r_max, I0, I1, I2)
     F = 4.0 * R_refl / (1.0 - R_refl) ** 2

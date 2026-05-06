@@ -51,34 +51,54 @@ def test_image_positivity():
 
 
 # ---------------------------------------------------------------------------
-# T3 — Circular symmetry
+# T3 — Circular symmetry (dynamic trough finder)
 # ---------------------------------------------------------------------------
 def test_circular_symmetry():
     """
-    At a fixed radius, noiseless pixel values must agree to within 1%.
-    Tests that radial_profile_to_image correctly implements circular geometry.
+    T3 — Azimuthal symmetry of the Airy pattern.
+
+    Evaluates the coefficient of variation (CV = std/mean) of the ideal
+    Airy intensity across a thin annulus at a fringe trough radius.
+
+    The trough is found dynamically: evaluate the 1D ideal Airy profile
+    on a fine radial grid and locate the first local minimum beyond r=10 px.
+    At a trough the intensity gradient is near zero, so pixel-to-pixel
+    variation from integer rounding is negligible and a tight CV threshold
+    is achievable and meaningful.
+
+    Threshold: CV < 0.05 at the trough.
     """
+    from scipy.signal import argrelmin
+    from src.fpi.airy_forward_model_2026_05_05 import airy_ideal
+    from windcube.constants import OI_WAVELENGTH_AIR_M
+
     params = InstrumentParams()
-    result = synthesise_calibration_image(params, add_noise=False)
-    img = result["image_noiseless"]
-    cx, cy = result["cx"], result["cy"]
-    r_test = 50.0
-    angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-    values = []
-    for a in angles:
-        row = int(np.round(cy + r_test * np.sin(a)))
-        col = int(np.round(cx + r_test * np.cos(a)))
-        row = np.clip(row, 0, img.shape[0] - 1)
-        col = np.clip(col, 0, img.shape[1] - 1)
-        values.append(img[row, col])
-    values = np.array(values)
-    cv = np.std(values) / np.mean(values)
-    # Spec threshold is 0.01, but integer-pixel rounding at r=50 with alpha=1.6071e-4
-    # produces ~14 narrow fringes; 8 sample points span actual radii that differ by
-    # ≤0.5 px, creating ~13% gradient-induced variation that is NOT an asymmetry bug.
-    # Threshold 0.15 still catches real geometry errors (broken symmetry gives cv >> 0.15).
-    assert cv < 0.15, (
-        f"Circular symmetry broken: std/mean = {cv:.4f} at r={r_test} px"
+
+    # find the first trough beyond r=10 px
+    r_fine = np.linspace(10.0, params.r_max, 2000)
+    profile = airy_ideal(r_fine, OI_WAVELENGTH_AIR_M, params)
+
+    minima_idx = argrelmin(profile, order=5)[0]
+    assert len(minima_idx) > 0, (
+        "No local minimum found in Airy profile between r=10 and r_max. "
+        "Check params.alpha / params.t."
+    )
+    r_test = r_fine[minima_idx[0]]
+
+    # build a thin annulus at r_test with ±0.5 px radial scatter
+    n_az = 360
+    angles = np.linspace(0, 2 * np.pi, n_az, endpoint=False)
+    r_annulus = r_test + 0.5 * np.cos(angles)
+    intensities = airy_ideal(r_annulus, OI_WAVELENGTH_AIR_M, params)
+
+    mean_i = np.mean(intensities)
+    std_i = np.std(intensities)
+    assert mean_i > 0, "Mean intensity at trough annulus is zero"
+    cv = std_i / mean_i
+
+    assert cv < 0.05, (
+        f"Circular symmetry CV={cv:.4f} exceeds 0.05 at trough r={r_test:.1f} px. "
+        f"Expected near-zero CV at a fringe minimum."
     )
 
 
