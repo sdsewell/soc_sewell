@@ -576,6 +576,7 @@ def plot_tolansky_result(
     p_int_b = 1.0 - r.eps_b
     data_max = max(r.r2_a.max(), r.r2_b.max()) * 1.05
     y_min_tol = -0.05 * data_max   # small negative margin to show intercepts
+    ratio_ppm = r.Delta_ratio_residual * 1e6
 
     # ── A: Joint Tolansky plot ────────────────────────────────────────────────
     ax_tol.axhline(0, color=GRAY, lw=0.7, ls=":", zorder=0)
@@ -609,12 +610,21 @@ def plot_tolansky_result(
     ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
     ax_tol.set_title("A — Tolansky Plot  (both neon lines)",
                       fontsize=11, fontweight="bold", pad=7)
-    ax_tol.legend(fontsize=8, facecolor="white", labelcolor=BLACK,
-                  edgecolor=BLACK, framealpha=0.9, ncol=2)
-    ax_tol.text(0.97, 0.05,
-                f"$\\chi^2/\\nu$:  a={r.chi2_dof_a:.3f},  b={r.chi2_dof_b:.3f}",
-                transform=ax_tol.transAxes,
-                ha="right", va="bottom", fontsize=8.5, color=GREEN)
+    _tol_leg = ax_tol.legend(fontsize=8, facecolor="white", labelcolor=BLACK,
+                             edgecolor=BLACK, framealpha=0.9, ncol=2, loc="upper left")
+    _wls_ann = (
+        f"WLS fit results\n"
+        f"  Δ_a={r.Delta_a:.5g}±{r.sigma_Delta_a:.3g} px²/fr"
+        f"  ε_a={r.eps_a:.5f}±{r.sigma_eps_a:.2g}"
+        f"  χ²/ν={r.chi2_dof_a:.3f}\n"
+        f"  Δ_b={r.Delta_b:.5g}±{r.sigma_Delta_b:.3g} px²/fr"
+        f"  ε_b={r.eps_b:.5f}±{r.sigma_eps_b:.2g}"
+        f"  χ²/ν={r.chi2_dof_b:.3f}\n"
+        f"  Δ_a/Δ_b={r.Delta_ratio_obs:.6f}"
+        f"  λ_a/λ_b={r.Delta_ratio_expected:.6f}"
+        f"  Δ={ratio_ppm:.0f} ppm"
+        f"  {'[PASS]' if ratio_ppm < 200 else '[WARN]'}"
+    )
 
     # ── B: Residuals ──────────────────────────────────────────────────────────
     resid_a = r.r2_a - (r.Delta_a * p_a + int_a)
@@ -674,7 +684,6 @@ def plot_tolansky_result(
     d_mm      = r.d_m * 1e3
     sig_d_mm  = r.sigma_d_m * 1e3
     sig2_d_mm = r.two_sigma_d_m * 1e3
-    ratio_ppm = r.Delta_ratio_residual * 1e6
     ratio_col = GREEN if ratio_ppm < 200 else RED
     yb_col    = GREEN if 0.15 <= r.Y_B_obs <= 0.60 else RED
     chi_col_a = GREEN if r.chi2_dof_a < 2 else "goldenrod"
@@ -689,17 +698,6 @@ def plot_tolansky_result(
         (f"  Y_B_obs = {r.Y_B_obs:.3f}"
          f"   {'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}"
          f"   amp_threshold = {r.amp_threshold:.0f} ADU",              yb_col,  8.5,  "normal", "normal", 0.00),
-        ("── WLS fit results ───────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
-        (f"  Δ_a = {r.Delta_a:.5g} ± {r.sigma_Delta_a:.3g} px²/fr"
-         f"   ε_a = {r.eps_a:.6f} ± {r.sigma_eps_a:.2g}"
-         f"   χ²/ν = {r.chi2_dof_a:.3f}",                             BLUE,    8.5,  "normal", "normal", 0.00),
-        (f"  Δ_b = {r.Delta_b:.5g} ± {r.sigma_Delta_b:.3g} px²/fr"
-         f"   ε_b = {r.eps_b:.6f} ± {r.sigma_eps_b:.2g}"
-         f"   χ²/ν = {r.chi2_dof_b:.3f}",                             ORANGE,  8.5,  "normal", "normal", 0.00),
-        (f"  Δ_a/Δ_b = {r.Delta_ratio_obs:.6f}"
-         f"   λ_a/λ_b = {r.Delta_ratio_expected:.6f}"
-         f"   Δ = {ratio_ppm:.0f} ppm"
-         f"   {'[PASS]' if ratio_ppm<200 else '[WARN]'}",             ratio_col, 8.5, "normal", "normal", 0.00),
         ("── Benoit recovery ───────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
         ("  d = (N_Δ + ε_a−ε_b)·λ_a·λ_b / [2·n·(λ_b−λ_a)]",          GRAY,    8.0,  "normal", "italic", 0.00),
         (f"  N_Δ = {r.N_Delta}"
@@ -725,6 +723,18 @@ def plot_tolansky_result(
                     color=color, fontweight=weight, fontstyle=style,
                     fontfamily="monospace")
         y -= size * 0.010 + 0.005
+
+    # Place WLS annotation flush below the legend bottom edge
+    fig.canvas.draw()
+    _renderer = fig.canvas.get_renderer()
+    _leg_bb   = _tol_leg.get_window_extent(_renderer)
+    _leg_y0   = ax_tol.transAxes.inverted().transform((0, _leg_bb.y0))[1]
+    ax_tol.text(0.02, _leg_y0, _wls_ann,
+                transform=ax_tol.transAxes,
+                ha="left", va="top", fontsize=7.5,
+                color=BLACK, fontfamily="monospace",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          edgecolor=GRAY, alpha=0.85))
 
     fig.suptitle(
         "Tolansky Two-Line Analysis  "
