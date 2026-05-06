@@ -93,7 +93,7 @@ _STAGE_FREE = {
     1: ['I0', 'I1', 'I2', 'B'],
     2: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'B'],
     3: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'sigma0', 'B'],
-    4: _NAMES,   # all 12
+    4: [n for n in _NAMES if n != 'sigma2'],   # 11 free; sigma2 fixed at Stage 3 value
 }
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ def run_staged_inversion(fp: _FringeProfile,
     chi2_by_stage.append(chi2_3)
     log.info(f"  χ²/ν = {chi2_3:.3f}   sigma0 = {p_all[_IDX['sigma0']]:.4f} px")
 
-    log.info("Stage 4 — full free optimisation (all 12 params)")
+    log.info("Stage 4 — full free optimisation (11 params; sigma2 fixed)")
     p_all, cov4, se4, chi2_4, res4 = _run_stage(
         r_good, p_good, s_good, r_max, p_all, _STAGE_FREE[4], bounds, cfg)
     chi2_by_stage.append(chi2_4)
@@ -338,6 +338,13 @@ def run_staged_inversion(fp: _FringeProfile,
 
     eps_cal       = (2.0 * t_f / NE_WAVELENGTH_1_AIR_M) % 1.0
     sigma_eps_cal = (2.0 / NE_WAVELENGTH_1_AIR_M) * float(se4[_IDX['t_m']])
+    sigma_eps_cal = (2.0 / NE_WAVELENGTH_1_AIR_M) * float(se4[_IDX['t_m']])
+
+    # --- Diagnostic: print raw stderr values before display rounding ---
+    
+    log.info(f"  RAW stderrs from Stage 4 covariance:")
+    for name in _NAMES:
+        log.info(f"    sigma_{name} = {se4[_IDX[name]]:.6e}")
 
     return FitResult12(
         t_m=float(t_f),     alpha=float(alpha_f),
