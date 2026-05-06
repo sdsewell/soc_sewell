@@ -680,49 +680,51 @@ def plot_tolansky_result(
     chi_col_a = GREEN if r.chi2_dof_a < 2 else "goldenrod"
     chi_col_b = GREEN if r.chi2_dof_b < 2 else "goldenrod"
 
-    # Each entry: (text, color, size, weight, extra_gap_before)
+    # Each entry: (text, color, size, weight, fontstyle, extra_gap_before)
     # extra_gap_before adds a small visual separator before section headers
     lines_txt = [
-        ("TWO-LINE TOLANSKY SUMMARY",                                  BLACK,   10.5, "bold",   0.00),
-        ("── Family assignment ─────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+        ("TWO-LINE TOLANSKY SUMMARY",                                  BLACK,   10.5, "bold",   "normal", 0.00),
+        ("── Family assignment ─────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
         (f"  N rings: {r.n_peaks_total} total"
          f"  ({r.n_rings_a} line a + {r.n_rings_b} line b)"
-         f"   NaN dropped: {r.n_nan_dropped}",                         GRAY,    8.5,  "normal", 0.00),
+         f"   NaN dropped: {r.n_nan_dropped}",                         GRAY,    8.5,  "normal", "normal", 0.00),
         (f"  Y_B_obs = {r.Y_B_obs:.3f}"
          f"   {'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}"
-         f"   amp_threshold = {r.amp_threshold:.0f} ADU",              yb_col,  8.5,  "normal", 0.00),
-        ("── WLS fit results ───────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+         f"   amp_threshold = {r.amp_threshold:.0f} ADU",              yb_col,  8.5,  "normal", "normal", 0.00),
+        ("── WLS fit results ───────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
         (f"  Δ_a = {r.Delta_a:.5g} ± {r.sigma_Delta_a:.3g} px²/fr"
          f"   ε_a = {r.eps_a:.6f} ± {r.sigma_eps_a:.2g}"
-         f"   χ²/ν = {r.chi2_dof_a:.3f}",                             BLUE,    8.5,  "normal", 0.00),
+         f"   χ²/ν = {r.chi2_dof_a:.3f}",                             BLUE,    8.5,  "normal", "normal", 0.00),
         (f"  Δ_b = {r.Delta_b:.5g} ± {r.sigma_Delta_b:.3g} px²/fr"
          f"   ε_b = {r.eps_b:.6f} ± {r.sigma_eps_b:.2g}"
-         f"   χ²/ν = {r.chi2_dof_b:.3f}",                             ORANGE,  8.5,  "normal", 0.00),
+         f"   χ²/ν = {r.chi2_dof_b:.3f}",                             ORANGE,  8.5,  "normal", "normal", 0.00),
         (f"  Δ_a/Δ_b = {r.Delta_ratio_obs:.6f}"
          f"   λ_a/λ_b = {r.Delta_ratio_expected:.6f}"
          f"   Δ = {ratio_ppm:.0f} ppm"
-         f"   {'[PASS]' if ratio_ppm<200 else '[WARN]'}",             ratio_col, 8.5, "normal", 0.00),
-        ("── Benoit recovery ───────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+         f"   {'[PASS]' if ratio_ppm<200 else '[WARN]'}",             ratio_col, 8.5, "normal", "normal", 0.00),
+        ("── Benoit recovery ───────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
+        ("  d = (N_Δ + ε_a−ε_b)·λ_a·λ_b / [2·n·(λ_b−λ_a)]",          GRAY,    8.0,  "normal", "italic", 0.00),
         (f"  N_Δ = {r.N_Delta}"
-         f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", 0.00),
+         f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", "normal", 0.00),
         (f"  d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
-         f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   0.00),
-        ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", 0.01),
+         f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   "normal", 0.00),
+        ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
+        ("  α_a = √(λ_a·n_air / (d·Δ_a))",                             GRAY,    8.0,  "normal", "italic", 0.00),
         (f"  α_a = {r.alpha_a:.4e} rad/px"
-         f"   α_b = {r.alpha_b:.4e} rad/px",                          BLACK,   8.5,  "normal", 0.00),
+         f"   α_b = {r.alpha_b:.4e} rad/px",                          BLACK,   8.5,  "normal", "normal", 0.00),
         (f"  α   = {r.alpha_mean:.4e} ± {r.sigma_alpha:.2e} rad/px"
-         f"   (2σ: ±{r.two_sigma_alpha:.2e})",                        "purple", 9.5, "bold",   0.00),
+         f"   (2σ: ±{r.two_sigma_alpha:.2e})",                        "purple", 9.5, "bold",   "normal", 0.00),
         (f"  consistency: {r.alpha_consistency*1e6:.1f} ppm"
          f"   {'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
-         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal", 0.00),
+         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal", "normal", 0.00),
     ]
 
     y = 0.98
-    for text, color, size, weight, gap in lines_txt:
+    for text, color, size, weight, style, gap in lines_txt:
         y -= gap
         ax_txt.text(0.02, y, text, transform=ax_txt.transAxes,
                     ha="left", va="top", fontsize=size,
-                    color=color, fontweight=weight,
+                    color=color, fontweight=weight, fontstyle=style,
                     fontfamily="monospace")
         y -= size * 0.010 + 0.005
 
