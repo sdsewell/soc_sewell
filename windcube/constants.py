@@ -5,16 +5,20 @@ All values are authoritative for the pipeline; modules must import from
 here rather than hardcoding.
 
 Sources:
-  OI_WAVELENGTH_NM    : NIST atomic line database
+  OI_WAVELENGTH_NM    : NIST ASD (https://physics.nist.gov/PhysRefData/ASD/lines_form.html)
+  OI_WAVELENGTH_VAC_NM: derived via Edlén (1966) air-to-vacuum formula
   F_TOLANSKY_MM       : Z01 two-line neon Tolansky fit (FlatSat) — focal length only
-  ALPHA_RAD_PX        : Z01 two-line neon Tolansky fit (2x2 binned)
+  ALPHA_RAD_PX        : S13a two-line neon Tolansky fit (2x2 binned, 2026-05-06)
+  D_TOLANSKY_MM       : S13a two-line neon Tolansky fit (Benoit, 2026-05-06)
   ICOS_GAP_MM         : ICOS mechanical spacer measurement
   D_25C_MM            : ICOS_GAP_MM minus Pat & Nir pre-load compression
   D_PRELOAD_NM        : Pat & Nir clamping compression (Zerodur spacer)
   ETALON_THERMAL_NM_C : Measured Zerodur thermal expansion coefficient
   CCD_PIXEL_PITCH_M   : 2x2 binned pixel pitch (16 um native x 2)
-  NE_WAVELENGTH_1_NM  : Ne 6402.2460 A, IAU standard "S" (Burns 1950)
-  NE_WAVELENGTH_2_NM  : Ne 6382.9914 A, IAU standard "S" (Burns 1950)
+  NE_WAVELENGTH_1_NM      : Ne 6402.2460 A, IAU standard "S" (Burns 1950), air
+  NE_WAVELENGTH_1_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
+  NE_WAVELENGTH_2_NM      : Ne 6382.9914 A, IAU standard "S" (Burns 1950), air
+  NE_WAVELENGTH_2_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
   F_NOMINAL_MM        : COTS lens nominal focal length
   R_REFL              : FlatSat effective etalon reflectivity
   R_MAX_PX            : FlatSat/flight maximum fringe radius
@@ -26,10 +30,10 @@ Sources:
 # ---------------------------------------------------------------------------
 
 # Etalon / optics
-ETALON_GAP_M        : float = 20.008e-3      # m  — ICOS build report (authoritative for H01)
-ETALON_N            : float = 1.0            # —  — refractive index of etalon gap (air)
-ETALON_R_INSTRUMENT : float = 0.53          # —  — effective reflectivity (FlatSat)
-# ALPHA_RAD_PX defined below in opto-mechanical section (1.6071e-4 rad/px)
+ETALON_GAP_M        : float = 20.1071e-3    # m  — S13a Tolansky Benoit (2026-05-06); 1σ = 0.0002 mm
+ETALON_N            : float = 1.0           # —  — refractive index of etalon gap (air)
+ETALON_R_INSTRUMENT : float = 0.53         # —  — effective reflectivity (FlatSat)
+# ALPHA_RAD_PX defined below in opto-mechanical section (1.6085e-4 rad/px)
 
 # CCD / FOV
 CCD_PIXELS_UNBINNED : int   = 512           # px — physical pixels per side (CCD97)
@@ -38,11 +42,13 @@ FOV_DEG             : float = 1.65          # deg — full field of view
 # OI airglow target line
 OI_WAVELENGTH_AIR_M : float = 630.0304e-9  # m  — NIST ASD air wavelength (rest)
 
-# Neon calibration lines (Burns et al. 1950 IAU standards, air wavelengths)
-NE_WAVELENGTH_1_AIR_M : float = 640.2248e-9  # m  — strong line
-NE_WAVELENGTH_2_AIR_M : float = 638.2991e-9  # m  — weak line
-NE_INTENSITY_1        : float = 1.0          # —  — reference intensity ratio
-NE_INTENSITY_2        : float = 0.36         # —  — weak/strong ratio
+# Neon calibration lines — air wavelengths (Burns 1950) and vacuum (NIST ASD / Edlén 1966)
+NE_WAVELENGTH_1_AIR_M : float = 640.2248e-9   # m  — strong line, air
+NE_WAVELENGTH_1_VAC_M : float = 640.4018e-9   # m  — strong line, vacuum (±0.0001 nm)
+NE_WAVELENGTH_2_AIR_M : float = 638.2991e-9   # m  — weak line, air
+NE_WAVELENGTH_2_VAC_M : float = 638.47560e-9  # m  — weak line, vacuum (±0.00005 nm)
+NE_INTENSITY_1        : float = 1.0           # —  — reference intensity ratio
+NE_INTENSITY_2        : float = 0.36          # —  — weak/strong ratio
 
 # Physical constants
 SPEED_OF_LIGHT_MS : float = 299_792_458.0   # m/s — exact SI value
@@ -51,40 +57,53 @@ SPEED_OF_LIGHT_MS : float = 299_792_458.0   # m/s — exact SI value
 # Physical / astronomical constants
 # ---------------------------------------------------------------------------
 
-# OI 630.0 nm rest wavelength [nm]
-OI_WAVELENGTH_NM: float = 630.0
+# OI 630.0 nm rest wavelength
+# Air wavelength from NIST Atomic Spectra Database (standard air, 15°C, 1 atm):
+#   https://physics.nist.gov/PhysRefData/ASD/lines_form.html
+# Vacuum wavelength derived via Edlén (1966) formula:
+#   n_air = 1 + (8342.13 + 2406030/(130 - σ²) + 15997/(38.9 - σ²)) × 10⁻⁸
+#   σ = 1/λ_air(µm) = 1.587225 µm⁻¹  →  n_air = 1.00027656
+#   λ_vac = λ_air × n_air = 630.0304 × 1.00027656 = 630.2046 nm
+OI_WAVELENGTH_NM:     float = 630.0304   # nm, air  (NIST ASD)
+OI_WAVELENGTH_VAC_NM: float = 630.2046   # nm, vacuum  (Edlén 1966 conversion)
 
 # ---------------------------------------------------------------------------
 # Neon calibration wavelengths (Z01 two-line source)
-# IAU standard "S" lines, Burns, Adams & Longwell (1950)
+# Air wavelengths: IAU standard "S" lines, Burns, Adams & Longwell (1950)
+# NIST Atomic Spectra Database: https://physics.nist.gov/PhysRefData/ASD/lines_form.html
+# Vacuum wavelengths derived via Edlén (1966) formula (same as OI above):
+#   λ_vac = λ_air × n_air,  n_air = 1 + (8342.13 + 2406030/(130−σ²) + 15997/(38.9−σ²))×10⁻⁸
 # ---------------------------------------------------------------------------
 
-# Ne 6402.2460 A = 640.22460 nm  (primary, high-amplitude family)
-NE_WAVELENGTH_1_NM: float = 640.2248   # rounded to 4 d.p. per S03
+# Ne 6402.2460 Å = 640.22460 nm (air)  — primary / high-amplitude family (640 nm)
+# σ = 1/0.6402248 µm⁻¹ = 1.56197 µm⁻¹  →  n_air = 1.00027643
+# λ_vac = 640.2248 × 1.00027643 = 640.4018 nm  (NIST: 640.4018 ± 0.0001 nm)
+NE_WAVELENGTH_1_NM:     float = 640.2248   # nm, air   (Burns 1950, rounded to 4 d.p.)
+NE_WAVELENGTH_1_VAC_NM: float = 640.4018   # nm, vacuum (NIST ASD; ±0.0001 nm)
 
-# Ne 6382.9914 A = 638.29914 nm  (secondary, low-amplitude family)
-NE_WAVELENGTH_2_NM: float = 638.2991   # rounded to 4 d.p. per S03
+# Ne 6382.9914 Å = 638.29914 nm (air)  — secondary / low-amplitude family (638 nm)
+# σ = 1/0.63829914 µm⁻¹ = 1.56668 µm⁻¹  →  n_air = 1.00027645
+# λ_vac = 638.29914 × 1.00027645 = 638.4756 nm  (NIST: 638.47560 ± 0.00005 nm)
+NE_WAVELENGTH_2_NM:     float = 638.2991   # nm, air   (Burns 1950, rounded to 4 d.p.)
+NE_WAVELENGTH_2_VAC_NM: float = 638.47560  # nm, vacuum (NIST ASD; ±0.00005 nm)
 
 # ---------------------------------------------------------------------------
 # Opto-mechanical calibration constants
-# Recovered from Z01 two-line neon Tolansky fit on FlatSat data
+# Recovered from two-line neon Tolansky fit on FlatSat data
 # ---------------------------------------------------------------------------
 
-# Focal length recovered from Z01 two-line neon Tolansky fit [mm]
-# COTS lens ~0.68% short of nominal 200 mm.
-# This is a fit result, not a physical constant — used explicitly at
-# call sites rather than imported as a pipeline constant.
-# Stored here for reference only; do not use as a prior for d.
-F_TOLANSKY_MM: float = 199.12
+# Etalon plate spacing recovered by S13a two-line Tolansky fit (Benoit method) [mm]
+# d = 20.1071 ± 0.0002 mm  (1σ),  2σ = 0.0004 mm   (2026-05-06)
+# NOTE: disagrees with D_25C_MM (mechanical prior) by ~99 µm; discrepancy unresolved.
+# All pipeline code must use ICOS_GAP_MM / D_25C_MM for N_int resolution only.
+D_TOLANSKY_MM:       float = 20.1071
+SIGMA_D_TOLANSKY_MM: float = 0.0002   # 1σ [mm]
 
-# NOTE: There is no D_TOLANSKY_MM constant. The Tolansky-recovered
-# d (~20.106 mm) disagrees with D_25C_MM by ~98 µm and the discrepancy
-# is unresolved. All pipeline code must use D_25C_MM for N_int resolution
-# and must not assume a specific etalon gap prior for d.
-
-# Plate scale (2x2 binned) recovered by Tolansky two-line fit [rad/px]
-# Old value 8.5e-5 rad/px permanently retired
-ALPHA_RAD_PX: float = 1.6071e-4
+# Plate scale (2x2 binned) recovered by S13a two-line Tolansky fit [rad/px]
+# alpha = 1.6085e-4 ± 1.3478e-8 rad/px  (1σ),  2σ = 2.6955e-8   (2026-05-06)
+# Old value 1.6071e-4 rad/px superseded.
+ALPHA_RAD_PX:       float = 1.6085e-4
+SIGMA_ALPHA_RAD_PX: float = 1.3478e-8   # 1σ [rad/px]
 
 # COTS imaging lens nominal focal length [mm]
 F_NOMINAL_MM: float = 200.0
@@ -148,10 +167,10 @@ EM_GAIN: float = 1.0                       # dimensionless
 # Nominal science frame integration time.
 INTEGRATION_TIME_S: float = 10.0           # seconds
 
-# Plate scale (2×2 binned).  Authoritative Tolansky value from S09/S13.
+# Plate scale (2×2 binned).  Authoritative Tolansky value from S13a (2026-05-06).
 # Reproduced here so NB03 can compute pixel solid angle without
 # importing from M01 (which would create a circular Tier dependency).
-ALPHA_RAD_PER_PX: float = 1.6071e-4        # rad / binned pixel
+ALPHA_RAD_PER_PX: float = 1.6085e-4        # rad / binned pixel
 
 # Orbital and observation geometry defaults
 ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit

@@ -7,7 +7,7 @@ Reference:   Vaughan (1989) The Fabry-Perot Interferometer, §3.5.2
 Author:      Claude Code
 Project:     WindCube FPI Pipeline -- NCAR/HAO
 Repo:        soc_sewell
-Input:       {stem}_peak_fits.npy  (9-column float64, from annular_reduction.py)
+Input:       {stem}_peak_fits_r2.npy  (9-column float64, from annular_reduction.py)
              Family assignment by amplitude threshold (640nm ~3x brighter).
 Note:        Two-line neon calibration lamp analysis only.
              Focal length f is not computed or stored; alpha is the sole
@@ -100,6 +100,9 @@ class TolanskyResult:
     lam_a_nm: float                 # 640.2248
     lam_b_nm: float                 # 638.2991
 
+    # --- Source file (provenance) ---
+    source_path: str = ""           # path to the _peak_fits_r2.npy used
+
 
 # ---------------------------------------------------------------------------
 # Task 2 -- input loading and family assignment
@@ -124,8 +127,8 @@ def load_and_split_families(path_or_array):
     if peaks.ndim != 2 or peaks.shape[1] != 9:
         raise ValueError(
             f"Expected shape (N, 9), got {peaks.shape}.  "
-            "Columns: peak_num | r_raw_px | r_fit_px | sigma_r_fit_px | "
-            "r_fit_sq | sigma_r_fit_sq | amplitude_adu | width_px | reduced_chi2"
+            "Columns: peak_num | r2_raw_px2 | r2_fit_px2 | sigma_r2_fit_px2 | "
+            "r_fit_derived | sigma_r_derived | amplitude_adu | width_r2_px2 | reduced_chi2"
         )
 
     n_peaks_total = peaks.shape[0]
@@ -167,10 +170,10 @@ def load_and_split_families(path_or_array):
     p_a = np.arange(1, peaks_a.shape[0] + 1, dtype=float)
     p_b = np.arange(1, peaks_b.shape[0] + 1, dtype=float)
 
-    r2_a       = peaks_a[:, 4]
-    sigma_r2_a = peaks_a[:, 5]
-    r2_b       = peaks_b[:, 4]
-    sigma_r2_b = peaks_b[:, 5]
+    r2_a       = peaks_a[:, 2]
+    sigma_r2_a = peaks_a[:, 3]
+    r2_b       = peaks_b[:, 2]
+    sigma_r2_b = peaks_b[:, 3]
 
     return (p_a, r2_a, sigma_r2_a,
             p_b, r2_b, sigma_r2_b,
@@ -293,6 +296,9 @@ def run_tolansky(
     -------
     TolanskyResult
     """
+    source_path = (str(peaks_input)
+                   if isinstance(peaks_input, (str, pathlib.Path)) else "")
+
     (p_a, r2_a, sigma_r2_a,
      p_b, r2_b, sigma_r2_b,
      amp_threshold, Y_B_obs,
@@ -400,6 +406,7 @@ def run_tolansky(
 
         lam_a_nm=lam_a_m * 1e9,
         lam_b_nm=lam_b_m * 1e9,
+        source_path=source_path,
     )
 
 
@@ -736,11 +743,16 @@ def plot_tolansky_result(
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           edgecolor=GRAY, alpha=0.85))
 
+    src_name = (pathlib.Path(r.source_path).name
+                if r.source_path else "source file not recorded")
     fig.suptitle(
         "Tolansky Two-Line Analysis  "
         f"(λ_a = {r.lam_a_nm:.4f} nm,  λ_b = {r.lam_b_nm:.4f} nm)",
-        color=BLACK, fontsize=13, fontweight="bold", y=0.97,
+        color=BLACK, fontsize=13, fontweight="bold", y=0.99,
     )
+    fig.text(0.5, 0.965, src_name,
+             ha="center", va="top", fontsize=9,
+             color=GRAY, fontfamily="monospace")
 
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
