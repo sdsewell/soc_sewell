@@ -162,7 +162,8 @@ NE_INTENSITY_2 = 0.8                  # — ratio of secondary to primary
 #   Tolansky analysis than from the COTS lens specification.
 # ---------------------------------------------------------------------------
 
-ETALON_GAP_ICOS_M       = 20.008e-3   # m — ICOS spacer; integer N_int disambiguation ONLY
+ETALON_GAP_M            = 20.008e-3   # m — ICOS build report; authoritative value for H01 forward model
+ETALON_GAP_ICOS_M       = 20.008e-3   # m — ICOS spacer; integer N_int disambiguation ONLY (= ETALON_GAP_M)
 ETALON_GAP_TOLERANCE_M  = 0.010e-3    # m — ICOS manufacturing tolerance ±0.010 mm
 ETALON_R_COATING        = 0.80        # — — as-deposited coating reflectivity at 630 nm
 ETALON_R_INSTRUMENT     = 0.53        # — — effective instrument R from FlatSat fringe contrast

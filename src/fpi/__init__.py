@@ -3,7 +3,7 @@
 #             M05 (S13), M06 (S14), M07 (S15), Tolansky
 #
 # Re-export from current dated implementation files per S01 Section 10.
-from src.fpi.m01_airy_forward_model_2026_04_26 import (  # noqa: F401
+from src.fpi.airy_forward_model_2026_05_05 import (  # noqa: F401
     InstrumentParams,
     airy_ideal,
     airy_modified,

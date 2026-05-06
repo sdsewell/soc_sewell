@@ -21,6 +21,33 @@ Sources:
 """
 
 # ---------------------------------------------------------------------------
+# H01 — constants required by airy_forward_model (Section 3 of H01 spec)
+# All values are authoritative for the H01 Airy forward model.
+# ---------------------------------------------------------------------------
+
+# Etalon / optics
+ETALON_GAP_M        : float = 20.008e-3      # m  — ICOS build report (authoritative for H01)
+ETALON_N            : float = 1.0            # —  — refractive index of etalon gap (air)
+ETALON_R_INSTRUMENT : float = 0.53          # —  — effective reflectivity (FlatSat)
+# ALPHA_RAD_PX defined below in opto-mechanical section (1.6071e-4 rad/px)
+
+# CCD / FOV
+CCD_PIXELS_UNBINNED : int   = 512           # px — physical pixels per side (CCD97)
+FOV_DEG             : float = 1.65          # deg — full field of view
+
+# OI airglow target line
+OI_WAVELENGTH_AIR_M : float = 630.0304e-9  # m  — NIST ASD air wavelength (rest)
+
+# Neon calibration lines (Burns et al. 1950 IAU standards, air wavelengths)
+NE_WAVELENGTH_1_AIR_M : float = 640.2248e-9  # m  — strong line
+NE_WAVELENGTH_2_AIR_M : float = 638.2991e-9  # m  — weak line
+NE_INTENSITY_1        : float = 1.0          # —  — reference intensity ratio
+NE_INTENSITY_2        : float = 0.36         # —  — weak/strong ratio
+
+# Physical constants
+SPEED_OF_LIGHT_MS : float = 299_792_458.0   # m/s — exact SI value
+
+# ---------------------------------------------------------------------------
 # Physical / astronomical constants
 # ---------------------------------------------------------------------------
 
