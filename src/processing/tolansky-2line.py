@@ -1155,9 +1155,10 @@ if __name__ == "__main__":
     assert _s13a_spec.loader is not None
     _s13a_spec.loader.exec_module(_s13a_mod)  # type: ignore[union-attr]
 
-    _run_tolansky          = _s13a_mod.run_tolansky
+    _run_tolansky            = _s13a_mod.run_tolansky
     _print_rectangular_array = _s13a_mod.print_rectangular_array
-    _to_m05_priors         = _s13a_mod.to_m05_priors
+    _to_m05_priors           = _s13a_mod.to_m05_priors
+    _plot_tolansky_result    = _s13a_mod.plot_tolansky_result
 
     # ── Locate the peaks file ─────────────────────────────────────────────────
     if len(sys.argv) > 1:
@@ -1184,3 +1185,8 @@ if __name__ == "__main__":
     print("\nM05 priors:")
     for k, v in priors.items():
         print(f"  {k}: {v}")
+
+    # ── Diagnostic figure ─────────────────────────────────────────────────────
+    import matplotlib.pyplot as plt
+    _plot_tolansky_result(result)
+    plt.show()

@@ -60,7 +60,8 @@ class TolanskyResult:
     two_sigma_eps_a:   float
     chi2_dof_a:        float
     delta_a:           np.ndarray   # successive r^2-differences (px^2)
-    r2_a:              np.ndarray   # r^2 values used in fit (for printing)
+    r2_a:              np.ndarray   # r^2 values used in fit (for plotting)
+    sigma_r2_a:        np.ndarray   # 1σ uncertainty on r^2, line a
 
     # --- Line b  (lam_b = 638.2991 nm) ---
     Delta_b:           float        # [Eq. 3.87]
@@ -72,6 +73,7 @@ class TolanskyResult:
     chi2_dof_b:        float
     delta_b:           np.ndarray
     r2_b:              np.ndarray
+    sigma_r2_b:        np.ndarray   # 1σ uncertainty on r^2, line b
 
     # --- Consistency check ---
     Delta_ratio_obs:      float
@@ -314,6 +316,7 @@ def run_tolansky(
     delta_a = np.diff(r2_a)
     delta_b = np.diff(r2_b)
 
+
     Delta_ratio_obs      = Delta_a / Delta_b
     Delta_ratio_expected = lam_a_m / lam_b_m
     Delta_ratio_residual = (abs(Delta_ratio_obs - Delta_ratio_expected)
@@ -365,6 +368,7 @@ def run_tolansky(
         chi2_dof_a=chi2_dof_a,
         delta_a=delta_a,
         r2_a=r2_a.copy(),
+        sigma_r2_a=sigma_r2_a.copy(),
 
         Delta_b=Delta_b,
         sigma_Delta_b=sigma_Delta_b,
@@ -375,6 +379,7 @@ def run_tolansky(
         chi2_dof_b=chi2_dof_b,
         delta_b=delta_b,
         r2_b=r2_b.copy(),
+        sigma_r2_b=sigma_r2_b.copy(),
 
         Delta_ratio_obs=Delta_ratio_obs,
         Delta_ratio_expected=Delta_ratio_expected,
@@ -491,6 +496,228 @@ def to_m05_priors(result: TolanskyResult) -> dict:
         "epsilon_cal_a": result.eps_a,
         "epsilon_cal_b": result.eps_b,
     }
+
+
+# ---------------------------------------------------------------------------
+# Task 9 -- diagnostic figure
+# ---------------------------------------------------------------------------
+
+def plot_tolansky_result(
+    result: TolanskyResult,
+    save_path=None,
+):
+    """
+    Four-panel diagnostic figure for the S13a two-line Tolansky analysis.
+
+    A) Joint Tolansky plot — r² vs p for both neon families with individual
+       WLS fit lines.  Confirms linearity and correct slope ratio.
+
+    B) WLS fit residuals for both families.  Random scatter with no trend
+       confirms good ring detection and correct family assignment.
+
+    C) Successive Δ(r²) for both families with dashed mean-slope references.
+       CV < 2 % confirms etalon parallelism.
+
+    D) Summary text — recovered d, alpha, ε_a, ε_b, N_Δ, χ²/ν.
+
+    Parameters
+    ----------
+    result   : TolanskyResult from run_tolansky()
+    save_path: optional file path; if given the figure is saved at dpi=150.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+
+    r = result
+    u2 = "px²"
+
+    BLUE   = "tab:blue"
+    ORANGE = "tab:orange"
+    GREEN  = "tab:green"
+    RED    = "tab:red"
+    GRAY   = "gray"
+    BLACK  = "black"
+
+    fig = plt.figure(figsize=(14, 10), facecolor="white")
+    gs  = gridspec.GridSpec(2, 2, figure=fig,
+                            hspace=0.44, wspace=0.37,
+                            left=0.09, right=0.97,
+                            top=0.91, bottom=0.08)
+    ax_tol = fig.add_subplot(gs[0, 0])
+    ax_res = fig.add_subplot(gs[1, 0])
+    ax_dr2 = fig.add_subplot(gs[0, 1])
+    ax_txt = fig.add_subplot(gs[1, 1])
+
+    for ax in [ax_tol, ax_res, ax_dr2, ax_txt]:
+        ax.set_facecolor("white")
+        ax.tick_params(colors=BLACK, which="both", direction="in")
+        for sp in ax.spines.values():
+            sp.set_edgecolor(BLACK)
+        ax.xaxis.label.set_color(BLACK)
+        ax.yaxis.label.set_color(BLACK)
+        ax.title.set_color(BLACK)
+
+    p_a = np.arange(1, r.n_rings_a + 1, dtype=float)
+    p_b = np.arange(1, r.n_rings_b + 1, dtype=float)
+    int_a = r.Delta_a * (r.eps_a - 1.0)
+    int_b = r.Delta_b * (r.eps_b - 1.0)
+    p_all  = np.concatenate([p_a, p_b])
+    p_fine = np.linspace(p_all.min() - 0.3, p_all.max() + 0.3, 300)
+    fit_a  = r.Delta_a * p_fine + int_a
+    fit_b  = r.Delta_b * p_fine + int_b
+
+    # ── A: Joint Tolansky plot ────────────────────────────────────────────────
+    ax_tol.errorbar(p_a, r.r2_a, yerr=r.sigma_r2_a,
+                    fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3,
+                    label=f"λ_a = {r.lam_a_nm:.4f} nm  (n={r.n_rings_a})")
+    ax_tol.errorbar(p_b, r.r2_b, yerr=r.sigma_r2_b,
+                    fmt="s", color=ORANGE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3,
+                    label=f"λ_b = {r.lam_b_nm:.4f} nm  (n={r.n_rings_b})")
+    ax_tol.plot(p_fine, fit_a, color=BLUE,   lw=1.8, ls="-",  zorder=2,
+                label=f"Fit a:  Δ_a = {r.Delta_a:.4g}")
+    ax_tol.plot(p_fine, fit_b, color=ORANGE, lw=1.8, ls="--", zorder=2,
+                label=f"Fit b:  Δ_b = {r.Delta_b:.4g}")
+    ax_tol.set_xlabel("Fringe index  $p$", fontsize=11)
+    ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
+    ax_tol.set_title("A — Tolansky Plot  (both neon lines)",
+                      fontsize=11, fontweight="bold", pad=7)
+    ax_tol.legend(fontsize=8, facecolor="white", labelcolor=BLACK,
+                  edgecolor=BLACK, framealpha=0.9, ncol=2)
+    chi2_mean = 0.5 * (r.chi2_dof_a + r.chi2_dof_b)
+    ax_tol.text(0.97, 0.05,
+                f"$\\chi^2/\\nu$:  a={r.chi2_dof_a:.3f},  b={r.chi2_dof_b:.3f}",
+                transform=ax_tol.transAxes,
+                ha="right", va="bottom", fontsize=8.5, color=GREEN)
+
+    # ── B: Residuals ──────────────────────────────────────────────────────────
+    resid_a = r.r2_a - (r.Delta_a * p_a + int_a)
+    resid_b = r.r2_b - (r.Delta_b * p_b + int_b)
+    ax_res.axhline(0, color=GRAY, lw=1.0, ls="--", zorder=1)
+    ax_res.errorbar(p_a, resid_a, yerr=r.sigma_r2_a,
+                    fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3, label="Line a")
+    ax_res.errorbar(p_b, resid_b, yerr=r.sigma_r2_b,
+                    fmt="s", color=ORANGE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3, label="Line b")
+    ax_res.set_xlabel("Fringe index  $p$", fontsize=11)
+    ax_res.set_ylabel(f"Residual  [{u2}]", fontsize=11)
+    ax_res.set_title("B — WLS Residuals",
+                      fontsize=11, fontweight="bold", pad=7)
+    ax_res.legend(fontsize=9, facecolor="white", labelcolor=BLACK,
+                  edgecolor=BLACK, framealpha=0.9)
+
+    # ── C: Successive Δ(r²) ──────────────────────────────────────────────────
+    p_mid_a = 0.5 * (p_a[:-1] + p_a[1:])
+    p_mid_b = 0.5 * (p_b[:-1] + p_b[1:])
+    sdelta_a = np.sqrt(r.sigma_r2_a[1:] ** 2 + r.sigma_r2_a[:-1] ** 2)
+    sdelta_b = np.sqrt(r.sigma_r2_b[1:] ** 2 + r.sigma_r2_b[:-1] ** 2)
+
+    cv_a = (r.delta_a.std() / abs(r.delta_a.mean()) * 100
+            if r.delta_a.mean() != 0 and len(r.delta_a) > 1 else np.nan)
+    cv_b = (r.delta_b.std() / abs(r.delta_b.mean()) * 100
+            if r.delta_b.mean() != 0 and len(r.delta_b) > 1 else np.nan)
+
+    ax_dr2.axhline(r.Delta_a, color=BLUE,   lw=1.2, ls="--",
+                   label=f"Δ_a = {r.Delta_a:.4g} (WLS slope)")
+    ax_dr2.axhline(r.Delta_b, color=ORANGE, lw=1.2, ls=":",
+                   label=f"Δ_b = {r.Delta_b:.4g} (WLS slope)")
+    if len(r.delta_a) > 0:
+        ax_dr2.errorbar(p_mid_a, r.delta_a, yerr=sdelta_a,
+                        fmt="o", color=BLUE, ecolor=GRAY,
+                        capsize=4, ms=6, lw=1.4, zorder=3)
+    if len(r.delta_b) > 0:
+        ax_dr2.errorbar(p_mid_b, r.delta_b, yerr=sdelta_b,
+                        fmt="s", color=ORANGE, ecolor=GRAY,
+                        capsize=4, ms=6, lw=1.4, zorder=3)
+    ax_dr2.set_xlabel("Fringe index  $p$  (midpoint)", fontsize=11)
+    ax_dr2.set_ylabel(f"$\\Delta(r^2)$  [{u2}]", fontsize=11)
+    ax_dr2.set_title("C — Successive  $\\Delta(r^2)$",
+                      fontsize=11, fontweight="bold", pad=7)
+    ax_dr2.legend(fontsize=8.5, facecolor="white", labelcolor=BLACK,
+                  edgecolor=BLACK, framealpha=0.9)
+    cv_col = GREEN if max(cv_a, cv_b) < 2 else ("goldenrod" if max(cv_a, cv_b) < 5 else RED)
+    ax_dr2.text(0.97, 0.07,
+                f"CV_a = {cv_a:.1f}%   CV_b = {cv_b:.1f}%",
+                transform=ax_dr2.transAxes,
+                ha="right", va="bottom", fontsize=8.5, color=cv_col)
+
+    # ── D: Summary ────────────────────────────────────────────────────────────
+    ax_txt.axis("off")
+
+    d_mm      = r.d_m * 1e3
+    sig_d_mm  = r.sigma_d_m * 1e3
+    sig2_d_mm = r.two_sigma_d_m * 1e3
+    ratio_ppm = r.Delta_ratio_residual * 1e6
+    ratio_col = GREEN if ratio_ppm < 200 else RED
+    yb_col    = GREEN if 0.15 <= r.Y_B_obs <= 0.60 else RED
+    chi_col_a = GREEN if r.chi2_dof_a < 2 else "goldenrod"
+    chi_col_b = GREEN if r.chi2_dof_b < 2 else "goldenrod"
+
+    lines_txt = [
+        ("TWO-LINE TOLANSKY SUMMARY",         BLACK,  11,   "bold"),
+        ("",                                  BLACK,   3,   "normal"),
+        ("── Family assignment ────────────",  GRAY,   8.5, "normal"),
+        (f"N rings total: {r.n_peaks_total}  "
+         f"(NaN dropped: {r.n_nan_dropped})",  GRAY,   9,   "normal"),
+        (f"Line a (640.2248 nm): {r.n_rings_a} rings",  BLUE,   9,   "normal"),
+        (f"Line b (638.2991 nm): {r.n_rings_b} rings",  ORANGE, 9,   "normal"),
+        (f"Y_B_obs = {r.Y_B_obs:.3f}  "
+         f"{'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}",
+         yb_col, 9, "normal"),
+        ("",                                  BLACK,   3,   "normal"),
+        ("── WLS fit results ──────────────",  GRAY,   8.5, "normal"),
+        (f"Δ_a = {r.Delta_a:.4g} ± {r.sigma_Delta_a:.3g}  px²/fr"
+         f"   χ²/ν={r.chi2_dof_a:.2f}",       BLUE,   9,   "normal"),
+        (f"ε_a = {r.eps_a:.6f} ± {r.sigma_eps_a:.2g}", BLUE, 9, "normal"),
+        (f"Δ_b = {r.Delta_b:.4g} ± {r.sigma_Delta_b:.3g}  px²/fr"
+         f"   χ²/ν={r.chi2_dof_b:.2f}",       ORANGE, 9,   "normal"),
+        (f"ε_b = {r.eps_b:.6f} ± {r.sigma_eps_b:.2g}", ORANGE, 9, "normal"),
+        (f"Δ_a/Δ_b = {r.Delta_ratio_obs:.6f}  "
+         f"(λ_a/λ_b = {r.Delta_ratio_expected:.6f},"
+         f"  Δ={ratio_ppm:.0f} ppm)",
+         ratio_col, 8.5, "normal"),
+        ("",                                  BLACK,   3,   "normal"),
+        ("── Benoit recovery ──────────────",  GRAY,   8.5, "normal"),
+        (f"N_Δ  = {r.N_Delta}   "
+         f"(ε_a − ε_b = {r.eps_a - r.eps_b:+.6f})",
+         BLACK, 9, "normal"),
+        (f"d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
+         f"   (2σ: ±{sig2_d_mm:.4f})",         GREEN,  9.5, "bold"),
+        ("",                                  BLACK,   3,   "normal"),
+        ("── Plate scale ──────────────────",  GRAY,   8.5, "normal"),
+        (f"α_a = {r.alpha_a:.4e} rad/px",     BLUE,   9,   "normal"),
+        (f"α_b = {r.alpha_b:.4e} rad/px",     ORANGE, 9,   "normal"),
+        (f"α   = {r.alpha_mean:.4e} ± {r.sigma_alpha:.2e} rad/px"
+         f"  (2σ: ±{r.two_sigma_alpha:.2e})",  "purple", 9.5, "bold"),
+        (f"consistency: {r.alpha_consistency*1e6:.1f} ppm  "
+         f"{'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
+         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal"),
+    ]
+
+    y = 0.98
+    for text, color, size, weight in lines_txt:
+        ax_txt.text(0.04, y, text, transform=ax_txt.transAxes,
+                    ha="left", va="top", fontsize=size,
+                    color=color, fontweight=weight,
+                    fontfamily="monospace")
+        y -= size * 0.013 + 0.009
+
+    fig.suptitle(
+        "Tolansky Two-Line Analysis  "
+        f"(λ_a = {r.lam_a_nm:.4f} nm,  λ_b = {r.lam_b_nm:.4f} nm)",
+        color=BLACK, fontsize=13, fontweight="bold", y=0.97,
+    )
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+        print(f"  Figure saved → {save_path}")
+    return fig
 
 
 # ---------------------------------------------------------------------------
