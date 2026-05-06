@@ -7,6 +7,8 @@ Purpose: Synthesise the two-line neon calibration fringe spectrum expected from
 
 Run from repo root:
     python src/processing/p02_synthetic_cal_spectrum_2026_05_06.py
+
+Loads 1_cal_120sexp_swapped_ROI_L1.1_profile_vs_r.npy or some similar 1-D Averaged Radial Profile vs. R [px]
 """
 
 import pathlib

@@ -49,6 +49,10 @@
     It is only able to return the fractional fringe order 'epsilon' at image center.  This must be used
     with the etalon gap 'd' value determined in tolansky_2_line.py in order to retrieve the doppler shifted velocity
     of the oxygen emission line.
+
+7) Harding Implementation Codes (Rely on Specs H01, H02, H03, H06 and H06)
+
+
 Start working on better physics:
 figure out how to reduce the number of fringes in an airglow synthesis by limiting the field of view to 1.65 degrees with details of the field stop.  Use claude ai to readin in an optical design description perhpas from zemax or from some export r from my own explanation
 
