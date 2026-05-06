@@ -72,7 +72,7 @@ n_bins is changed:
                     Must be chosen so the window covers the fringe without
                     extending into the zero-count centre region, which biases
                     the Gaussian centroid inward.  At n_bins=1500 use
-                    peak_fit_half_window=7 (≈ ±3 px at the first fringe,
+                    peak_fit_half_window=20 (≈ ±6 px at the first fringe,
                     ±0.5 px at r=100 px — the adaptive clamp keeps the window
                     away from adjacent peaks at all radii).
 
@@ -345,7 +345,7 @@ def annular_reduce(
     bad_pixel_mask: Optional[np.ndarray] = None,
     peak_distance: int = 50,
     peak_prominence: float = 50.0,
-    peak_fit_half_window: int = 7,  # upper bound; adaptive clamp controls effective value
+    peak_fit_half_window: int = 20,  # upper bound; adaptive clamp controls effective value
     min_peak_sep_px: float = 3.0,
 ) -> FringeProfile:
     """
@@ -727,7 +727,7 @@ def main() -> None:
     ax2.axis("off")
     col_labels = [
         "Peak", "r_raw (px)", "r_fit (px)", "+/-sig_r (px)",
-        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "Width sig (px)", "χ²_red",
+        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "FWHM (px)", "Width sig (px)", "χ²_red",
     ]
     cell_text = []
     for i, pf in enumerate(fp.peak_fits):
@@ -742,6 +742,7 @@ def main() -> None:
                 f"{r_fit_sq:.2f}",
                 f"{sig_r_sq:.3f}",
                 f"{pf.amplitude_adu:.1f}",
+                f"{2.3548 * pf.width_px:.2f}",
                 f"{pf.width_px:.2f}",
                 f"{pf.reduced_chi2:.3f}",
             ])
@@ -751,7 +752,7 @@ def main() -> None:
                 f"{pf.r_raw_px:.2f}",
                 "---", "---", "---", "---",
                 f"{pf.profile_raw:.1f}",
-                "---", "---",
+                "---", "---", "---",
             ])
     if not cell_text:
         cell_text = [["—"] * len(col_labels)]
@@ -792,14 +793,14 @@ def main() -> None:
     #    while the figure is open) -------------------------------------------
     _print_peak_table(fp.peak_fits)
     if fp.peak_fits:
-        _plot_first_fringe_diagnostic(fp)
+        _plot_all_fringe_diagnostics(fp)
 
     plt.show()
 
 
 def _plot_first_fringe_diagnostic(
     fp: FringeProfile,
-    fit_half_window: int = 7,
+    fit_half_window: int = 20,
 ) -> None:
     """
     Diagnostic figure for the Gaussian fit to the first detected fringe peak.
@@ -1037,6 +1038,168 @@ def _plot_first_fringe_diagnostic(
         f"σ_fit = {pf.sigma_r_fit_px:.4f} px   fit_ok = {pf.fit_ok}",
         fontsize=10, fontweight="bold",
     )
+    fig.tight_layout()
+    plt.show()
+
+
+def _plot_all_fringe_diagnostics(
+    fp: FringeProfile,
+    fit_half_window: int = 20,
+    n_cols: int = 5,
+) -> None:
+    """
+    Grid figure showing the Gaussian fitting window for every detected peak.
+
+    One panel per peak, laid out in n_cols columns.  Each panel reproduces
+    the exact window, initial guess, bounds, and curve_fit call used by
+    _find_and_fit_peaks so that every fit — successful or failed — can be
+    inspected visually.  Panels are tinted green (converged) or red (failed).
+    """
+    peaks = fp.peak_fits
+    if not peaks:
+        print("No peaks detected — skipping all-fringe diagnostic.")
+        return
+
+    n_peaks = len(peaks)
+    n_cols  = min(n_cols, n_peaks)
+    n_rows  = (n_peaks + n_cols - 1) // n_cols
+
+    # Shared fitting parameters (identical to _find_and_fit_peaks logic)
+    good         = ~fp.masked
+    good_indices = np.where(good)[0]
+    if good_indices.size > 1:
+        median_dr_px = float(np.median(np.diff(fp.r_grid[good])))
+        if median_dr_px <= 0.0:
+            median_dr_px = 1.0
+    else:
+        median_dr_px = 1.0
+
+    all_bin_indices = [pf.peak_idx for pf in peaks]
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(4.2 * n_cols, 3.6 * n_rows),
+        squeeze=False,
+    )
+    fig.suptitle(
+        f"All-Fringe Gaussian Fit Diagnostics  —  {n_peaks} peaks  |  "
+        f"median bin width = {median_dr_px:.4f} px  |  "
+        f"fit_half_window = {fit_half_window} (adaptive clamp applied per peak)",
+        fontsize=10, fontweight="bold",
+    )
+
+    for k, pf in enumerate(peaks):
+        row, col = divmod(k, n_cols)
+        ax = axes[row, col]
+
+        bin_idx   = all_bin_indices[k]
+        left_sep  = (bin_idx - all_bin_indices[k - 1]) if k > 0          else 9999
+        right_sep = (all_bin_indices[k + 1] - bin_idx) if k < n_peaks - 1 else 9999
+        nearest      = min(left_sep, right_sep)
+        adaptive_hw  = max(2, (nearest - 1) // 2)
+        effective_hw = min(fit_half_window, adaptive_hw)
+
+        lo      = max(0, bin_idx - effective_hw)
+        hi      = min(len(fp.r_grid) - 1, bin_idx + effective_hw)
+        win     = np.arange(lo, hi + 1)
+        usable  = ~fp.masked[win] & np.isfinite(fp.sigma_profile[win])
+        win_use = win[usable]
+
+        r_w   = fp.r_grid[win_use]
+        p_w   = fp.profile[win_use]
+        sem_w = fp.sigma_profile[win_use]
+
+        # Initial guess — same formulas as _find_and_fit_peaks
+        B0   = float(np.percentile(p_w, 20)) if len(p_w) > 0 else 0.0
+        A0   = max(float(fp.profile[bin_idx]) - B0, 1.0)
+        mu0  = float(fp.r_grid[bin_idx])
+        sig0 = max((float(r_w[-1]) - float(r_w[0])) / 6.0,
+                   median_dr_px * 0.5) if len(r_w) > 1 else median_dr_px
+        p0   = [A0, mu0, sig0, B0]
+
+        bounds_lo = [0.0,    float(r_w[0])  if len(r_w) else mu0 - 1,
+                     0.3 * median_dr_px,                                  0.0   ]
+        bounds_hi = [np.inf, float(r_w[-1]) if len(r_w) else mu0 + 1,
+                     float(r_w[-1]) - float(r_w[0]) if len(r_w) > 1
+                     else median_dr_px * 4,                               np.inf]
+
+        # Re-run curve_fit (identical call to _find_and_fit_peaks)
+        fit_ok = False
+        popt   = p0[:]
+        perr   = [np.nan] * 4
+        mesg   = f"n_usable = {win_use.size} < 4"
+        reduced_chi2 = np.nan
+        if win_use.size >= 4:
+            try:
+                popt, pcov = curve_fit(
+                    _gaussian, r_w, p_w,
+                    p0=p0, sigma=sem_w, absolute_sigma=True,
+                    bounds=(bounds_lo, bounds_hi), maxfev=5000,
+                )
+                perr   = list(np.sqrt(np.diag(pcov)))
+                fit_ok = True
+                mesg   = "converged"
+                n_dof  = len(r_w) - 4
+                if n_dof > 0:
+                    chi2         = float(np.sum(
+                        ((p_w - _gaussian(r_w, *popt)) / sem_w) ** 2
+                    ))
+                    reduced_chi2 = chi2 / n_dof
+            except RuntimeError as exc:
+                mesg = f"RuntimeError: {str(exc)[:55]}"
+            except ValueError as exc:
+                mesg = f"ValueError: {str(exc)[:55]}"
+
+        # Fine grid for smooth curves
+        r_lo_plot = r_w[0]  if len(r_w) else mu0 - 2 * median_dr_px
+        r_hi_plot = r_w[-1] if len(r_w) else mu0 + 2 * median_dr_px
+        r_fine = np.linspace(r_lo_plot, r_hi_plot, 300)
+        y_init = _gaussian(r_fine, *p0)
+
+        # ── Plot ──────────────────────────────────────────────────────────────
+        ax.set_facecolor("#F0FFF4" if fit_ok else "#FFF0F0")
+
+        if win_use.size > 0:
+            ax.errorbar(r_w, p_w, yerr=sem_w,
+                        fmt="o", color="steelblue", markersize=4,
+                        ecolor="cornflowerblue", elinewidth=1.0, capsize=2,
+                        zorder=3)
+        ax.plot(r_fine, y_init, color="goldenrod", lw=1.2, ls="--", zorder=2)
+        if fit_ok:
+            y_fit = _gaussian(r_fine, *popt)
+            ax.plot(r_fine, y_fit, color="crimson", lw=1.8, zorder=4)
+            ax.axvspan(popt[1] - perr[1], popt[1] + perr[1],
+                       alpha=0.15, color="crimson")
+
+        ax.axvline(pf.r_raw_px, color="darkorange", lw=0.9, ls="--", alpha=0.8)
+        if fit_ok:
+            ax.axvline(popt[1], color="crimson", lw=1.0, ls="-", alpha=0.9)
+
+        # ── Title ─────────────────────────────────────────────────────────────
+        lam = "640.2" if (k + 1) % 2 == 1 else "638.3"
+        if fit_ok:
+            title = (
+                f"P{k+1} · {lam} nm  ·  hw={effective_hw}\n"
+                f"r={popt[1]:.3f} ± {perr[1]:.3f} px   χ²={reduced_chi2:.2f}"
+            )
+            title_color = "#1a6e2e"
+        else:
+            title = (
+                f"P{k+1} · {lam} nm  ·  hw={effective_hw}  FAILED\n"
+                f"{mesg[:48]}"
+            )
+            title_color = "#b22222"
+
+        ax.set_title(title, fontsize=7.5, color=title_color)
+        ax.tick_params(labelsize=6.5)
+        ax.set_xlabel("r [px]", fontsize=7)
+        ax.set_ylabel("ADU", fontsize=7)
+
+    # Hide unused cells if n_peaks < n_rows * n_cols
+    for idx in range(n_peaks, n_rows * n_cols):
+        r, c = divmod(idx, n_cols)
+        axes[r, c].axis("off")
+
     fig.tight_layout()
     plt.show()
 

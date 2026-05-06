@@ -32,7 +32,7 @@ import matplotlib.ticker as mticker
 import matplotlib.gridspec as gridspec
 
 # ── Make src importable from validation/ ────────────────────────────────────
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.metadata.p01_image_metadata_2026_04_06 import ingest_real_image  # noqa: E402
@@ -103,8 +103,42 @@ for fp in FILES:
 # Synthetic files follow YYYY-MM-DDTHH-MM-SSZ_cal.bin (hyphens in time portion)
 _SYNTHETIC_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z_")
 _is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
-CX, CY   = (138, 129) if _is_synthetic else (145, 143)
+_cx_default, _cy_default = (138, 129) if _is_synthetic else (145, 143)
 ROI_SIZE = 220
+
+# ── Interactive fringe-centre selection ───────────────────────────────────────
+_fig_sel, _ax_sel = plt.subplots(figsize=(10, 10))
+try:
+    plt.get_current_fig_manager().window.state("zoomed")   # TkAgg (Windows)
+except AttributeError:
+    try:
+        plt.get_current_fig_manager().window.showMaximized()  # Qt backends
+    except AttributeError:
+        pass
+_vmin_s, _vmax_s = np.percentile(images[0], [1, 99])
+_ax_sel.imshow(images[0], origin="upper", cmap="gray",
+               vmin=_vmin_s, vmax=_vmax_s, interpolation="nearest")
+_ax_sel.plot(_cx_default, _cy_default, "+", color="yellow",
+             markersize=16, markeredgewidth=1.5,
+             label=f"Default seed  ({_cx_default}, {_cy_default})")
+_ax_sel.set_title(
+    "Click the centre of the fringe rings,  then press Enter\n"
+    "(yellow cross = previous default; close window to keep it)",
+    fontsize=10, fontweight="bold", color="#C00000",
+)
+_ax_sel.set_xlabel("Column  (px)", fontsize=9)
+_ax_sel.set_ylabel("Row  (px)", fontsize=9)
+_ax_sel.legend(fontsize=8, loc="lower right")
+_pts = plt.ginput(n=1, timeout=0, show_clicks=True)
+plt.close(_fig_sel)
+
+if _pts:
+    CX = int(round(_pts[0][0]))
+    CY = int(round(_pts[0][1]))
+    print(f"User-selected centre:  CX={CX}, CY={CY}")
+else:
+    CX, CY = _cx_default, _cy_default
+    print(f"No click received — using default centre:  CX={CX}, CY={CY}")
 
 # ── Plot figure 1 — cal & dark image viewer ───────────────────────────────────
 fig, axes = plt.subplots(2, 2, figsize=(14, 10),
@@ -202,10 +236,13 @@ VAR_N_BINS   = 250
 r_min_sq = VAR_R_MIN_PX ** 2
 r_max_sq = (min(cal_roi_clip.shape) / 2.0) ** 2  # default from azimuthal_variance_centre
 
-cx_fine, cy_fine, cost_min, grid_cx, grid_cy, grid_cost = azimuthal_variance_centre(
+(cx_fine, cy_fine, cost_min,
+ grid_cx, grid_cy, grid_cost,
+ _all_gcx, _all_gcy, _all_gcost) = azimuthal_variance_centre(
     cal_roi_clip, cx_seed, cy_seed,
     var_r_min_px=VAR_R_MIN_PX,
     var_n_bins=VAR_N_BINS,
+    return_grid=True,
 )
 
 cost_fn = lambda cx, cy: _variance_cost(  # noqa: E731
@@ -273,6 +310,124 @@ for col, (roi, label) in enumerate(zip(rois, labels)):
 
 plt.tight_layout()
 plt.show()
+plt.close(fig2)
+
+# ── Centre-finding diagnostic figure ─────────────────────────────────────────
+_VAR_SEARCH_PX = 15.0
+_sp    = max(2.0, _VAR_SEARCH_PX / 8.0)
+_off   = np.arange(-_VAR_SEARCH_PX, _VAR_SEARCH_PX + _sp * 0.5, _sp)
+_n_off = len(_off)
+_cx_vals = cx_seed + _off          # coarse grid cx values (ROI coords)
+_cy_vals = cy_seed + _off          # coarse grid cy values (ROI coords)
+# Reshape flat grid to 2D: [i, j] = cost at (_cx_vals[i], _cy_vals[j])
+# (outer loop = dcx, inner = dcy — matches azimuthal_variance_centre iteration order)
+_cost2d = _all_gcost.reshape(_n_off, _n_off)
+
+# 1D cost sweeps at fine resolution (cy fixed at seed for X, cx fixed for Y)
+_N_SW       = 80
+_cx_sw      = np.linspace(cx_seed - _VAR_SEARCH_PX - 2, cx_seed + _VAR_SEARCH_PX + 2, _N_SW)
+_cy_sw      = np.linspace(cy_seed - _VAR_SEARCH_PX - 2, cy_seed + _VAR_SEARCH_PX + 2, _N_SW)
+_cost_xscan = np.array([cost_fn(cx, cy_seed) for cx in _cx_sw])
+_cost_yscan = np.array([cost_fn(cx_seed, cy) for cy in _cy_sw])
+
+# Fine 2D cost map around Nelder-Mead result (±3 px at 35×35 resolution)
+_FH = 3.0
+_FN = 35
+_cxf          = np.linspace(cx_fine - _FH, cx_fine + _FH, _FN)
+_cyf          = np.linspace(cy_fine - _FH, cy_fine + _FH, _FN)
+_CXF2, _CYF2  = np.meshgrid(_cxf, _cyf)
+_cost_nm      = np.array([[cost_fn(cx, cy) for cx in _cxf] for cy in _cyf])
+
+fig_cd, axes_cd = plt.subplots(2, 2, figsize=(13, 9))
+fig_cd.suptitle(
+    f"Centre-Finding Diagnostic — {pathlib.Path(cal_path).name}\n"
+    "Pass 1: Coarse grid search    |    Pass 2: Nelder-Mead refinement",
+    fontsize=11, fontweight="bold",
+)
+
+# (0,0) X scan ─────────────────────────────────────────────────────────────────
+ax = axes_cd[0, 0]
+ax.plot(_cx_sw, _cost_xscan, "-", color="#4472C4", lw=1.2,
+        label=r"Cost($c_x$, $c_{y,\mathrm{seed}}$)")
+_icy = int(np.argmin(np.abs(_cy_vals - cy_seed)))
+ax.scatter(_cx_vals, _cost2d[:, _icy], s=35, color="#E84040", zorder=4,
+           label=f"Grid pts  (cy ≈ {_cy_vals[_icy]:.0f} px)")
+ax.axvline(cx_seed, color="0.5",    lw=0.9, ls="--", label=f"Seed  {cx_seed:.1f} px")
+ax.axvline(grid_cx, color="orange", lw=1.3, ls="-.", label=f"Coarse best  {grid_cx:.2f} px")
+ax.axvline(cx_fine, color="green",  lw=1.5, ls="-",  label=f"Fine  {cx_fine:.2f} px")
+ax.set_xlabel(r"$c_x$  [px in ROI]", fontsize=9)
+ax.set_ylabel("Variance cost", fontsize=9)
+ax.set_title(r"Pass 1 — X scan  ($c_y$ fixed at seed)", fontsize=9)
+ax.legend(fontsize=7.5)
+ax.tick_params(labelsize=8)
+
+# (0,1) Y scan ─────────────────────────────────────────────────────────────────
+ax = axes_cd[0, 1]
+ax.plot(_cy_sw, _cost_yscan, "-", color="#4472C4", lw=1.2,
+        label=r"Cost($c_{x,\mathrm{seed}}$, $c_y$)")
+_icx = int(np.argmin(np.abs(_cx_vals - cx_seed)))
+ax.scatter(_cy_vals, _cost2d[_icx, :], s=35, color="#E84040", zorder=4,
+           label=f"Grid pts  (cx ≈ {_cx_vals[_icx]:.0f} px)")
+ax.axvline(cy_seed, color="0.5",    lw=0.9, ls="--", label=f"Seed  {cy_seed:.1f} px")
+ax.axvline(grid_cy, color="orange", lw=1.3, ls="-.", label=f"Coarse best  {grid_cy:.2f} px")
+ax.axvline(cy_fine, color="green",  lw=1.5, ls="-",  label=f"Fine  {cy_fine:.2f} px")
+ax.set_xlabel(r"$c_y$  [px in ROI]", fontsize=9)
+ax.set_ylabel("Variance cost", fontsize=9)
+ax.set_title(r"Pass 1 — Y scan  ($c_x$ fixed at seed)", fontsize=9)
+ax.legend(fontsize=7.5)
+ax.tick_params(labelsize=8)
+
+# (1,0) 2D coarse grid heatmap ─────────────────────────────────────────────────
+ax = axes_cd[1, 0]
+# Transpose so rows = cy axis, cols = cx axis (matches imshow convention)
+_im_cd = ax.imshow(
+    _cost2d.T,
+    origin="lower",
+    extent=[_cx_vals[0], _cx_vals[-1], _cy_vals[0], _cy_vals[-1]],
+    cmap="viridis_r",
+    aspect="auto",
+    interpolation="nearest",
+)
+fig_cd.colorbar(_im_cd, ax=ax, fraction=0.046, pad=0.04, label="Variance cost")
+ax.plot(cx_seed, cy_seed, "w+",  markersize=14, markeredgewidth=2,
+        label=f"Seed ({cx_seed:.0f}, {cy_seed:.0f})")
+ax.plot(grid_cx, grid_cy,  "yo", markersize=9,  markerfacecolor="none",
+        markeredgewidth=1.5, label=f"Coarse ({grid_cx:.2f}, {grid_cy:.2f})")
+ax.plot(cx_fine, cy_fine,  "r*", markersize=11,
+        label=f"Fine ({cx_fine:.2f}, {cy_fine:.2f})")
+ax.set_xlabel(r"$c_x$  [px in ROI]", fontsize=9)
+ax.set_ylabel(r"$c_y$  [px in ROI]", fontsize=9)
+ax.set_title(
+    f"Pass 1 — 2D cost grid  ({_n_off}×{_n_off} = {_n_off**2} evaluations, "
+    f"spacing {_sp:.0f} px)",
+    fontsize=9,
+)
+ax.legend(fontsize=7.5, loc="upper right")
+ax.tick_params(labelsize=8)
+
+# (1,1) Nelder-Mead fine contour ───────────────────────────────────────────────
+ax = axes_cd[1, 1]
+_cf_fill = ax.contourf(_CXF2, _CYF2, _cost_nm, levels=20, cmap="viridis_r")
+fig_cd.colorbar(_cf_fill, ax=ax, fraction=0.046, pad=0.04, label="Variance cost")
+ax.contour(_CXF2, _CYF2, _cost_nm, levels=20, colors="white", linewidths=0.4, alpha=0.5)
+ax.plot(grid_cx, grid_cy, "yo", markersize=9, markerfacecolor="none",
+        markeredgewidth=1.5, label=f"Coarse ({grid_cx:.2f}, {grid_cy:.2f})")
+ax.plot(cx_fine, cy_fine, "r*", markersize=12,
+        label=(f"Fine  ({cx_fine:.2f} ± {sigma_cx:.2f},\n"
+               f"        {cy_fine:.2f} ± {sigma_cy:.2f}) px"))
+ax.set_xlabel(r"$c_x$  [px in ROI]", fontsize=9)
+ax.set_ylabel(r"$c_y$  [px in ROI]", fontsize=9)
+ax.set_title(
+    f"Pass 2 — Nelder-Mead  (±{_FH:.0f} px around fine result,  "
+    f"cost = {cost_min:.1f})",
+    fontsize=9,
+)
+ax.legend(fontsize=7.5, loc="upper right")
+ax.tick_params(labelsize=8)
+
+fig_cd.tight_layout()
+plt.show()
+plt.close(fig_cd)
 
 # ── Annular reduction ─────────────────────────────────────────────────────────
 R_MAX_PX = 110.0
@@ -293,6 +448,151 @@ for i, pk in enumerate(fp.peak_fits):
     two_s = 2.0 * pk.sigma_r_fit_px if np.isfinite(pk.sigma_r_fit_px) else float("nan")
     print(f"  Peak {i+1:2d}: r_fit={pk.r_fit_px:.3f} ± {two_s:.3f} px (2σ)  "
           f"amp={pk.amplitude_adu:.1f}  width={pk.width_px:.3f}  ok={pk.fit_ok}")
+
+# ── Failed peak diagnostics ───────────────────────────────────────────────────
+from scipy.optimize import curve_fit as _cf  # noqa: E402
+
+_failed = [(i, pk) for i, pk in enumerate(fp.peak_fits) if not pk.fit_ok]
+if _failed:
+    # Reconstruct the exact inputs _find_and_fit_peaks had
+    _gm   = ~fp.masked & np.isfinite(fp.sigma_profile) & np.isfinite(fp.profile)
+    _gidx = np.where(_gm)[0]
+    _gr   = fp.r_grid[_gidx]
+    _mdr  = float(np.median(np.diff(_gr))) if len(_gr) > 1 else 1.0
+
+    # Global baseline: mean of 20 lowest good-bin values (same as m03 annular_reduce)
+    _bv       = fp.profile[~fp.masked & np.isfinite(fp.profile)]
+    _baseline = float(np.mean(np.sort(_bv)[:min(20, len(_bv))])) if len(_bv) else 0.0
+
+    # Position of each detected peak within the good-bin index array
+    _all_pidx  = [pk.peak_idx for pk in fp.peak_fits]
+    _all_pgpos = [int(np.searchsorted(_gidx, idx)) for idx in _all_pidx]
+
+    print(f"\n{'─'*68}")
+    print(f"  Failed peak diagnostics  (baseline={_baseline:.1f} ADU  "
+          f"median_dr={_mdr:.4f} px/bin  n_bins={N_BINS}  r_max={R_MAX_PX} px)")
+    print(f"{'─'*68}")
+
+    _fig_diag, _axes_diag = plt.subplots(
+        1, len(_failed), figsize=(7 * len(_failed), 5), squeeze=False
+    )
+
+    for _col, (i, pk) in enumerate(_failed):
+        _idx = pk.peak_idx
+        _pgp = _all_pgpos[i]
+
+        _lsep = _pgp if i == 0 else _pgp - _all_pgpos[i - 1]
+        _rsep = (len(_gidx) - 1 - _pgp) if i == len(fp.peak_fits) - 1 \
+                else _all_pgpos[i + 1] - _pgp
+        _ahw  = max(2, (min(_lsep, _rsep) - 1) // 2)
+        _ehw  = min(8, _ahw)   # fit_half_window=8 in m03
+
+        _ws   = max(0, _idx - _ehw)
+        _we   = min(len(fp.r_grid) - 1, _idx + _ehw)
+        _wg   = _gm[_ws:_we + 1]
+        _ng   = int(np.sum(_wg))
+
+        _wr   = fp.r_grid[_ws:_we + 1][_wg]
+        _wp   = fp.profile[_ws:_we + 1][_wg]
+        _wsig = fp.sigma_profile[_ws:_we + 1][_wg]
+        _wc   = _wp - _baseline
+        _wss  = np.where(_wsig > 0, _wsig, 1.0)
+
+        _A0   = max(float(pk.profile_raw) - _baseline, 1.0)
+        _sig0 = _mdr
+        _slo  = 0.3 * _mdr
+
+        # Re-run curve_fit and capture the actual exception
+        _errmsg = f"n_good={_ng} < 4 — fit not attempted"
+        if _ng >= 4:
+            try:
+                _cf(
+                    lambda x, A, mu, s: A * np.exp(-0.5 * ((x - mu) / s) ** 2),
+                    _wr, _wc,
+                    p0=[_A0, pk.r_raw_px, _sig0],
+                    sigma=_wss, absolute_sigma=True,
+                    bounds=([0.0, float(_wr[0]), _slo],
+                            [np.inf, float(_wr[-1]), np.inf]),
+                    maxfev=2000,
+                )
+                _errmsg = "re-run converged (unexpected)"
+            except Exception as _exc:
+                _errmsg = f"{type(_exc).__name__}: {_exc}"
+
+        _mu_lo = f"{_wr[0]:.3f}" if len(_wr) else "N/A"
+        _mu_hi = f"{_wr[-1]:.3f}" if len(_wr) else "N/A"
+
+        print(f"\n  Peak {i+1}  r_raw={pk.r_raw_px:.3f} px  bin={_idx}")
+        print(f"    left_sep={_lsep} bins  right_sep={_rsep} bins  "
+              f"adaptive_hw={_ahw}  effective_hw={_ehw}")
+        print(f"    window bins [{_ws}:{_we}]: {_we-_ws+1} total,  {_ng} good")
+        if _ng < 4:
+            print(f"    n_pixels per bin in window: {list(fp.n_pixels[_ws:_we+1])}")
+            print(f"    masked positions in window: "
+                  f"{list(np.where(~_wg)[0])}")
+        print(f"    p0  A0={_A0:.1f}  mu0={pk.r_raw_px:.3f}  "
+              f"sig0={_sig0:.4f}  B_fixed={_baseline:.1f}")
+        print(f"    mu bounds: [{_mu_lo}, {_mu_hi}]   sigma_low: {_slo:.4f}")
+        print(f"    >> Failure cause: {_errmsg}")
+
+        # ── Diagnostic figure for this failed peak ─────────────────────────────
+        ax = _axes_diag[0, _col]
+        _ctx = 15
+        _c0  = max(0, _idx - _ctx)
+        _c1  = min(len(fp.r_grid) - 1, _idx + _ctx)
+        _rc  = fp.r_grid[_c0:_c1 + 1]
+        _pc  = fp.profile[_c0:_c1 + 1]
+        _mc  = fp.masked[_c0:_c1 + 1]
+        _sc  = fp.sigma_profile[_c0:_c1 + 1]
+        _goc = ~_mc & np.isfinite(_sc)
+
+        ax.plot(_rc[_goc], _pc[_goc], "-o", color="#4472C4",
+                markersize=4, lw=1.0, label="Profile")
+        if np.any(_mc):
+            ax.plot(_rc[_mc], _pc[_mc], "rx", markersize=7, label="Masked bins")
+
+        ax.axvspan(fp.r_grid[_ws], fp.r_grid[_we],
+                   alpha=0.18, color="gold",
+                   label=f"Fit window  ({_ng}/{_we-_ws+1} good bins)")
+        if len(_wr):
+            ax.scatter(_wr, _wp, s=60, facecolors="none",
+                       edgecolors="darkorange", lw=1.5, zorder=5,
+                       label="Usable window pts")
+            _rf = np.linspace(_wr[0] - _mdr, _wr[-1] + _mdr, 300)
+            _y0 = (_A0 * np.exp(-0.5 * ((_rf - pk.r_raw_px) / _sig0) ** 2)
+                   + _baseline)
+            ax.plot(_rf, _y0, "--", color="goldenrod", lw=1.5,
+                    label=f"Initial guess  A0={_A0:.0f} sig0={_sig0:.3f}")
+
+        ax.axvline(pk.r_raw_px, color="darkorange", lw=1.2, ls="--",
+                   label=f"r_raw = {pk.r_raw_px:.3f} px")
+        ax.axhline(_baseline, color="gray", lw=0.8, ls=":",
+                   label=f"Baseline = {_baseline:.0f} ADU")
+
+        for _j, _opk in enumerate(fp.peak_fits):
+            if _opk is not pk and _c0 <= _opk.peak_idx <= _c1:
+                ax.axvline(fp.r_grid[_opk.peak_idx], color="#4472C4",
+                           lw=0.8, ls=":", alpha=0.6,
+                           label=f"Peak {_j+1}" if _j < 2 else None)
+
+        ax.set_xlabel("Radius [px]", fontsize=9)
+        ax.set_ylabel("Profile [ADU]", fontsize=9)
+        ax.set_title(
+            f"Peak {i+1}  r_raw = {pk.r_raw_px:.3f} px\n"
+            f"window: {_we-_ws+1} bins total, {_ng} usable\n"
+            f"{_errmsg[:72]}",
+            fontsize=8,
+        )
+        ax.legend(fontsize=7, loc="upper right")
+        ax.tick_params(labelsize=8)
+
+    _fig_diag.suptitle(
+        f"Failed Peak Fit Diagnostic  —  {pathlib.Path(cal_path).name}",
+        fontsize=11, fontweight="bold",
+    )
+    _fig_diag.tight_layout()
+    plt.show()
+    plt.close(_fig_diag)
 
 # ── Build 9-column peak_fits array (format: annular_reduction.py / tolansky-2line.py)
 _npy_rows = []
