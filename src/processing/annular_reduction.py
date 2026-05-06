@@ -26,6 +26,19 @@ Outputs (all saved alongside the input .npy, sharing its stem)
         cx, cy                   — fringe centre, px
         sigma_cx, sigma_cy       — 1-sigma centre uncertainties, px
 
+  <stem>_profile_vs_r.npy
+      2-D float64 array, shape (2, n_bins).
+        row 0 : r_grid  (px)  — bin-centre radii
+        row 1 : profile (ADU) — mean intensity per bin
+      Designed for direct loading by p02_synthetic_cal_spectrum; compatible
+      with the (2, N) branch of that script's array-shape handling.
+
+  <stem>_profile_vs_r2.npy
+      2-D float64 array, shape (2, n_bins).
+        row 0 : r2_grid (px²) — bin-centre radii squared
+        row 1 : profile (ADU) — mean intensity per bin
+      Same layout as _profile_vs_r.npy; x-axis is r² for Tolansky analysis.
+
   <stem>_peak_fits.npy
       2-D float64 array, one row per detected fringe peak.  9 columns:
         col 0 : peak_num
@@ -819,6 +832,17 @@ def main() -> None:
         sigma_cy      = np.array(sigma_cy),
     )
     print(f"L1.2 saved : {l12_path}")
+
+    # -- Save standalone profile arrays for easy loading by p02 ---------------
+    profile_r_path = src.with_name(src.stem + "_profile_vs_r.npy")
+    np.save(profile_r_path,
+            np.array([fp.r_grid, fp.profile], dtype=np.float64))
+    print(f"Profile vs r   saved : {profile_r_path}  shape (2, {fp.n_bins})")
+
+    profile_r2_path = src.with_name(src.stem + "_profile_vs_r2.npy")
+    np.save(profile_r2_path,
+            np.array([fp.r2_grid, fp.profile], dtype=np.float64))
+    print(f"Profile vs r²  saved : {profile_r2_path}  shape (2, {fp.n_bins})")
 
     # -- Plotting --------------------------------------------------------------
     n_peaks    = len(fp.peak_fits)

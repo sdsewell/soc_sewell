@@ -64,10 +64,10 @@ class InstrumentParams:
     """
 
     # Etalon
-    t:       float = 20.0006e-3  # gap, metres; authoritative Tolansky result (Z01a 2026-04-21)
+    t:       float = 20.107070698e-3  # gap, metres; authoritative Tolansky result (Z01a 2026-04-21)
     R_refl:  float = 0.53        # effective reflectivity (FlatSat cal)
     n:       float = 1.0         # refractive index (air gap)
-    alpha:   float = 1.6071e-4   # rad/pixel, 2×2 binned (Tolansky 2026)
+    alpha:   float = 1.6084e-4   # rad/pixel, 2×2 binned (Tolansky 2026)
 
     # Intensity envelope
     I0:  float =  1000.0   # average intensity, counts
