@@ -24,7 +24,7 @@ import numpy as np
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.fpi.airy_forward_model_2026_05_05 import InstrumentParams, airy_modified  # noqa: E402
+from src.fpi.airy_forward_model_2026_05_05 import InstrumentParams, airy_modified, phase_correct_gap  # noqa: E402
 from src.fpi.m02_calibration_synthesis_2026_05_05 import synthesise_calibration_image  # noqa: E402
 from src.constants import (  # noqa: E402
     NE_WAVELENGTH_1_AIR_M,
@@ -36,8 +36,15 @@ from src.constants import (  # noqa: E402
 # Synthesis parameters
 # Etalon gap and plate scale from S13a two-line Tolansky fit (2026-05-06).
 # ---------------------------------------------------------------------------
+_T_TOLANSKY = 20.1070707e-3   # m — S13a Tolansky physical gap
+_EPS_A      = 0.23286         # — S13a Tolansky excess fraction, line a
+_T_EFF      = phase_correct_gap(_T_TOLANSKY, _EPS_A, NE_WAVELENGTH_1_AIR_M)
+print(f"phase_correct_gap: t_tolansky={_T_TOLANSKY*1e3:.7f} mm  "
+      f"t_eff={_T_EFF*1e3:.7f} mm  "
+      f"correction={(_T_EFF-_T_TOLANSKY)*1e9:.1f} nm")
+
 PARAMS = InstrumentParams(
-    t      = 20.1070707e-3,    # m — S13a Tolansky two-line fit (2026-05-06)
+    t      = _T_EFF,           # m — phase-corrected for synthesis (see H01 §8)
     R_refl = 0.53,          # — effective reflectivity (FlatSat)
     n      = 1.0,           # — refractive index of air gap
     alpha  = 1.6085e-4,     # rad/px, 2×2 binned (S13a Tolansky 2026-05-06)

@@ -264,6 +264,57 @@ def airy_modified(
     sigma_samples = sigma_mean / dr if dr > 0 else sigma_mean
     return gaussian_filter1d(A_ideal, sigma=sigma_samples)
 
+def phase_correct_gap(
+    t_tolansky: float,   # Tolansky-recovered gap, metres
+    eps_a: float,        # Tolansky excess fraction for line a (0 <= eps_a < 1)
+    lam_a: float,        # wavelength of line a, metres
+) -> float:
+    """
+    Return a phase-corrected effective gap for fringe synthesis.
+
+    The Tolansky analysis returns (t, eps_a) as a self-consistent pair, but
+    floating-point evaluation of 2*t/lam_a does not in general recover eps_a
+    because t has uncertainty ~200 nm ~ 0.6 FSR.  This function nudges t by
+    at most lam_a/4 (~160 nm) so that (2*t_eff/lam_a) % 1 == eps_a exactly,
+    anchoring the absolute fringe position for synthesis.
+
+    The correction is purely a synthesis convenience — t_tolansky remains the
+    authoritative physical gap for all other purposes.
+
+    Parameters
+    ----------
+    t_tolansky : Tolansky-recovered etalon gap, metres.
+    eps_a      : Tolansky excess fraction for the anchor wavelength (line a).
+                 Must satisfy 0 <= eps_a < 1.
+    lam_a      : Anchor wavelength in metres. Use NE_WAVELENGTH_1_AIR_M for
+                 neon calibration synthesis.
+
+    Returns
+    -------
+    t_eff : float, phase-corrected gap in metres.
+            Satisfies: abs(t_eff - t_tolansky) < lam_a / 4
+
+    Example
+    -------
+    >>> t_eff = phase_correct_gap(20.1070707e-3, 0.23286, 640.2248e-9)
+    >>> print(f"{(2*t_eff/640.2248e-9) % 1:.5f}")   # should print 0.23286
+    """
+    if not (0.0 <= eps_a < 1.0):
+        raise ValueError(f"eps_a={eps_a} must be in [0, 1)")
+
+    eps_current = (2.0 * t_tolansky / lam_a) % 1.0
+    delta_eps = eps_a - eps_current
+
+    # Wrap into (-0.5, +0.5] — take nearest FSR, not always the positive one
+    if delta_eps > 0.5:
+        delta_eps -= 1.0
+    elif delta_eps <= -0.5:
+        delta_eps += 1.0
+
+    delta_t = delta_eps * lam_a / 2.0
+    t_eff = t_tolansky + delta_t
+
+    return t_eff
 
 def build_instrument_matrix(
     r: np.ndarray,           # radial bin centres, pixels, shape (R,)
