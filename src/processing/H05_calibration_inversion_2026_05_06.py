@@ -275,8 +275,7 @@ def run_staged_inversion(fp: _FringeProfile,
     r_max    = float(fp.r_max_px)
     n_good   = int(good.sum())
 
-    s_floor = max(1.0, float(np.median(p_good)) * 0.005)
-    s_good  = np.maximum(s_good, s_floor)
+    s_good  = np.maximum(s_good, 1.0)
 
     if n_good < 30:
         raise ValueError(f"Only {n_good} usable bins — need ≥ 30.")
