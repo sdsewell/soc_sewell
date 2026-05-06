@@ -37,7 +37,7 @@ from src.constants import (  # noqa: E402
 # Etalon gap and plate scale from S13a two-line Tolansky fit (2026-05-06).
 # ---------------------------------------------------------------------------
 PARAMS = InstrumentParams(
-    t      = 20.107070698e-3,    # m — S13a Tolansky two-line fit (2026-05-06)
+    t      = 20.1070707e-3,    # m — S13a Tolansky two-line fit (2026-05-06)
     R_refl = 0.53,          # — effective reflectivity (FlatSat)
     n      = 1.0,           # — refractive index of air gap
     alpha  = 1.6085e-4,     # rad/px, 2×2 binned (S13a Tolansky 2026-05-06)
@@ -175,7 +175,7 @@ ax_spec.grid(True, alpha=0.25)
 #           'derived'  — computed from other parameters, not a synthesis input
 all_rows = [
     # ── Etalon / optics ──
-    ("Etalon gap",           "$t$",             f"{PARAMS.t * 1e3:.4f}",               "mm",     "fixed"),
+    ("Etalon gap",           "$t$",             f"{PARAMS.t * 1e3:.8f}",               "mm",     "fixed"),
     ("Reflectivity",         "$R_{\\rm refl}$", f"{PARAMS.R_refl:.3f}",               "—",      "fixed"),
     ("Refractive index",     "$n$",             f"{PARAMS.n:.1f}",                    "—",      "fixed"),
     ("Plate scale",          "$\\alpha$",       f"{PARAMS.alpha:.4e}",                "rad/px", "fixed"),

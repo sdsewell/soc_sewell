@@ -1084,7 +1084,7 @@ class TwoLineAnalyser:
             (f"n (gap) : {self.n:.3f}",        GRAY,   9.5, 'normal'),
             ("",                               WHITE,   3,   'normal'),
             ("── Instrument parameters ────────", BORDER, 8.5, 'normal'),
-            (f"d = {d_mm:.5f} ± {sigma_d_mm:.3g} mm (2σ: ±{two_sigma_d_mm:.3g})", GREEN, 9.5, 'bold'),
+            (f"d = {d_mm:.7f} ± {sigma_d_mm:.3g} mm (2σ: ±{two_sigma_d_mm:.3g})", GREEN, 9.5, 'bold'),
             (f"f = {f_mm:.2f} ± {sigma_f_mm:.2g} mm (2σ: ±{two_sigma_f_mm:.2g})", GREEN, 9.5, 'bold'),
             (f"α = {alpha:.3e} ± {sigma_alpha:.1e} rad/px (2σ: ±{two_sigma_alpha:.1e})", PURPLE, 9.5, 'bold'),
             ("",                               WHITE,   3,   'normal'),

@@ -470,7 +470,7 @@ def print_rectangular_array(result: TolanskyResult) -> None:
     d_mm   = r.d_m * 1e3
     sd_mm  = r.sigma_d_m * 1e3
     sd2_mm = r.two_sigma_d_m * 1e3
-    print(f"  d   = {d_mm:.4f} +/- {sd_mm:.4f} mm   (2sigma = {sd2_mm:.4f} mm)")
+    print(f"  d   = {d_mm:.6f} +/- {sd_mm:.4f} mm   (2sigma = {sd2_mm:.4f} mm)")
 
     print(f"\n{sep}")
     print("=== PLATE SCALE ===")
@@ -709,7 +709,7 @@ def plot_tolansky_result(
         ("  d = (N_Δ + ε_a−ε_b)·λ_a·λ_b / [2·n·(λ_b−λ_a)]",          GRAY,    8.0,  "normal", "italic", 0.00),
         (f"  N_Δ = {r.N_Delta}"
          f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", "normal", 0.00),
-        (f"  d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
+        (f"  d  = {d_mm:.7f} ± {sig_d_mm:.4f} mm"
          f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   "normal", 0.00),
         ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
         ("  α_a = √(λ_a·n_air / (d·Δ_a))",                             GRAY,    8.0,  "normal", "italic", 0.00),
