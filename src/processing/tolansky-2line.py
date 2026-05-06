@@ -1123,238 +1123,64 @@ class TwoLineAnalyser:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Entry point  (python tolansky.py  [path/to/<stem>_peak_fits.npy])
+# Entry point  (python tolansky-2line.py  [path/to/<stem>_peak_fits.npy])
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Ingests the _peak_fits.npy file produced by annular_reduction.py.
-# 2-D float64 array, one row per detected fringe peak.  9 columns:
+# Delegates to the canonical S13a implementation in
+# src/fpi/tolansky_2line_2026-05-05.py (spec S13a v0.4).
 #
-#   col 0 : peak_num
-#   col 1 : r_raw (px)          — detected bin centre (find_peaks)       — not used
-#   col 2 : r_fit (px)          — TRF Gaussian centroid μ                ← r input
-#   col 3 : sigma_r_fit (px)    — 1-sigma uncertainty on μ               ← sigma_r input
-#   col 4 : r_fit (px²)         — μ², for use in r²-domain calibration   — not used here
-#   col 5 : sigma_r_fit (px²)   — 2·μ·σ_μ  (propagated uncertainty)     — not used here
-#   col 6 : amplitude (ADU)     — Gaussian amplitude A above background  ← line-split key
-#   col 7 : width_sigma (px)    — Gaussian width σ                       — not used
-#   col 8 : reduced_chi2        — χ²/(n_points − 4)                      — not used
-# Cols 2–8 are NaN when the Gaussian fit failed for that peak.
-#
-# ── Two-line neon structure ──────────────────────────────────────────────────
-#
-# The WindCube neon calibration lamp excites two strong lines that are
-# 188 free spectral ranges apart and therefore produce two INTERLEAVED sets
-# of concentric rings on the detector.  The stronger line (640.2248 nm)
-# produces the larger-amplitude peaks; the weaker (638.2990 nm) the smaller.
-#
-# The Tolansky method requires that p = 1, 2, 3, … indexes consecutive orders
-# of a SINGLE spectral line.  Mixing both lines doubles the apparent order
-# spacing, halving the measured slope S and recovering d ≈ 2 × d_true.
-#
-# Fix: split the peaks by amplitude (threshold = 1000 ADU) and run a
-# separate Tolansky analysis on each line.
-#
-# ── WindCube instrument constants ────────────────────────────────────────────
-#
-#   pixel pitch   :  32 µm  (CCD97-00, 2×2 binned)
-#   focal length  : 200 mm  (→ α = 32e-6/0.200 = 1.6e-4 rad/px)
-#   n (gap)       :   1.0   (vacuum gap)
-#   λ₁ (Ne)       : 640.2248 nm  — strong line   (IC Optical GNL-4096-R)
-#   λ₂ (Ne)       : 638.2990 nm  — secondary line (IC Optical GNL-4096-R)
-#   d  (ICOS)     :  20.008 mm   (spacer measurement, build report §7.4)
-#
-# All quantities are kept in PIXELS so that r, f, and d share one unit:
-#   f_px  = 200 mm  / 0.032 mm  = 6250.00 px
-#   d_px  = 20.008 mm / 0.032 mm = 625.25 px
-#   λ_px  = λ_nm × 1e-9 / 32e-6  (conversion factor = 3.125e-5 px/nm)
-#
-# Four analyses are run (one per line × two modes):
-#   Run 1a  λ₁ known  → recover d        (sanity-check vs ICOS)
-#   Run 1b  d  known  → recover λ₁       (compare to Ne atlas)
-#   Run 2a  λ₂ known  → recover d
-#   Run 2b  d  known  → recover λ₂
+# Key differences vs. earlier approach:
+#   - Family split by median amplitude (not a fixed 1000 ADU threshold)
+#   - Independent WLS fit per family (not a joint constrained fit)
+#   - alpha = sqrt(lam/(d*Delta)) recovered directly (no focal length f)
+#   - Benoit d recovery (Vaughan Eq. 3.97) via independent eps_a, eps_b
+#   - N_Delta = -189 from d_prior = 20.008 mm (ICOS build report)
 
 if __name__ == "__main__":
     import sys
+    import importlib.util
     import pathlib
     import tkinter as tk
     from tkinter import filedialog
 
+    # ── Load canonical S13a implementation ────────────────────────────────────
+    _fpi_path = (pathlib.Path(__file__).resolve().parent.parent
+                 / "fpi" / "tolansky_2line_2026-05-05.py")
+    _s13a_spec = importlib.util.spec_from_file_location(
+        "tolansky_2line_s13a", str(_fpi_path)
+    )
+    assert _s13a_spec is not None, f"Cannot locate {_fpi_path}"
+    _s13a_mod = importlib.util.module_from_spec(_s13a_spec)
+    sys.modules["tolansky_2line_s13a"] = _s13a_mod
+    assert _s13a_spec.loader is not None
+    _s13a_spec.loader.exec_module(_s13a_mod)  # type: ignore[union-attr]
+
+    _run_tolansky          = _s13a_mod.run_tolansky
+    _print_rectangular_array = _s13a_mod.print_rectangular_array
+    _to_m05_priors         = _s13a_mod.to_m05_priors
+
     # ── Locate the peaks file ─────────────────────────────────────────────────
     if len(sys.argv) > 1:
-        peaks_path = sys.argv[1]
+        peaks_path = pathlib.Path(sys.argv[1])
     else:
         root = tk.Tk()
         root.withdraw()
-        peaks_path = filedialog.askopenfilename(
-            title="Select radial_profile_peaks.npy",
+        _p = filedialog.askopenfilename(
+            title="Select *_peak_fits.npy",
             filetypes=[("NumPy array", "*.npy"), ("All files", "*.*")],
         )
         root.destroy()
-        if not peaks_path:
+        if not _p:
             print("No file selected — exiting.")
             sys.exit(0)
+        peaks_path = pathlib.Path(_p)
 
-    peaks = np.load(peaks_path)
-    if peaks.ndim != 2 or peaks.shape[1] != 9:
-        raise ValueError(
-            f"Expected shape (N, 9) from _peak_fits.npy, "
-            f"got {peaks.shape}.  "
-            f"Columns: peak_num | r_raw_px | r_fit_px | sigma_r_fit_px | "
-            f"r_fit_sq | sigma_r_fit_sq | amplitude_adu | width_px | reduced_chi2"
-        )
+    # ── Run S13a analysis and print rectangular array ─────────────────────────
+    result = _run_tolansky(peaks_path)
+    _print_rectangular_array(result)
 
-    print(f"\n  Loaded  {peaks_path}")
-    print(f"  Total peaks : {len(peaks)}")
-
-    # ── Split into the two Ne emission lines by amplitude ─────────────────────
-    # The stronger Ne line (640.2248 nm) produces higher-amplitude peaks.
-    # A threshold of 1000 ADU cleanly separates the two populations for
-    # this dataset; adjust AMP_THRESHOLD below if needed.
-    AMP_THRESHOLD = 1000.0    # ADU — peaks above → line 1, below → line 2
-
-    mask1 = peaks[:, 6] >= AMP_THRESHOLD   # strong line (640.2248 nm)
-    mask2 = ~mask1                          # weak   line (638.2990 nm)
-
-    if mask1.sum() == 0 or mask2.sum() == 0:
-        print(f"\n  WARNING: amplitude split at {AMP_THRESHOLD} ADU produced "
-              f"an empty group ({mask1.sum()} / {mask2.sum()} peaks).  "
-              f"Adjust AMP_THRESHOLD and rerun.")
-        sys.exit(1)
-
-    def _extract(mask):
-        """Return (p, r_px, sig_r) re-indexed from 1 for the selected peaks."""
-        r   = peaks[mask, 2]
-        sig = peaks[mask, 3]
-        p   = np.arange(1, mask.sum() + 1, dtype=float)
-        return p, r, sig
-
-    p1, r1, s1 = _extract(mask1)
-    p2, r2, s2 = _extract(mask2)
-
-    print(f"\n  Line 1 (amp ≥ {AMP_THRESHOLD:.0f} ADU) : "
-          f"{len(p1)} rings,  r = {r1[0]:.2f} – {r1[-1]:.2f} px")
-    print(f"  Line 2 (amp <  {AMP_THRESHOLD:.0f} ADU) : "
-          f"{len(p2)} rings,  r = {r2[0]:.2f} – {r2[-1]:.2f} px")
-
-    # ── Instrument constants (pixels) ─────────────────────────────────────────
-    PIXEL_M         = 32e-6             # pixel pitch  [m]
-    F_PX            = 200e-3 / PIXEL_M  # focal length   [px]  = 6250.00
-    N_GAP           = 1.0               # refractive index (vacuum gap)
-    LAM1_NM         = 640.2248          # Ne strong line  [nm]
-    LAM2_NM         = 638.2990          # Ne weak   line  [nm]
-    D_ICOS_MM       = 20.008            # ICOS mechanical measurement  [mm]
-    D_PX            = D_ICOS_MM * 1e-3 / PIXEL_M   # [px]  = 625.25
-    LAM_UNIT_PER_NM = 1e-9 / PIXEL_M   # nm → px  = 3.125e-5
-
-    print(f"\n  Instrument constants:")
-    print(f"    pixel pitch  = {PIXEL_M*1e6:.0f} µm")
-    print(f"    f            = {F_PX:.2f} px  =  {F_PX*PIXEL_M*1e3:.1f} mm")
-    print(f"    d (ICOS)     = {D_PX:.4f} px  =  {D_ICOS_MM:.4f} mm")
-    print(f"    λ₁ (Ne)      = {LAM1_NM:.4f} nm")
-    print(f"    λ₂ (Ne)      = {LAM2_NM:.4f} nm")
-    print(f"    n            = {N_GAP:.1f}")
-
-    # ── Helper: run one Tolansky pair (recover d  and  recover λ) ─────────────
-    def run_pair(p, r, sig, lam_nm, lam_label, run_prefix):
-        sep = "═" * 65
-
-        # (a) known λ → recover d
-        print(f"\n{sep}")
-        print(f"  {run_prefix}a:  known λ = {lam_nm:.4f} nm  →  recover d")
-        print(sep)
-        ana = TolanskyAnalyser(
-            p=p, r=r, sigma_r=sig,
-            r_unit="px",
-            lam_nm=lam_nm, n=N_GAP, f=F_PX, d=None,
-            lam_unit_per_nm=LAM_UNIT_PER_NM,
-        )
-        res = ana.run()
-        ana.print_table()
-        d_mm     = res.recovered_d * PIXEL_M * 1e3
-        sig_d_mm = res.sigma_d     * PIXEL_M * 1e3
-        pull_d   = abs(d_mm - D_ICOS_MM) / sig_d_mm
-        print(f"  → d         = {d_mm:.6f} ± {sig_d_mm:.6f} mm")
-        print(f"  ICOS  d     = {D_ICOS_MM:.6f} mm")
-        print(f"  Δ           = {d_mm - D_ICOS_MM:+.6f} mm   "
-              f"(|Δ|/σ = {pull_d:.1f})")
-
-        # (b) known d → recover λ
-        print(f"\n{sep}")
-        print(f"  {run_prefix}b:  known d = {D_ICOS_MM:.4f} mm  →  recover λ")
-        print(sep)
-        ana2 = TolanskyAnalyser(
-            p=p, r=r, sigma_r=sig,
-            r_unit="px",
-            lam_nm=None, n=N_GAP, f=F_PX, d=D_PX,
-            lam_unit_per_nm=LAM_UNIT_PER_NM,
-        )
-        res2 = ana2.run()
-        ana2.print_table()
-        pull_lam = abs(res2.recovered_lam_nm - lam_nm) / res2.sigma_lam_nm
-        print(f"  → λ         = {res2.recovered_lam_nm:.4f} "
-              f"± {res2.sigma_lam_nm:.4f} nm")
-        print(f"  {lam_label}  = {lam_nm:.4f} nm")
-        print(f"  Δ           = {res2.recovered_lam_nm - lam_nm:+.4f} nm   "
-              f"(|Δ|/σ = {pull_lam:.1f})")
-
-        return ana, res   # return the "recover d" analyser for plotting
-
-    ana1, res1 = run_pair(p1, r1, s1, LAM1_NM, "Ne atlas λ₁", "RUN 1")
-    ana2, res2 = run_pair(p2, r2, s2, LAM2_NM, "Ne atlas λ₂", "RUN 2")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # RUN 3 — Joint two-line analysis (TwoLineAnalyser)
-    #
-    # Uses TwoLineAnalyser to jointly fit both ring families, enforce the
-    # slope ratio S₂/S₁ = λ₂/λ₁, recover d via excess fractions (Benoit
-    # 1898), and derive f from S₁ + d.  See TwoLineAnalyser docstring for
-    # the full derivation.
-    # ════════════════════════════════════════════════════════════════════════
-
-    tla = TwoLineAnalyser(
-        analyser1       = ana1,
-        analyser2       = ana2,
-        lam1_nm         = LAM1_NM,
-        lam2_nm         = LAM2_NM,
-        d_prior         = D_PX,              # ICOS prior in pixels
-        lam_unit_per_nm = LAM_UNIT_PER_NM,
-        n               = N_GAP,
-    )
-    tla_res = tla.run()
-    tla.print_summary()
-
-    # Convert pixel results to mm for the α calculation
-    d_px_joint  = tla_res.d
-    f_px_joint  = tla_res.f
-    d_mm_joint  = d_px_joint * PIXEL_M * 1e3
-    f_mm_joint  = f_px_joint * PIXEL_M * 1e3
-    sigma_d_mm  = tla_res.sigma_d * PIXEL_M * 1e3
-    sigma_f_mm  = tla_res.sigma_f * PIXEL_M * 1e3
-
-    alpha_fit   = PIXEL_M / (f_mm_joint * 1e-3)       # rad/px
-    sigma_alpha = alpha_fit * sigma_f_mm / f_mm_joint
-
-    print(f"\n  Derived in mm / rad:")
-    print(f"    d   = {d_mm_joint:.5f} ± {sigma_d_mm:.5f} mm"
-          f"   (ICOS = {D_ICOS_MM:.5f} mm,"
-          f"  Δd = {d_mm_joint - D_ICOS_MM:+.5f} mm)")
-    print(f"    f   = {f_mm_joint:.5f} ± {sigma_f_mm:.5f} mm"
-          f"   (nominal 200.000 mm,"
-          f"  {(f_mm_joint-200.0)/200.0*100:+.3f}%)")
-    print(f"    α   = {alpha_fit:.6e} ± {sigma_alpha:.2e} rad/px"
-          f"   (M05 initial guess)")
-
-    # ── Save all three figures ────────────────────────────────────────────────
-    out_dir = pathlib.Path(peaks_path).parent
-
-    fig1_path = str(out_dir / "tolansky_line1_640nm.png")
-    fig1 = ana1.plot(save_path=fig1_path)
-
-    fig2_path = str(out_dir / "tolansky_line2_638nm.png")
-    fig2 = ana2.plot(save_path=fig2_path)
-
-    fig3_path = str(out_dir / "tolansky_joint_two_line.png")
-    fig3 = tla.plot_joint(save_path=fig3_path)
-
-    plt.show()
+    # ── M05 priors handoff ────────────────────────────────────────────────────
+    priors = _to_m05_priors(result)
+    print("\nM05 priors:")
+    for k, v in priors.items():
+        print(f"  {k}: {v}")
