@@ -38,7 +38,9 @@ Purpose: Load a real two-line neon calibration radial profile (tabulated vs r²)
          soft-bound edge).
 
 Changes from 2026_05_06:
-  - Import updated to airy_forward_model_2026_05_06 (adds phase_correct_gap).
+  - Import confirmed as airy_forward_model_2026_05_05, which already contains
+    phase_correct_gap (added during the 2026-05-06 session; no _05_06 file
+    was ever committed to the repo).
   - _fd_jacobian() replaces trf re-evaluation for covariance estimation.
     trf required lm.x to be strictly interior to bounds; when the LM solver
     placed a parameter exactly on a soft-bound edge, trf raised
@@ -77,7 +79,7 @@ from scipy.optimize import least_squares
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.fpi.airy_forward_model_2026_05_06 import (   # noqa: E402
+from src.fpi.airy_forward_model_2026_05_05 import (   # noqa: E402
     airy_modified,
     phase_correct_gap,
 )
