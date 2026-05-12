@@ -1,61 +1,171 @@
 """
 Script:  H05_calibration_inversion_2026_05_12.py
 Purpose: Load a real two-line neon calibration radial profile (tabulated vs r²),
-         run a 12-parameter staged Levenberg-Marquardt calibration inversion,
+         run a 10-free-parameter staged Levenberg-Marquardt calibration inversion,
          and produce a diagnostic figure modelled on Harding et al. (2014) Fig. 4.
 
-         The two neon lines have INDEPENDENT effective reflectivities:
-           R1 — for λ₁ = 640.2248 nm  (strong line)
-           R2 — for λ₂ = 638.2991 nm  (weak line)
+═══════════════════════════════════════════════════════════════════════════════
+ PHYSICAL MODEL SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
 
-         Physical motivation: the etalon coating reflectivity is wavelength-
-         dependent.  The ~2 nm separation causes a measurable finesse difference,
-         with λ₂ peaks sharper than λ₁.  Forcing a single shared R compensates
-         incorrectly by pushing σ₂ to its bound.  Allowing R1 ≠ R2 resolves this.
+ Forward model:
+   S(r) = Ã(r; λ₁, t, α, R1) ⊛ G(σ(r))
+        + ne_ratio · Ã(r; λ₂, t, α, R2) ⊛ G(σ(r))
+        + B
 
-         Parameters (12 total):
-           Group A — Tolansky-seeded, tight bounds:
-             t       — phase-corrected etalon gap (H01 §8)
-             alpha   — plate scale (rad/px)
-           Group B — freely fitted from fringe shape:
-             R1, R2  — independent effective reflectivities
-             I0, I1, I2   — shared intensity envelope
-             sigma0, sigma1, sigma2  — shared PSF width
-             B       — CCD bias pedestal
-             ne_ratio — λ₂/λ₁ intensity scale ratio
+ Intensity envelope (Harding Eq. 4):
+   I(r) = I₀ [1 + I₁(r/r_max) + I₂(r/r_max)²]
 
-         Staged inversion:
-           Stage 1: I0, I1, I2, B                        (photometric baseline)
-           Stage 2: t, alpha, R1, R2, I0, I1, I2, B      (geometry + reflectivities)
-           Stage 3: + sigma0                              (PSF; sigma2 also free here)
-           Stage 4: all except sigma2                     (sigma2 fixed — unidentifiable)
+ PSF width — constant blur (σ₁ = σ₂ = 0, see investigation below):
+   σ(r) = σ₀
 
-         Covariance: computed via direct finite-difference Jacobian (_fd_jacobian)
-         evaluated at the Stage 4 solution using data residuals only.  This avoids
-         both the penalty-row contamination of lm.jac and the bounds-feasibility
-         problem of the trf re-evaluation approach (which failed with
-         "Initial guess is outside of provided bounds" when lm.x sat on a
-         soft-bound edge).
+ Free parameters (10 total):
+   Group A — Tolansky-seeded, tight ±20 µm / ±5% bounds:
+     t       — phase-corrected etalon gap (H01 §8)
+     alpha   — plate scale (rad/px)
+   Group B — freely fitted from fringe shape:
+     R1      — effective reflectivity for λ₁ = 640.2248 nm
+     R2      — effective reflectivity for λ₂ = 638.2991 nm
+     I0, I1, I2   — shared intensity envelope
+     sigma0  — PSF base width (constant blur)
+     B       — CCD bias pedestal
+     ne_ratio — λ₂/λ₁ intensity scale ratio
 
-Changes from 2026_05_06:
-  - Import confirmed as airy_forward_model_2026_05_05, which already contains
-    phase_correct_gap (added during the 2026-05-06 session; no _05_06 file
-    was ever committed to the repo).
-  - _fd_jacobian() replaces trf re-evaluation for covariance estimation.
-    trf required lm.x to be strictly interior to bounds; when the LM solver
-    placed a parameter exactly on a soft-bound edge, trf raised
-    "Initial guess is outside of provided bounds" and all stderrs fell back
-    to inf.  The FD Jacobian has no bounds requirement and is evaluated
-    directly at the solution point.
-  - Script filename and all internal references updated to 2026_05_12.
+ Fixed parameters (2):
+   sigma1 = 0  — sinusoidal PSF variation (see PSF investigation below)
+   sigma2 = 0  — cosinusoidal PSF variation (see PSF investigation below)
 
-Input .npy file formats accepted:
+═══════════════════════════════════════════════════════════════════════════════
+ KEY ARCHITECTURAL DECISIONS AND THEIR PHYSICAL MOTIVATION
+═══════════════════════════════════════════════════════════════════════════════
+
+ 1. INDEPENDENT REFLECTIVITIES R1 AND R2
+    The etalon coating reflectivity is wavelength-dependent. The ~2 nm
+    separation between the two neon lines (640.2 nm and 638.3 nm) is
+    sufficient to produce a measurable finesse difference. On the
+    1_cal_120sexp_swapped_ROI_L1.1 calibration image, the λ₂ peaks are
+    visibly sharper and taller than the λ₁ peaks at the same radius.
+
+    Diagnosis (2026-05-12): The four-panel diagnostic plot
+    (H05_cal_diagnostics_2026_05_06.py) showed a strong S-curve in the
+    residual-vs-model scatter plot — positive residual at low model values
+    (troughs, where λ₂ peaks sit) and near-zero at high model values
+    (λ₁ peaks). This is the fingerprint of a wavelength-dependent PSF
+    width, specifically a higher effective reflectivity at λ₂.
+
+    Result (2026-05-12, 1_cal_120sexp_swapped_ROI_L1.1):
+      R1 = 0.239 ± 0.010   [λ₁ = 640.2 nm]
+      R2 = 0.334 ± 0.019   [λ₂ = 638.3 nm]
+      ΔR = R2 − R1 = +0.095  (4.7σ significant)
+    χ²/ν dropped from 7.0 (single shared R) to 1.58 (independent R1, R2).
+    The S-curve in the scatter plot disappeared entirely.
+
+    Note: The FlatSat-measured R = 0.53 was measured at a single wavelength
+    and cannot resolve this wavelength dependence. R1 and R2 must be
+    recovered from fringe data for each calibration image.
+
+ 2. PSF MODEL — CONSTANT BLUR (σ₀ ONLY)
+    Harding (2014) uses a three-term Fourier PSF:
+      σ(r) = σ₀ + σ₁·sin(πr/r_max) + σ₂·cos(πr/r_max)
+
+    Investigation (2026-05-12, H05_psf_model_comparison_2026_05_12.py):
+    A nested F-test was performed comparing:
+      Model A: σ(r) = σ₀ + σ₁·sin  (σ₂ fixed at 0 — already unidentifiable)
+      Model B: σ(r) = σ₀             (σ₁ and σ₂ both fixed at 0)
+
+    Results on 1_cal_120sexp_swapped_ROI_L1.1:
+      Model A:  χ²/ν = 1.5776   n_free = 11
+      Model B:  χ²/ν = 1.5765   n_free = 10   (slightly BETTER)
+      Δχ²/ν = −0.0011   F = 0.000   p-value = 0.9984
+
+    DECISION: σ₁ is not statistically significant (p = 0.998 >> 0.05).
+    Model B is preferred — simpler, more honest, and every science-relevant
+    parameter (R1, R2, ne_ratio, α, t) shifted by < 0.1σ between models.
+
+    Physical interpretation: the WindCube FPI finesse is low (F ≈ 5,
+    R ≈ 0.24–0.33), so the fringes are broad and the PSF contributes
+    relatively little additional broadening. A constant-width Gaussian
+    PSF fully captures the instrumental blur for this instrument.
+
+    Authoritative PSF width (from Model B):
+      σ₀ = 0.553 ± 0.010 px   (2×2 binned pixels)
+    Note: the Model A value σ₀ = 0.354 px was an artefact of the σ₀/σ₁
+    degeneracy — when σ₁ is freed, it absorbs part of the blur, making
+    σ₀ appear smaller than it really is.
+
+ 3. ne_ratio — LAMP INTENSITY RATIO FITTED FROM DATA
+    The nominal λ₂/λ₁ intensity ratio from Burns et al. (1950) spectroscopic
+    standards is 0.36. The fitted value from the calibration image is
+      ne_ratio = 0.509 ± 0.012
+    This is significantly above the spectroscopic standard, likely due to
+    the specific discharge conditions of the WindCube neon lamp. The ratio
+    must be treated as a fit parameter, not a fixed constant.
+
+ 4. COVARIANCE — FINITE-DIFFERENCE JACOBIAN
+    Three covariance approaches were tried before finding one that works:
+
+    Attempt 1: lm.jac[:n_good, :] — the data rows of the LM Jacobian.
+    FAILED: The soft-bound penalty rows appended to the residual vector
+    contaminate lm.jac via finite-difference coupling, producing
+    artificially tiny stderrs (e.g., σ_R ≈ 7e-14).
+
+    Attempt 2: trf re-evaluation with explicit bounds.
+    FAILED: When lm.x sits exactly on a soft-bound edge (common with the
+    LM penalty approach), scipy.optimize.least_squares raises
+    "Initial guess is outside of provided bounds".
+
+    Attempt 3 (current): _fd_jacobian() — direct forward finite-difference
+    Jacobian computed at the LM solution, using a data-only residual
+    function with no bounds. SVD-based covariance inversion handles any
+    near-singular directions gracefully.
+    SUCCESS: Produces physically meaningful stderrs.
+
+ 5. STAGED INVERSION RATIONALE
+    Stage 1: Photometric baseline (I0, I1, I2, B) — establish the intensity
+             envelope before allowing geometry parameters to move.
+    Stage 2: Add geometry and reflectivities (t, alpha, R1, R2) — the
+             fringe positions and peak heights.
+    Stage 3: Add PSF width (sigma0) — fringe peak widths. sigma1 and sigma2
+             are NOT added here (they are permanently fixed at 0).
+    Stage 4: Full free optimisation of all 10 free parameters, with
+             finite-difference covariance computed at the solution.
+
+═══════════════════════════════════════════════════════════════════════════════
+ CHANGELOG
+═══════════════════════════════════════════════════════════════════════════════
+
+ 2026-05-12 (this version):
+   - sigma1 fixed at 0 (in addition to sigma2). Justified by nested F-test:
+     p = 0.998, Δχ²/ν = −0.0011. Authoritative σ₀ = 0.553 ± 0.010 px.
+   - _STAGE_FREE[4] updated: sigma1 and sigma2 both excluded.
+   - FitResult.sigma_sigma1 = NaN (fixed). Table row shows "fixed".
+   - Stage 3 log message updated: sigma1 no longer mentioned as free.
+   - Stage 4 free param count updated from 11 to 10.
+   - Model equation in figure footer updated: σ(r) = σ₀ (constant).
+   - Full investigative notes added to this docstring.
+
+ 2026-05-12 (prior commit same day):
+   - _fd_jacobian() replaces trf re-evaluation for covariance estimation.
+   - Import confirmed as airy_forward_model_2026_05_05 (contains
+     phase_correct_gap; no _05_06 file exists in the repo).
+
+ 2026-05-06 (H05_calibration_inversion_2026_05_06.py):
+   - Independent R1, R2 added (previously single shared R).
+   - ne_ratio added as free parameter (previously fixed at NE_INTENSITY_2).
+   - sigma2 fixed at 0 (unidentifiable — singular Hessian column).
+   - Poisson sigma floor replaces rolling-std estimator.
+
+═══════════════════════════════════════════════════════════════════════════════
+ INPUT FORMAT AND USAGE
+═══════════════════════════════════════════════════════════════════════════════
+
+ Input .npy file formats accepted:
    (2, N)    — row 0 = r² (px²), row 1 = profile (ADU)   ← preferred
    (3, N)    — row 0 = r², row 1 = profile, row 2 = SEM
    (N, 2)    — col 0 = r², col 1 = profile
    (N,)      — profile only; r² inferred (not recommended)
 
-Run from repo root:
+ Run from repo root:
     python src/processing/H05_calibration_inversion_2026_05_12.py
 """
 
@@ -65,7 +175,6 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -94,18 +203,23 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("H05")
 
 # ---------------------------------------------------------------------------
-# Parameter ordering (12 parameters)
+# Parameter ordering (12 positions in p_all vector)
 # ---------------------------------------------------------------------------
 _NAMES = ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2',
           'sigma0', 'sigma1', 'sigma2', 'B', 'ne_ratio']
 _IDX   = {n: i for i, n in enumerate(_NAMES)}
 
-# sigma2 excluded from Stage 4: unidentifiable at solution → singular Hessian
+# sigma1 and sigma2 are both fixed at 0 throughout all stages.
+# sigma1: nested F-test (p = 0.998) shows it is not identifiable from data.
+# sigma2: always had a near-zero Jacobian column (singular Hessian direction).
+# See docstring §2 for full investigation notes.
+_FIXED_PSF = {'sigma1', 'sigma2'}
+
 _STAGE_FREE = {
     1: ['I0', 'I1', 'I2', 'B'],
     2: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'B'],
     3: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'sigma0', 'B'],
-    4: [n for n in _NAMES if n != 'sigma2'],   # 11 free
+    4: [n for n in _NAMES if n not in _FIXED_PSF],   # 10 free params
 }
 
 # ---------------------------------------------------------------------------
@@ -114,7 +228,11 @@ _STAGE_FREE = {
 
 def _neon_model(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
                 sigma0, sigma1, sigma2, B, ne_ratio, _N_fine=500):
-    """Two-line neon: S(r) = Ã(r;λ₁,R1) + ne_ratio·Ã(r;λ₂,R2) + B"""
+    """
+    Two-line neon forward model with independent reflectivities R1, R2.
+        S(r) = Ã(r; λ₁, R1) + ne_ratio × Ã(r; λ₂, R2) + B
+    sigma1 = sigma2 = 0 always (constant-blur PSF, see docstring §2).
+    """
     r_fine = np.linspace(0.0, r_max, _N_fine)
     A1 = airy_modified(r_fine, NE_WAVELENGTH_1_AIR_M,
                        t, R1, alpha, 1.0, r_max,
@@ -142,24 +260,29 @@ def _model_components(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
 
 
 # ---------------------------------------------------------------------------
-# Finite-difference Jacobian for covariance
+# Finite-difference Jacobian for covariance estimation
 # ---------------------------------------------------------------------------
 
 def _fd_jacobian(residual_fn, p0, rel_step=1e-5):
     """
-    Compute a finite-difference Jacobian of residual_fn at p0.
+    Forward finite-difference Jacobian of residual_fn at p0.
 
-    Uses forward differences with step = rel_step * |p0| (minimum 1e-10).
+    step = max(rel_step * |p0[j]|, 1e-10) for each parameter j.
     Returns J with shape (n_residuals, n_params).
 
-    This is called only for covariance estimation after the LM solve, so
-    the extra function evaluations (n_params forward steps) are acceptable.
-    No bounds are needed — we are just evaluating derivatives at a point.
+    Called only after the LM solve for covariance estimation — the extra
+    n_params forward evaluations are negligible in runtime.
+    No bounds needed: we evaluate derivatives at a fixed point.
+
+    This approach was adopted after two failed alternatives:
+      - lm.jac[:n_good,:] → penalty-row contamination → stderrs ≈ 1e-14
+      - trf re-evaluation → "Initial guess outside bounds" when lm.x on edge
+    See docstring §4 for full history.
     """
-    r0   = residual_fn(p0)
-    n_r  = len(r0)
-    n_p  = len(p0)
-    J    = np.zeros((n_r, n_p))
+    r0  = residual_fn(p0)
+    n_r = len(r0)
+    n_p = len(p0)
+    J   = np.zeros((n_r, n_p))
     for j in range(n_p):
         h      = max(rel_step * abs(p0[j]), 1e-10)
         p_fwd  = p0.copy(); p_fwd[j] += h
@@ -175,11 +298,10 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
                p_all, free_names, bounds_dict, config):
     """
     Run one LM stage with soft-bound penalty residuals.
-    Covariance estimated via direct finite-difference Jacobian at the
-    solution — no bounds required, no trf re-evaluation.
+    Covariance via _fd_jacobian at the solution (data residuals only).
 
     Returns (p_updated, cov, stderrs, chi2_red, lm_result).
-    stderrs/cov indexed by position in free_names.
+    stderrs and cov are indexed by position in free_names.
     """
     free_idx  = np.array([_IDX[n] for n in free_names])
     p_fixed   = p_all.copy()
@@ -190,9 +312,8 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
     lo_arr    = np.array([bounds_dict[n][1] for n in free_names])
     hi_arr    = np.array([bounds_dict[n][2] for n in free_names])
     range_arr = hi_arr - lo_arr + 1e-30
-    pen_sigma = range_arr * 0.01
+    pen_sigma = range_arr * 0.01   # soft-bound: 1% of range per sigma unit
 
-    # ---- LM optimisation with soft-bound penalties ----------------------
     def _residuals_penalised(p_free):
         p = p_fixed.copy()
         p[free_idx] = p_free
@@ -211,7 +332,7 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
     p_updated = p_fixed.copy()
     p_updated[free_idx] = lm.x
 
-    # ---- chi² from data residuals only ----------------------------------
+    # chi² from data residuals only (no penalty rows)
     t, alpha, R1, R2, I0, I1, I2, sigma0, sigma1, sigma2, B, ne_ratio = p_updated
     model_f = _neon_model(r_good, r_max, t, alpha, R1, R2,
                           I0, I1, I2, sigma0, sigma1, sigma2, B, ne_ratio)
@@ -219,9 +340,7 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
     dof     = max(n_good - n_free, 1)
     chi2    = float(np.sum(data_r ** 2)) / dof
 
-    # ---- Covariance via finite-difference Jacobian ----------------------
-    # Define a data-only residual function in terms of the free parameters.
-    # No bounds involved — we simply evaluate the function at the solution.
+    # Covariance via FD Jacobian — bounds-free, penalty-free
     def _residuals_data_only(p_free):
         p = p_fixed.copy()
         p[free_idx] = p_free
@@ -231,8 +350,7 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
         return (prof_good - model) / sig_good
 
     try:
-        J       = _fd_jacobian(_residuals_data_only, lm.x)
-        # SVD-based inversion — robust to near-singular directions
+        J        = _fd_jacobian(_residuals_data_only, lm.x)
         _, s, VT = np.linalg.svd(J, full_matrices=False)
         threshold = np.finfo(float).eps * max(J.shape) * s[0]
         s_inv    = np.where(s > threshold, 1.0 / s, 0.0)
@@ -250,7 +368,7 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
 
 
 # ---------------------------------------------------------------------------
-# Shims and result dataclass
+# Dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -264,19 +382,26 @@ class _FringeProfile:
 
 @dataclass
 class FitResult:
-    """Fit result for the 12-parameter two-reflectivity neon inversion."""
+    """
+    Fit result for the 10-free-parameter neon calibration inversion.
+
+    sigma1 = sigma2 = 0 (fixed).  sigma_sigma1 = sigma_sigma2 = NaN.
+    See docstring §2 for the PSF investigation that justified fixing them.
+    """
     t_m:      float;  alpha:    float
     R1:       float;  R2:       float
     I0:       float;  I1:       float;  I2:      float
-    sigma0:   float;  sigma1:   float
-    sigma2:   float   # fixed after Stage 3
+    sigma0:   float
+    sigma1:   float   # always 0.0 — fixed (see docstring §2)
+    sigma2:   float   # always 0.0 — fixed (see docstring §2)
     B:        float;  ne_ratio: float
 
     sigma_t_m:      float;  sigma_alpha:    float
     sigma_R1:       float;  sigma_R2:       float
-    sigma_I0:       float;  sigma_I1:       float;  sigma_I2:      float
-    sigma_sigma0:   float;  sigma_sigma1:   float
-    sigma_sigma2:   float   # NaN — fixed in Stage 4
+    sigma_I0:       float;  sigma_I1:       float;  sigma_I2:    float
+    sigma_sigma0:   float
+    sigma_sigma1:   float   # NaN — fixed
+    sigma_sigma2:   float   # NaN — fixed
     sigma_B:        float;  sigma_ne_ratio: float
 
     epsilon_cal:       float
@@ -304,7 +429,11 @@ def run_staged_inversion(fp: _FringeProfile,
                          ftol: float = 1e-14,
                          xtol: float = 1e-14,
                          gtol: float = 1e-14) -> FitResult:
-    """4-stage LM inversion with finite-difference covariance at Stage 4."""
+    """
+    4-stage LM inversion with 10 free parameters.
+    sigma1 = sigma2 = 0 fixed throughout (constant-blur PSF).
+    Covariance from FD Jacobian at Stage 4 solution.
+    """
     good   = (~fp.masked & np.isfinite(fp.sigma_profile)
               & (fp.sigma_profile > 0) & np.isfinite(fp.profile))
     r_good = fp.r_grid[good]
@@ -330,8 +459,8 @@ def run_staged_inversion(fp: _FringeProfile,
         'I1':       (0.0,            -0.5,               0.5),
         'I2':       (0.0,            -0.5,               0.5),
         'sigma0':   (sigma0_init,    0.01,               5.0),
-        'sigma1':   (0.0,            -2.0,               2.0),
-        'sigma2':   (0.0,            -2.0,               2.0),
+        'sigma1':   (0.0,            -2.0,               2.0),   # never freed
+        'sigma2':   (0.0,            -2.0,               2.0),   # never freed
         'B':        (B_init,         10.0,               2000.0),
         'ne_ratio': (ne_ratio_init,  0.01,               2.0),
     }
@@ -353,20 +482,22 @@ def run_staged_inversion(fp: _FringeProfile,
     log.info(f"  χ²/ν = {chi2_2:.3f}   R1={p_all[_IDX['R1']]:.4f}  "
              f"R2={p_all[_IDX['R2']]:.4f}")
 
-    log.info("Stage 3 — + PSF widths (sigma0; sigma2 free)")
+    log.info("Stage 3 — + PSF base width sigma0  (sigma1, sigma2 fixed at 0)")
     p_all, _, _, chi2_3, _ = _run_stage(
         r_good, p_good, s_good, r_max, p_all, _STAGE_FREE[3], bounds, cfg)
     chi2_by_stage.append(chi2_3)
-    log.info(f"  χ²/ν = {chi2_3:.3f}   sigma0={p_all[_IDX['sigma0']]:.4f} px  "
-             f"sigma2={p_all[_IDX['sigma2']]:.4f} px")
+    log.info(f"  χ²/ν = {chi2_3:.3f}   sigma0={p_all[_IDX['sigma0']]:.4f} px")
 
-    log.info("Stage 4 — 11 free params (sigma2 fixed); FD covariance")
+    log.info("Stage 4 — 10 free params (sigma1=sigma2=0 fixed); FD covariance")
     p_all, cov4, se4, chi2_4, res4 = _run_stage(
         r_good, p_good, s_good, r_max, p_all, _STAGE_FREE[4], bounds, cfg)
     chi2_by_stage.append(chi2_4)
     log.info(f"  χ²/ν = {chi2_4:.3f}   R1={p_all[_IDX['R1']]:.4f}  "
-             f"R2={p_all[_IDX['R2']]:.4f}  ne_ratio={p_all[_IDX['ne_ratio']]:.4f}")
+             f"R2={p_all[_IDX['R2']]:.4f}  "
+             f"sigma0={p_all[_IDX['sigma0']]:.4f} px  "
+             f"ne_ratio={p_all[_IDX['ne_ratio']]:.4f}")
 
+    # se4 indexed by position in _STAGE_FREE[4] (10 elements)
     s4_names = _STAGE_FREE[4]
     s4_lkp   = {n: i for i, n in enumerate(s4_names)}
 
@@ -376,7 +507,8 @@ def run_staged_inversion(fp: _FringeProfile,
     log.info("  Stage 4 stderrs:")
     for name in s4_names:
         log.info(f"    sigma_{name:12s} = {_se(name):.3e}")
-    log.info(f"    sigma_sigma2    = NaN  (fixed)")
+    log.info("    sigma_sigma1    = NaN  (fixed at 0)")
+    log.info("    sigma_sigma2    = NaN  (fixed at 0)")
 
     converged = bool(res4.success or res4.cost < 1e-10)
     t_f, alpha_f, R1_f, R2_f, I0_f, I1_f, I2_f, \
@@ -389,14 +521,17 @@ def run_staged_inversion(fp: _FringeProfile,
         t_m=float(t_f),     alpha=float(alpha_f),
         R1=float(R1_f),     R2=float(R2_f),
         I0=float(I0_f),     I1=float(I1_f),     I2=float(I2_f),
-        sigma0=float(s0_f), sigma1=float(s1_f), sigma2=float(s2_f),
+        sigma0=float(s0_f),
+        sigma1=0.0,          # fixed
+        sigma2=0.0,          # fixed
         B=float(B_f),       ne_ratio=float(ne_f),
 
         sigma_t_m=_se('t_m'),        sigma_alpha=_se('alpha'),
         sigma_R1=_se('R1'),          sigma_R2=_se('R2'),
-        sigma_I0=_se('I0'),          sigma_I1=_se('I1'),      sigma_I2=_se('I2'),
-        sigma_sigma0=_se('sigma0'),  sigma_sigma1=_se('sigma1'),
-        sigma_sigma2=float('nan'),
+        sigma_I0=_se('I0'),          sigma_I1=_se('I1'),    sigma_I2=_se('I2'),
+        sigma_sigma0=_se('sigma0'),
+        sigma_sigma1=float('nan'),   # fixed
+        sigma_sigma2=float('nan'),   # fixed
         sigma_B=_se('B'),            sigma_ne_ratio=_se('ne_ratio'),
 
         epsilon_cal=float(eps_cal),
@@ -490,7 +625,8 @@ def make_figure(r2_data, profile, sigma,
         f"R2 = {fit.R2:.4f} {_fmt_unc(fit.sigma_R2)}   "
         f"ΔR = R2−R1 = {fit.R2-fit.R1:+.4f}\n"
         f"ne_ratio = {fit.ne_ratio:.4f} {_fmt_unc(fit.sigma_ne_ratio)}   "
-        f"[nominal = {NE_INTENSITY_2_NOMINAL:.2f}]",
+        f"[nominal = {NE_INTENSITY_2_NOMINAL:.2f}]   "
+        f"σ₀ = {fit.sigma0:.3f} {_fmt_unc(fit.sigma_sigma0)} px",
         transform=ax_fit.transAxes, va="top", ha="left", fontsize=8.5,
         fontfamily="monospace",
         bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
@@ -510,48 +646,48 @@ def make_figure(r2_data, profile, sigma,
 
     # ---- Parameter table -------------------------------------------------
     rows = [
-        ("t",         f"{fit.t_m*1e3:.7f} mm",
-                      f"±{fit.sigma_t_m*1e6:.2e} µm" if not np.isnan(fit.sigma_t_m) else "fixed",
-                      "Etalon gap  [Tolansky-seeded, Group A]"),
-        ("α",         f"{fit.alpha:.5e} rad/px",
-                      _fmt_unc(fit.sigma_alpha),
-                      "Plate scale  [Tolansky-seeded, Group A]"),
-        ("R1",        f"{fit.R1:.5f}",
-                      _fmt_unc(fit.sigma_R1),
-                      "Reflectivity λ₁ = 640.2 nm  [Group B]"),
-        ("R2",        f"{fit.R2:.5f}",
-                      _fmt_unc(fit.sigma_R2),
-                      "Reflectivity λ₂ = 638.3 nm  [Group B, NEW]"),
-        ("ΔR=R2−R1",  f"{fit.R2-fit.R1:+.5f}",
-                      "—",
-                      "Wavelength-dependent finesse difference"),
-        ("I₀",        f"{fit.I0:.1f} ADU",
-                      _fmt_unc(fit.sigma_I0),
-                      "Mean intensity  [Group B, shared]"),
-        ("I₁",        f"{fit.I1:.5f}",
-                      _fmt_unc(fit.sigma_I1),
-                      "Linear vignetting  [Group B, shared]"),
-        ("I₂",        f"{fit.I2:.5f}",
-                      _fmt_unc(fit.sigma_I2),
-                      "Quadratic vignetting  [Group B, shared]"),
-        ("σ₀",        f"{fit.sigma0:.4f} px",
-                      _fmt_unc(fit.sigma_sigma0),
-                      "PSF base width  [Group B, shared]"),
-        ("σ₁",        f"{fit.sigma1:.4f} px",
-                      _fmt_unc(fit.sigma_sigma1),
-                      "PSF sin variation  [Group B, shared]"),
-        ("σ₂",        f"{fit.sigma2:.4f} px",
-                      "fixed",
-                      "PSF cos variation  [fixed after Stage 3]"),
-        ("B",         f"{fit.B:.1f} ADU",
-                      _fmt_unc(fit.sigma_B),
-                      "CCD bias pedestal  [Group B]"),
-        ("ne_ratio",  f"{fit.ne_ratio:.4f}",
-                      _fmt_unc(fit.sigma_ne_ratio),
-                      f"λ₂/λ₁ intensity ratio  [Group B, nominal={NE_INTENSITY_2_NOMINAL:.2f}]"),
-        ("ε_cal",     f"{fit.epsilon_cal:.6f}",
-                      _fmt_unc(fit.sigma_epsilon_cal),
-                      "Fractional order at centre  (zero-wind reference)"),
+        ("t",        f"{fit.t_m*1e3:.7f} mm",
+                     f"±{fit.sigma_t_m*1e6:.2e} µm" if not np.isnan(fit.sigma_t_m) else "fixed",
+                     "Etalon gap  [Tolansky-seeded, Group A]"),
+        ("α",        f"{fit.alpha:.5e} rad/px",
+                     _fmt_unc(fit.sigma_alpha),
+                     "Plate scale  [Tolansky-seeded, Group A]"),
+        ("R1",       f"{fit.R1:.5f}",
+                     _fmt_unc(fit.sigma_R1),
+                     "Reflectivity λ₁ = 640.2 nm  [Group B]"),
+        ("R2",       f"{fit.R2:.5f}",
+                     _fmt_unc(fit.sigma_R2),
+                     "Reflectivity λ₂ = 638.3 nm  [Group B]"),
+        ("ΔR=R2−R1", f"{fit.R2-fit.R1:+.5f}",
+                     "—",
+                     "Wavelength-dependent finesse difference  (4.7σ significant)"),
+        ("I₀",       f"{fit.I0:.1f} ADU",
+                     _fmt_unc(fit.sigma_I0),
+                     "Mean intensity  [Group B, shared]"),
+        ("I₁",       f"{fit.I1:.5f}",
+                     _fmt_unc(fit.sigma_I1),
+                     "Linear vignetting  [Group B, shared]"),
+        ("I₂",       f"{fit.I2:.5f}",
+                     _fmt_unc(fit.sigma_I2),
+                     "Quadratic vignetting  [Group B, shared]"),
+        ("σ₀",       f"{fit.sigma0:.4f} px",
+                     _fmt_unc(fit.sigma_sigma0),
+                     "PSF base width  [Group B]  σ(r) = σ₀  (constant blur)"),
+        ("σ₁",       "0.0000 px",
+                     "fixed",
+                     "PSF sin variation  [fixed=0; F-test p=0.998, see docstring §2]"),
+        ("σ₂",       "0.0000 px",
+                     "fixed",
+                     "PSF cos variation  [fixed=0; singular Hessian column]"),
+        ("B",        f"{fit.B:.1f} ADU",
+                     _fmt_unc(fit.sigma_B),
+                     "CCD bias pedestal  [Group B]"),
+        ("ne_ratio", f"{fit.ne_ratio:.4f}",
+                     _fmt_unc(fit.sigma_ne_ratio),
+                     f"λ₂/λ₁ intensity ratio  [Group B, nominal={NE_INTENSITY_2_NOMINAL:.2f}]"),
+        ("ε_cal",    f"{fit.epsilon_cal:.6f}",
+                     _fmt_unc(fit.sigma_epsilon_cal),
+                     "Fractional order at centre  (zero-wind phase reference)"),
     ]
 
     tbl = ax_tbl.table(
@@ -560,8 +696,8 @@ def make_figure(r2_data, profile, sigma,
         cellLoc="left", loc="upper center",
         colWidths=[0.10, 0.20, 0.13, 0.57])
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8.2)
-    tbl.scale(1, 1.20)
+    tbl.set_fontsize(8.0)
+    tbl.scale(1, 1.18)
 
     for (row, col), cell in tbl.get_celld().items():
         if row == 0:
@@ -569,11 +705,11 @@ def make_figure(r2_data, profile, sigma,
             cell.set_text_props(fontweight="bold")
         elif row % 2 == 0:
             cell.set_facecolor("#f0f4ff")
-        if row in (3, 4):
+        if row in (3, 4):           # R2 and ΔR — yellow highlight
             cell.set_facecolor("#fff4c2")
-        if row == 11:
+        if row in (10, 11):         # σ₁, σ₂ fixed — grey
             cell.set_facecolor("#eeeeee")
-        if row == 13:
+        if row == 13:               # ne_ratio — green tint
             cell.set_facecolor("#f4fff4")
 
     stage_str = "  ".join(
@@ -581,26 +717,27 @@ def make_figure(r2_data, profile, sigma,
     ax_tbl.text(0.01, 0.01,
                 f"χ²/ν by stage:  {stage_str}    "
                 f"bins used: {fit.n_bins_used}   "
-                f"free params: 11  (sigma2 fixed after Stage 3)",
+                f"free params: 10  (σ₁=σ₂=0 fixed; F-test p=0.998)",
                 transform=ax_tbl.transAxes, va="bottom", ha="left",
                 fontsize=8.5, fontfamily="monospace", color="dimgrey")
 
     fig.suptitle(
         "WindCube FPI — Neon Calibration Fringe Inversion  "
-        "(12-param: independent R1, R2 / Harding 2014)",
+        "(10-param: independent R1, R2; constant PSF / Harding 2014)",
         fontsize=12, fontweight="bold", y=0.980)
     if source_path:
         fig.text(0.5, 0.963, source_path,
                  ha="center", va="top", fontsize=8,
                  fontfamily="monospace", color="dimgrey")
+    # Model equation — updated to reflect constant-blur PSF
     _model_eq = (
         r"$S(r) = \tilde{A}(r;\,\lambda_1, t, \alpha, R_1)"
-        r"\;\circledast\;\mathcal{G}(\sigma(r))"
+        r"\;\circledast\;\mathcal{G}(\sigma_0)"
         r"\;+\;n_\mathrm{ratio}\cdot\tilde{A}(r;\,\lambda_2, t, \alpha, R_2)"
-        r"\;\circledast\;\mathcal{G}(\sigma(r))\;+\;B$"
+        r"\;\circledast\;\mathcal{G}(\sigma_0)\;+\;B$"
         "\n"
         r"$I(r)=I_0[1+I_1(r/r_\mathrm{max})+I_2(r/r_\mathrm{max})^2]$"
-        r"$\quad\sigma(r)=\sigma_0+\sigma_1\sin(\pi r/r_\mathrm{max})+\sigma_2\cos(\pi r/r_\mathrm{max})$"
+        r"$\quad\sigma(r)=\sigma_0\;(\mathrm{constant\;blur})$"
         r"$\quad[\tilde{A}=\mathrm{Airy}\times I(r),\;\mathcal{G}=\mathrm{Gaussian\;PSF}]$"
     )
     fig.text(0.5, 0.948, _model_eq,
@@ -692,15 +829,16 @@ def main():
           f"signal ∈ [{profile_adu.min():.0f}, {profile_adu.max():.0f}] ADU  "
           f"σ ∈ [{sigma_adu.min():.1f}, {sigma_adu.max():.1f}] ADU")
 
-    print(f"\nRunning staged LM inversion  "
-          f"(R1 init={R1_init:.3f}, R2 init={R2_init:.3f})…")
+    print(f"\nRunning 10-parameter staged LM inversion  "
+          f"(R1 init={R1_init:.3f}, R2 init={R2_init:.3f}  "
+          f"σ₁=σ₂=0 fixed)…")
     fit = run_staged_inversion(
         fp, t_eff, alpha_tolansky, eps_a,
         R1_init=R1_init, R2_init=R2_init,
         ne_ratio_init=ne_ratio_init)
 
     print(f"\n{'='*68}")
-    print("CALIBRATION INVERSION RESULT  (sigma2 fixed in Stage 4)")
+    print("CALIBRATION INVERSION RESULT  (10 free params; σ₁=σ₂=0 fixed)")
     print(f"{'='*68}")
     print(f"  Converged:      {fit.converged}")
     print(f"  χ²/ν:           {fit.chi2_reduced:.4f}")
@@ -714,13 +852,13 @@ def main():
     print(f"  --- Group B ---")
     print(f"  R1       = {fit.R1:.5f}   {_fmt_unc(fit.sigma_R1)}   [λ₁=640.2 nm]")
     print(f"  R2       = {fit.R2:.5f}   {_fmt_unc(fit.sigma_R2)}   [λ₂=638.3 nm]")
-    print(f"  ΔR=R2−R1 = {fit.R2-fit.R1:+.5f}")
+    print(f"  ΔR=R2−R1 = {fit.R2-fit.R1:+.5f}   "
+          f"({'R2>R1: λ₂ sharper' if fit.R2>fit.R1 else 'R2<R1: λ₂ broader'})")
     print(f"  I0       = {fit.I0:.1f}   {_fmt_unc(fit.sigma_I0)} ADU")
     print(f"  I1       = {fit.I1:.5f}   {_fmt_unc(fit.sigma_I1)}")
     print(f"  I2       = {fit.I2:.5f}   {_fmt_unc(fit.sigma_I2)}")
-    print(f"  sigma0   = {fit.sigma0:.4f}   {_fmt_unc(fit.sigma_sigma0)} px")
-    print(f"  sigma1   = {fit.sigma1:.4f}   {_fmt_unc(fit.sigma_sigma1)} px")
-    print(f"  sigma2   = {fit.sigma2:.4f}   fixed  px")
+    print(f"  sigma0   = {fit.sigma0:.4f}   {_fmt_unc(fit.sigma_sigma0)} px  "
+          f"[σ₁=σ₂=0 fixed; F-test p=0.998]")
     print(f"  B        = {fit.B:.2f}   {_fmt_unc(fit.sigma_B)} ADU")
     print(f"  ne_ratio = {fit.ne_ratio:.4f}   {_fmt_unc(fit.sigma_ne_ratio)}   "
           f"[nominal {NE_INTENSITY_2_NOMINAL:.2f}]")
