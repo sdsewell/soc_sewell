@@ -45,6 +45,88 @@ Recovering the unknown from the measured slope:
     d = f² λ / (n S)          if  λ, n, f  are known
     λ = n d S / f²            if  d, n, f  are known
 
+GAP-UNCERTAINTY BUDGET AND WIND-VELOCITY SENSITIVITY
+------------------------------------------------------
+The Tolansky 1-sigma uncertainty on the etalon gap d is ~0.0002 mm (200 nm).
+Converting this to an equivalent line-of-sight wind-velocity error requires
+propagating sigma_d through the wind retrieval equation.
+
+THE CHAIN
+The wind is recovered from the phase shift between the airglow fringe and the
+calibration fringe:
+
+    v_rel = c × (λ_c − λ₀) / λ₀
+
+where λ_c is recovered by finding the fringe order that minimises χ².  The
+fringe order depends on the etalon gap d through the FSR:
+
+    FSR = λ₀² / (2d)
+
+An error in d shifts all recovered fringe orders by the same fractional
+amount, which propagates directly into λ_c and hence v_rel.
+
+PROPAGATION
+The phase (fractional interference order) at the fringe centre is:
+
+    ε = (2d / λ_c) mod 1
+
+A gap error σ_d shifts ε by:
+
+    σ_ε = 2 σ_d / λ_c
+
+The velocity uncertainty from this phase error is:
+
+    σ_v = c × σ_ε × FSR / λ₀
+        = c × (2 σ_d / λ_c) × (λ₀² / 2d) / λ₀
+        = c × σ_d × λ₀ / (d × λ_c)
+
+Since λ_c ≈ λ₀ = 630.0304 nm for near-zero winds:
+
+    σ_v = c × σ_d / d
+
+NUMBERS (naive single-beam estimate)
+    c      = 2.998 × 10⁸ m/s
+    σ_d    = 200 nm = 2 × 10⁻⁷ m
+    d      = 20.107 mm = 2.0107 × 10⁻² m
+
+    σ_v = (2.998 × 10⁸) × (2 × 10⁻⁷) / (2.0107 × 10⁻²) ≈ 2980 m/s
+
+RESULT AND RESOLUTION
+σ_v ≈ 2980 m/s (≈ 3 km/s) from the Tolansky gap uncertainty alone.
+
+This is far larger than the STM budget of 9.8 m/s, but the apparent
+contradiction resolves because the gap error enters the wind retrieval in
+two places that nearly cancel.  The wind is the DIFFERENTIAL phase between
+the airglow fringe and the calibration fringe:
+
+    v_rel = c × (ε_sci − ε_cal) × FSR / λ₀
+
+Both ε_sci and ε_cal depend on d through FSR = λ₀²/(2d).  If d is wrong by
+σ_d, both shift by σ_ε = 2σ_d/λ — and their difference is insensitive to a
+common-mode gap error to first order.
+
+The residual sensitivity arises because the airglow line (630.0 nm) and the
+neon calibration lines (640.2 nm, 638.3 nm) are at slightly different
+wavelengths, so the FSR differs slightly between the two.  The fractional
+wavelength difference is:
+
+    Δλ/λ = (640.2 − 630.0) / 630.0 ≈ 0.016
+
+So the common-mode cancellation is ~98.4 % effective, and the residual
+gap-uncertainty wind error is:
+
+    σ_v(residual) ≈ 2980 × 0.016 ≈ 48 m/s
+
+To brng this lower than the 9.8 m/s STM budget requires us to reduce the sigma_d from 
+48 m/s by about 5 to reach 9.8 m/s uncertainty.  So the required gap uncertainty is:
+σ_d (required) = 0.0002 mm / 5 = 0.000020 mm (40nm).  Whether the Tolansky analysis can actually achieve
+40nm of precision is worth examining.  The current result of ±200 nm is the formal uncertainty from a 
+single calibration image. Averaging multiple calibration images, or 
+improving the annular reduction SNR, could plausibly get WindCube to 40–50 nm. 
+
+Since these calibraion images were acquired under the conditions of a warm (noisy) focal plane, its not
+unreasonable to believe we'll get there when it's properly cooled.
+
 UNIT CONVENTION
 ---------------
 r, f, and d must all be in the SAME unit (e.g. all in mm, or all in pixels).
@@ -1186,4 +1268,7 @@ if __name__ == "__main__":
     # ── Diagnostic figure ─────────────────────────────────────────────────────
     import matplotlib.pyplot as plt
     _plot_tolansky_result(result)
+    fig_path = peaks_path.with_name(peaks_path.stem + "_tolansky_2line.png")
+    plt.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"  Figure saved → {fig_path}")
     plt.show()

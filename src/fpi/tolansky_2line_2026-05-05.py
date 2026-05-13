@@ -578,11 +578,8 @@ def plot_tolansky_result(
     fit_a  = r.Delta_a * p_fine + int_a
     fit_b  = r.Delta_b * p_fine + int_b
 
-    # x-intercepts: r²=0 → p = 1 − ε
-    p_int_a = 1.0 - r.eps_a
-    p_int_b = 1.0 - r.eps_b
     data_max = max(r.r2_a.max(), r.r2_b.max()) * 1.05
-    y_min_tol = -0.05 * data_max   # small negative margin to show intercepts
+    y_min_tol = -0.05 * data_max   # small negative margin
     ratio_ppm = r.Delta_ratio_residual * 1e6
 
     # ── A: Joint Tolansky plot ────────────────────────────────────────────────
@@ -590,26 +587,15 @@ def plot_tolansky_result(
     ax_tol.errorbar(p_a, r.r2_a, yerr=r.sigma_r2_a,
                     fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
                     lw=1.4, zorder=3,
-                    label=f"λ_a = {r.lam_a_nm:.4f} nm  (n={r.n_rings_a})")
+                    label=f"λ_a = {r.lam_a_nm:.4f} nm (air)  (n={r.n_rings_a})")
     ax_tol.errorbar(p_b, r.r2_b, yerr=r.sigma_r2_b,
                     fmt="s", color=ORANGE, ecolor=GRAY, capsize=4, ms=6,
                     lw=1.4, zorder=3,
-                    label=f"λ_b = {r.lam_b_nm:.4f} nm  (n={r.n_rings_b})")
+                    label=f"λ_b = {r.lam_b_nm:.4f} nm (air)  (n={r.n_rings_b})")
     ax_tol.plot(p_fine, fit_a, color=BLUE,   lw=1.8, ls="-",  zorder=2,
                 label=f"Fit a:  Δ_a = {r.Delta_a:.4g}")
     ax_tol.plot(p_fine, fit_b, color=ORANGE, lw=1.8, ls="--", zorder=2,
                 label=f"Fit b:  Δ_b = {r.Delta_b:.4g}")
-    # Mark r²=0 intercepts with vertical tick marks and labels
-    ax_tol.scatter([p_int_a], [0], color=BLUE,   s=60, zorder=5,
-                   marker="|", linewidths=2.0)
-    ax_tol.scatter([p_int_b], [0], color=ORANGE, s=60, zorder=5,
-                   marker="|", linewidths=2.0)
-    ax_tol.text(p_int_a, y_min_tol * 0.75,
-                f"1−ε_a={p_int_a:.3f}", ha="center", va="top",
-                fontsize=8, color=BLUE, fontfamily="monospace")
-    ax_tol.text(p_int_b, y_min_tol * 0.75,
-                f"1−ε_b={p_int_b:.3f}", ha="center", va="top",
-                fontsize=8, color=ORANGE, fontfamily="monospace")
     ax_tol.set_xlim(-0.2, p_all.max() + 0.5)
     ax_tol.set_ylim(y_min_tol, data_max)
     ax_tol.set_xticks(range(0, int(p_all.max()) + 1))
@@ -709,13 +695,13 @@ def plot_tolansky_result(
         ("  d = (N_Δ + ε_a−ε_b)·λ_a·λ_b / [2·n·(λ_b−λ_a)]",          GRAY,    8.0,  "normal", "italic", 0.00),
         (f"  N_Δ = {r.N_Delta}"
          f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", "normal", 0.00),
-        (f"  d  = {d_mm:.7f} ± {sig_d_mm:.4f} mm"
+        (f"  d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
          f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   "normal", 0.00),
         ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
         ("  α_a = √(λ_a·n_air / (d·Δ_a))",                             GRAY,    8.0,  "normal", "italic", 0.00),
-        (f"  α_a = {r.alpha_a:.4e} rad/px"
-         f"   α_b = {r.alpha_b:.4e} rad/px",                          BLACK,   8.5,  "normal", "normal", 0.00),
-        (f"  α   = {r.alpha_mean:.4e} ± {r.sigma_alpha:.2e} rad/px"
+        (f"  α_a = {r.alpha_a:.6e} rad/px"
+         f"   α_b = {r.alpha_b:.6e} rad/px",                          BLACK,   8.5,  "normal", "normal", 0.00),
+        (f"  α   = {r.alpha_mean:.6e} ± {r.sigma_alpha:.2e} rad/px"
          f"   (2σ: ±{r.two_sigma_alpha:.2e})",                        "purple", 9.5, "bold",   "normal", 0.00),
         (f"  consistency: {r.alpha_consistency*1e6:.1f} ppm"
          f"   {'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
@@ -736,7 +722,7 @@ def plot_tolansky_result(
     _renderer = fig.canvas.get_renderer()
     _leg_bb   = _tol_leg.get_window_extent(_renderer)
     _leg_y0   = ax_tol.transAxes.inverted().transform((0, _leg_bb.y0))[1]
-    ax_tol.text(0.02, _leg_y0, _wls_ann,
+    ax_tol.text(0.02, _leg_y0 - 0.04, _wls_ann,
                 transform=ax_tol.transAxes,
                 ha="left", va="top", fontsize=7.5,
                 color=BLACK, fontfamily="monospace",

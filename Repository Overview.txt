@@ -1,3 +1,9 @@
+0) There seems to be little difference in the annular reduction quality operating on a smaller ROI without the 
+    raw binary image artifacts (dark rows and columns, ghosting, etc.) compared with just doing an annular reduction
+    on the entire raw binary image.  Furthermore, the coefficient of variance (CV) in the Tolansky 2-Line analysis 
+    for the determination of Delta (Free Spectral Range [px^2 / fringe)]) is LOWER when the entire (messy) binary
+    image is used!!!
+
 1) gen01_synthetic_metadata_generator_2026_04_16.py
     Simulates the entire mission (or an 'n' day subset) with modeled calibration, dark and science (airglow) 
     images each of which is sampled at the correct time and embedded with realistic metadata
