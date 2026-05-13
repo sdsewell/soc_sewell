@@ -20,7 +20,7 @@ from src.fpi.m02_calibration_synthesis_2026_05_05 import (  # noqa: F401
     radial_profile_to_image,
     synthesise_calibration_image,
 )
-from src.fpi.m03_airglow_synthesis_2026_05_05 import (  # noqa: F401
+from src.fpi.m03_airglow_synthesis_2026_05_12 import (  # noqa: F401
     add_gaussian_noise,
     synthesise_airglow_image,
 )
