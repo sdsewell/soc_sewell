@@ -770,6 +770,9 @@ def main():
                       lam1_fine=lam1_fine, lam2_fine=lam2_fine,
                       fit=fit, source_name=npy_path.name,
                       source_path=str(npy_path))
+    fig_path = npy_path.with_name(npy_path.stem + "_H05_cal.png")
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"  Figure saved → {fig_path}")
     plt.show()
 
 
