@@ -1224,7 +1224,7 @@ if __name__ == "__main__":
 
     # ── Load canonical S13a implementation ────────────────────────────────────
     _fpi_path = (pathlib.Path(__file__).resolve().parent.parent
-                 / "fpi" / "tolansky_2line_2026-05-05.py")
+                 / "fpi" / "tolansky_2026-05-13.py")
     _s13a_spec = importlib.util.spec_from_file_location(
         "tolansky_2line_s13a", str(_fpi_path)
     )
