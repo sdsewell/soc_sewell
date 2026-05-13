@@ -1,26 +1,39 @@
 """
-Module:      m03_airglow_synthesis_2026_05_05.py
+Module:      m03_airglow_synthesis_2026_05_12.py
 Spec:        docs/specs/H03_airglow_synthesis_2026-05-05.md
 Author:      Claude Code
 Generated:   2026-05-05
-Last tested: 2026-05-05
+Last tested: 2026-05-12
 Project:     WindCube FPI Pipeline — NCAR/HAO
 Repo:        soc_sewell
 
 Synthesises a 2D OI 630 nm airglow fringe image following Harding (2014)
-Eqs. 10–11, 14–16 (instrument matrix path). Supports two observation regimes:
+Eqs. 10–11. Supports two observation regimes:
   - Cross-track (even orbits): v_rel in [−1000, +1000] m/s; fringe_order_offset=0
   - Along-track (odd orbits):  v_rel in [−8000, −6000] m/s; fringe_order_offset=−1 or −2
 
 Key design choices:
-  - L_synth=300; H06 inversion uses L=101 (anti-inverse-crime, H01 §2.4)
-  - n_fsr=10 default covers both regimes with ~3× margin
   - Delta-function OI source; Harding Eq. 12 (temperature) excluded
   - radial_profile_to_image imported from H02; not reimplemented
   - Gaussian noise default (dark-noise dominated), per Harding §4
-  - Source spectrum built inline (not via make_airglow_spectrum) so that
-    along-track velocities down to −8000 m/s work without hitting H01's
-    v_rel bounds check, which is enforced at −7700 m/s.
+  - Profile computed via direct airy_modified() call (not instrument matrix).
+
+Changes from 2026_05_05:
+  - Steps 3–6 replaced: instrument matrix path removed in favour of a direct
+    airy_modified() call at lambda_c_m (delta-function limit).
+    Rationale: the matrix path requires Y_line in ADU/m (spectral density),
+    not ADU/bin. The conversion Y_line /= dlam produced physically correct
+    mathematics but signal levels of ~4×10⁶ ADU — far exceeding the 14-bit
+    detector range (max 16383 ADU). The direct Airy call gives signal levels
+    in the expected range (bias + Y_line × Airy_peak ≈ 2011 + 600 ≈ 2600 ADU
+    for Y_line=1000, I0=6480, R=0.239) and is simpler and more transparent.
+    The anti-inverse-crime rule (L_synth ≠ L_inv) was relevant only for the
+    matrix path and does not apply to the direct call; L_synth and lam_grid
+    are no longer needed and have been removed from synthesise_airglow_image().
+  - Y_bg support retained: background adds a flat offset Y_bg to the profile.
+  - lam_grid removed from output dict (no longer computed).
+  - L_synth and n_fsr parameters retained as no-ops for API compatibility
+    but marked deprecated in the docstring.
 """
 
 import numpy as np
@@ -34,8 +47,7 @@ from windcube.constants import (
 )
 from src.fpi.airy_forward_model_2026_05_05 import (
     InstrumentParams,
-    build_instrument_matrix,
-    make_wavelength_grid,
+    airy_modified,
 )
 from src.fpi.m02_calibration_synthesis_2026_05_05 import (
     add_poisson_noise,
@@ -125,30 +137,38 @@ def synthesise_airglow_image(
     """
     Generate a complete synthetic OI 630 nm airglow fringe image.
 
-    Follows Harding (2014) Eqs. 14–16 (instrument matrix path):
+    Follows Harding (2014) Eqs. 10–11 (delta-function source, direct Airy path):
       1. Validate v_rel_ms against observation_mode bounds (if provided).
       2. Build r_bins (R_bins uniform points from 0 to params.r_max).
-      3. Build lam_grid centred on OI_WAVELENGTH_AIR_M, spanning n_fsr FSRs
-         with L_synth bins (anti-inverse-crime: L_synth=300 ≠ L_inv=101).
-      4. Build instrument matrix A = build_instrument_matrix(r_bins,
-         lam_grid, params, n_subpixels=8) — shape (R_bins, L_synth).
-      5. Build source spectrum y (delta-function at Doppler-shifted λ_c).
-      6. Compute 1D profile: s = A @ y + params.B.
-      7. Wrap to 2D: image = radial_profile_to_image(s, r_bins, ...).
-      8. Optionally add noise.
-      9. Compute fringe_order_offset and snr_actual; assemble output dict.
+      3. Compute Doppler-shifted line centre lambda_c_m.
+      4. Compute 1D profile via direct airy_modified() call at lambda_c_m:
+            profile_1d = Y_line * airy_modified(r_bins, lambda_c_m, params)
+                       + Y_bg + params.B
+      5. Wrap to 2D: image = radial_profile_to_image(profile_1d, r_bins, ...).
+      6. Optionally add noise.
+      7. Compute fringe_order_offset and snr_actual; assemble output dict.
+
+    This is the delta-function limit of Harding Eq. 1: since Y(λ) = Y_line·δ(λ−λ_c),
+    the Fredholm integral collapses to a single Airy evaluation at λ_c.
+    The instrument matrix path (Eqs. 14–16) is not used because it requires
+    Y_line in ADU/m (spectral density), producing signal levels ~10⁶× too large
+    for a 14-bit detector. The direct call gives physically correct ADU levels.
 
     Parameters
     ----------
     params     : InstrumentParams from H01.
     v_rel_ms   : line-of-sight velocity (m/s). Positive = recession (redshift).
-    Y_line     : OI line intensity in ADU per wavelength bin. Default 1000.
-    Y_bg       : spectrally flat sky background in ADU per bin. Default 0.
+    Y_line     : OI line intensity scale factor (dimensionless multiplier on
+                 the Airy function). Default 1000. With I0≈6480, R≈0.24, the
+                 Airy peak ≈ 0.06 × I0 ≈ 390 ADU, so Y_line=1 gives ~390 ADU
+                 peak above bias. Use Y_line≈1–10 for realistic airglow levels.
+    Y_bg       : flat sky background added uniformly to all radial bins (ADU).
+                 Default 0.
     image_size : CCD active dimension in pixels. Default 256 (2×2 binned).
     cx, cy     : fringe centre in pixels. Default: geometric centre.
     R_bins     : number of radial bins. Default 500.
-    L_synth    : wavelength bins for synthesis. Default 300.
-    n_fsr      : FSRs spanned by the wavelength grid. Default 10.
+    L_synth    : deprecated no-op (retained for API compatibility).
+    n_fsr      : deprecated no-op (retained for API compatibility).
     observation_mode : 'cross_track', 'along_track', or None (default).
     add_noise  : if True, add noise per noise_type. Default True.
     noise_type : 'gaussian' (default) or 'poisson'.
@@ -159,14 +179,13 @@ def synthesise_airglow_image(
     -------
     dict with keys:
         'image_2d', 'image_noiseless', 'profile_1d', 'r_grid',
-        'lam_grid', 'lambda_c_m', 'fringe_order_offset',
+        'lambda_c_m', 'fringe_order_offset',
         'cx', 'cy', 'params', 'v_rel_ms', 'observation_mode', 'snr_actual'
 
     Raises
     ------
     ValueError
         If v_rel_ms violates the observation_mode bounds.
-        If λ_c falls outside lam_grid.
     """
     # Step 1: observation_mode validation
     if observation_mode is not None:
@@ -190,40 +209,21 @@ def synthesise_airglow_image(
 
     r_bins = np.linspace(0.0, params.r_max, R_bins)
 
-    # Step 3: wavelength grid
-    lam_grid = make_wavelength_grid(
-        OI_WAVELENGTH_AIR_M, params, n_fsr=n_fsr, L=L_synth
-    )
-
-    # Step 4: instrument matrix — n_subpixels=8 per H03 spec (anti-inverse-crime)
-    A = build_instrument_matrix(r_bins, lam_grid, params, n_subpixels=8)
-
-    # Step 5: Doppler-shifted line centre and source spectrum
-    # Built inline (not via make_airglow_spectrum) so that along-track
-    # velocities to -8000 m/s work without hitting H01's -7700 m/s bound.
+    # Step 3: Doppler-shifted line centre
     lambda_c_m = OI_WAVELENGTH_AIR_M * (1.0 + v_rel_ms / SPEED_OF_LIGHT_MS)
 
-    lam_min, lam_max = lam_grid[0], lam_grid[-1]
-    if not (lam_min <= lambda_c_m <= lam_max):
-        raise ValueError(
-            f"Doppler-shifted λ_c={lambda_c_m * 1e9:.6f} nm outside "
-            f"lam_grid [{lam_min * 1e9:.6f}, {lam_max * 1e9:.6f}] nm. "
-            f"Increase n_fsr (currently {n_fsr})."
-        )
+    # Step 4: 1D fringe profile — direct Airy call at lambda_c_m
+    # Delta-function source: integral over Y(λ)·A(r,λ)dλ = Y_line·A(r,λ_c)
+    # Signal levels: bias + Y_line × airy_peak (physically ~2000–3000 ADU)
+    airy_profile = airy_modified(r_bins, lambda_c_m, params)
+    profile_1d   = Y_line * airy_profile + Y_bg + params.B
 
-    y = np.full(L_synth, Y_bg)
-    idx_c = int(np.argmin(np.abs(lam_grid - lambda_c_m)))
-    y[idx_c] += Y_line
-
-    # Step 6: 1D fringe profile (Harding Eq. 16)
-    profile_1d = A @ y + params.B
-
-    # Step 7: 2D noiseless image
+    # Step 5: 2D noiseless image
     image_noiseless = radial_profile_to_image(
         profile_1d, r_bins, image_size=image_size, cx=cx, cy=cy, bias=params.B
     )
 
-    # Step 8: noise
+    # Step 6: noise
     delta_S = float(profile_1d.max() - profile_1d.min())
 
     if add_noise:
@@ -241,7 +241,7 @@ def synthesise_airglow_image(
         image_2d = image_noiseless.copy()
         snr_actual = np.inf
 
-    # Step 9: fringe_order_offset (diagnostic only, does not affect computation)
+    # Step 7: fringe_order_offset (diagnostic only, does not affect computation)
     FSR_OI_M = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * params.t)
     fringe_order_offset = int(round((lambda_c_m - OI_WAVELENGTH_AIR_M) / FSR_OI_M))
 
@@ -250,7 +250,6 @@ def synthesise_airglow_image(
         "image_noiseless": image_noiseless,
         "profile_1d": profile_1d,
         "r_grid": r_bins,
-        "lam_grid": lam_grid,
         "lambda_c_m": float(lambda_c_m),
         "fringe_order_offset": fringe_order_offset,
         "cx": float(cx),

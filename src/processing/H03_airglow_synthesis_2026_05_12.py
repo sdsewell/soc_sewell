@@ -89,7 +89,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.fpi.airy_forward_model_2026_05_05 import InstrumentParams  # noqa
-from src.fpi.m03_airglow_synthesis_2026_05_05 import (              # noqa
+from src.fpi.m03_airglow_synthesis_2026_05_12 import (              # noqa
     synthesise_airglow_image,
 )
 from windcube.constants import (                                     # noqa
@@ -251,10 +251,12 @@ def _ask_instrument_params(root):
 def _ask_source_and_noise(root):
     """Prompt for source and noise parameters."""
     Y_line = simpledialog.askfloat(
-        "Line intensity Y_line (ADU/bin)",
-        "OI 630 nm line intensity (ADU per wavelength bin).\n"
-        "Typical quiet airglow: 500–2000 ADU",
-        initialvalue=_DEFAULTS['Y_line'], minvalue=1.0, maxvalue=50000.0,
+        "Line intensity Y_line",
+        "OI 630 nm line intensity scale factor.\n"
+        "Multiplies the Airy function peak amplitude.\n"
+        "With I₀≈6480, R≈0.24: Y_line=1 → ~390 ADU peak above bias.\n"
+        "Typical values: 0.5–5 for realistic airglow.",
+        initialvalue=_DEFAULTS['Y_line'], minvalue=0.01, maxvalue=10000.0,
         parent=root) or _DEFAULTS['Y_line']
 
     Y_bg = simpledialog.askfloat(
@@ -318,7 +320,7 @@ def make_figure(result: dict, params: InstrumentParams,
         f"v_rel = {v_rel_ms:+.1f} m/s  ({v_check:+.1f} m/s check)\n"
         f"λ_c = {lam_c*1e9:.6f} nm   fringe_order_offset = {forder}\n"
         f"t = {params.t*1e3:.7f} mm   α = {params.alpha:.4e} rad/px\n"
-        f"R = {params.R_refl:.4f}   σ₀ = {params.sigma0:.4f} px\n"
+        f"R = {params.R_eff:.4f}   σ₀ = {params.sigma0:.4f} px\n"
         f"I₀ = {params.I0:.0f}   B = {params.B:.0f} ADU\n"
         f"SNR = {snr:.1f} (requested)   SNR_actual = {snr_act:.2f}\n"
         f"mode = {mode_str}   image = {image.shape[0]}×{image.shape[1]} px\n"
@@ -369,7 +371,7 @@ def main():
     # ---- Build InstrumentParams ----
     params = InstrumentParams(
         t      = instr['t_eff_mm'] * 1e-3,
-        R_refl  = instr['R_refl'],
+        R_eff  = instr['R_refl'],
         n      = 1.0,
         alpha  = instr['alpha'],
         r_max  = instr['r_max_px'],
@@ -385,7 +387,7 @@ def main():
     # ---- Synthesise ----
     print(f"\nSynthesising airglow image…")
     print(f"  mode={obs_mode}   v_rel={v_rel_ms:+.1f} m/s")
-    print(f"  t={params.t*1e3:.7f} mm   R={params.R_refl:.4f}   "
+    print(f"  t={params.t*1e3:.7f} mm   R={params.R_eff:.4f}   "
           f"α={params.alpha:.4e}   σ₀={params.sigma0:.4f}")
     print(f"  Y_line={src['Y_line']:.0f}   SNR={src['snr']:.1f}   "
           f"image={instr['image_size']}×{instr['image_size']} px")
