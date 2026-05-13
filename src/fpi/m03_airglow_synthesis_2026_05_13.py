@@ -240,6 +240,12 @@ def synthesise_airglow_image(
         lambda_p = np.maximum(signal_e + dark_e, 0.0)   # Poisson requires >= 0
         total_e  = rng.poisson(lambda_p).astype(float)
         total_e += rng.normal(0.0, read_noise_e, size=image_noiseless.shape)
+        # BIAS AUDIT: params.B is already embedded in image_noiseless via
+        # profile_1d = Y_line * airy + Y_bg + params.B (Step 4 above).
+        # radial_profile_to_image() propagates that value directly to all
+        # pixels within r_max; out-of-range pixels use bias=params.B as fill.
+        # Therefore total_e / gain already carries the bias — do NOT add
+        # bias_ADU again here or it would be counted twice.
         image_2d = np.round(
             total_e / gain_e_per_adu
         ).clip(0, 65535).astype(np.uint16)
@@ -374,11 +380,18 @@ if __name__ == "__main__":
     assert c6_pass, f"M03-C6 FAILED: dtype={result_noisy['image_2d'].dtype}"
 
     # ---- M03-C7: no pixel exceeds 65535 ----------------------------------
-    max_val = int(result_noisy["image_2d"].max())
-    c7_pass = max_val <= 65535
+    max_val  = int(result_noisy["image_2d"].max())
+    delta_S  = float(result_noisy["profile_1d"].max() - result_noisy["profile_1d"].min())
+    c7_pass  = max_val <= 65535
+    c7b_pass = 6000 <= max_val <= 12000   # sanity: not clipped, fringes present
+    c7c_pass = delta_S > 1000             # fringes visible
     print(f"\nM03-C7  image_2d.max(): {max_val}")
     print(f"        expected <= 65535     ->  {'PASS' if c7_pass else 'FAIL'}")
-    assert c7_pass, f"M03-C7 FAILED: max={max_val}"
+    print(f"        fringe peak [6000,12000]: {max_val}  ->  {'PASS' if c7b_pass else 'FAIL'}")
+    print(f"        fringe ΔS > 1000 ADU: {delta_S:.1f}  ->  {'PASS' if c7c_pass else 'FAIL'}")
+    assert c7_pass,  f"M03-C7 FAILED: max={max_val}"
+    assert c7b_pass, f"M03-C7b FAILED: peak={max_val} outside [6000,12000] (clipped or flat)"
+    assert c7c_pass, f"M03-C7c FAILED: ΔS={delta_S:.1f} <= 1000 (no fringes)"
 
     # ---- M03-C1: note (requires H06 integration pipeline) ----------------
     print(f"\nM03-C1  chi2/nu from H06 inversion: NOT TESTED HERE")
@@ -391,5 +404,8 @@ if __name__ == "__main__":
     print(f"  dark_rate at -20 C = {dr_minus20:.4f} e-/pix/s")
     print(f"  dark_rate at +20 C = {dr_plus20:.4f} e-/pix/s")
     print(f"  snr_actual (T=-20C, t=10s, Y_line=1, I0=6480) = {snr_val:.2f}")
+    print(f"  image peak ADU     = {max_val}")
+    print(f"  profile ΔS         = {delta_S:.1f} ADU")
+    print(f"  bias audit: params.B already in image_noiseless — NOT re-added in noise draw")
     print(f"\nAll inline checks passed (M03-C2 through M03-C7).")
     print(f"M03-C1 (chi2/nu) requires H06 integration run.")

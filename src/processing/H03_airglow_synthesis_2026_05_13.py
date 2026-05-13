@@ -34,9 +34,10 @@ Purpose: Generate a synthetic OI 630 nm airglow fringe image using the
     Default: 0.239  (R1 from H05 calibration at λ₁=640.2 nm, close to OI)
     Changes with coating temperature; ~0.001 / K typical
 
-  OI line intensity Y_line (ADU)
-    Typical quiet-time airglow: 500–2000 ADU
-    Default: 6480 ADU  (H03 reference value)
+  OI line intensity Y_line (dimensionless scale factor)
+    airy_modified() returns ADU directly (I0-scaled, ~2400–6480 ADU).
+    Y_line=1.0 → ΔS ≈ 3929 ADU  (physically correct, default)
+    Y_line=0.5 → fainter airglow   Y_line=2.0 → brighter
 
   Exposure time t_exp (s)
     Science (airglow) default:    10 s
@@ -124,7 +125,7 @@ _DEFAULTS = {
     'sigma0':           0.5528,         # px
     'B':                2010.7,         # ADU bias pedestal
     # Source
-    'Y_line':           6480.0,         # ADU; H03 reference value
+    'Y_line':           1.0,             # dimensionless Airy scale factor
     'Y_bg':             0.0,            # ADU per wavelength bin
     # Noise — physical CCD model (Teledyne e2v CCD97)
     'add_noise':        True,
@@ -256,11 +257,12 @@ def _ask_instrument_params(root):
 def _ask_source_and_noise(root):
     """Prompt for source intensity and physical CCD noise parameters."""
     Y_line = simpledialog.askfloat(
-        "Line intensity",
-        "OI line intensity Y_line (ADU)\n"
-        "Quiet-time range: 500–2000 ADU\n"
-        "Default: 6480 ADU  (H03 reference value)",
-        initialvalue=_DEFAULTS['Y_line'], minvalue=100.0, maxvalue=30000.0,
+        "Line intensity Y_line",
+        "Dimensionless scale factor on the Airy function output.\n"
+        "airy_modified() already returns values in ADU (I0-scaled).\n"
+        "Y_line=1.0 → ΔS ≈ 3929 ADU  (physically correct, within 14-bit range)\n"
+        "Y_line=0.5 → fainter airglow  Y_line=2.0 → brighter",
+        initialvalue=_DEFAULTS['Y_line'], minvalue=0.01, maxvalue=100.0,
         parent=root) or _DEFAULTS['Y_line']
 
     Y_bg = simpledialog.askfloat(
