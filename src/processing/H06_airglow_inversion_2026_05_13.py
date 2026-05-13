@@ -35,7 +35,7 @@ Purpose: Load an OI 630 nm airglow fringe profile (real or synthetic),
   Temperature broadening is excluded (delta-function OI source).
 
   Inversion stages:
-    Stage 1 — Brute-force scan of λ_c over ±2.0 FSR (300 grid points)
+    Stage 1 — Phase-seeded scan of λ_c over ±0.75 FSR around lc_seed (300 pts)
               Analytic solve for Y_line, B_sci at each scan point.
               Covers both cross-track (offset=0) and along-track (offset=−1,−2).
     Stage 2 — LM refinement over {λ_c, Y_line, B_sci} from scan minimum.
@@ -51,8 +51,10 @@ Purpose: Load an OI 630 nm airglow fringe profile (real or synthetic),
    - fsr_oi is now computed from cal.t_m inside the inversion function and
      passed explicitly to _lambda_c_scan, _run_lm, _compute_covariance, and
      make_figure.  The module-level FSR_OI_M is retained only as a placeholder.
-   - Scan half-width widened from ±1.5 FSR to ±2.0 FSR (≈±9394 m/s).
-   - n_scan increased from 200 to 300 to maintain grid density.
+   - Scan redesigned: phase-seeded ±0.75 FSR window around lc_seed derived from
+     eps_OI_expected = (2×cal.t_m/λ_OI) mod 1.  Single FSR bin in scan window
+     eliminates alias degeneracy.  New v_los_prior_ms parameter for along-track.
+   - n_scan = 300 (same; grid is now denser within the narrower window).
 
  2026-05-12  (previous version):
    - Initial release.
@@ -183,22 +185,57 @@ def _airglow_model_fine(r_fine, lambda_c_m, Y_line, B_sci, cal):
 # ---------------------------------------------------------------------------
 
 def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
-                   fsr_oi, n_scan=300, n_fine=500):
+                   fsr_oi, n_scan=300, n_fine=500,
+                   v_los_prior_ms=0.0):
     """
-    Scan λ_c over ±2.0 FSR around OI_WAVELENGTH_AIR_M.
-    At each point, analytically solve for Y_line and B_sci (linear given λ_c).
+    Scan λ_c over ±0.75 FSR around lc_seed, where lc_seed is derived from the
+    calibration phase and an optional a-priori LOS velocity.
+
+    DISAMBIGUATION STRATEGY
+    -----------------------
+    The Airy function is periodic with period FSR.  Because Y_line and B_sci
+    are solved analytically at every scan point, every FSR alias produces an
+    IDENTICAL chi² minimum.  A wide ±1.5 or ±2.0 FSR scan therefore cannot
+    discriminate aliases by chi² alone — argmin returns whichever alias lands on
+    the lowest numerical noise point, which is arbitrary.
+
+    The correct approach is to RESTRICT the scan to a single FSR bin, chosen
+    using the calibration phase:
+
+        eps_OI_expected = (2 × cal.t_m / λ_OI) mod 1
+        lc_seed = 2 × cal.t_m / (N_int_OI + eps_OI_expected)  ≈ λ_OI
+
+    where N_int_OI = round(2 × cal.t_m / λ_OI).  This is the λ_c value at which
+    the model Airy fringe (using cal.t_m) peaks at the same fractional phase
+    as the zero-wind OI fringe.
+
+    For along-track observations, the true LOS velocity is dominated by
+    satellite-atmosphere relative motion (~km/s), which is known from orbit.
+    Pass that estimate as v_los_prior_ms to shift lc_seed accordingly.
+
+    Scan half-width: ±0.75 FSR (≈ ±3523 m/s).  This covers:
+      • Cross-track winds:  |Δv| ≤ ~500 m/s  (well within window)
+      • Along-track:       |Δv − v_los_prior| ≤ ~3000 m/s  (thermospheric component)
 
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
-
-    Scan half-width is ±2.0 FSR (≈ ±9394 m/s with cal.t_m), which covers
-    both cross-track (|v| < 500 m/s) and along-track (|v| up to ~8000 m/s).
-    fsr_oi must be computed from cal.t_m, NOT from the ETALON_GAP_M constant,
-    to avoid a 25 m/s FSR error that shifts the scan edges.
-    n_scan increased to 300 to maintain grid density over the wider range.
     """
-    lc_lo = OI_WAVELENGTH_AIR_M - 2.0 * fsr_oi
-    lc_hi = OI_WAVELENGTH_AIR_M + 2.0 * fsr_oi
+    # Compute lc_seed from calibration phase
+    N_int_OI     = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
+    eps_OI_exp   = (2.0 * cal.t_m / OI_WAVELENGTH_AIR_M) % 1.0
+    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp - 1.0)
+    # Sanity: lc_seed_0wind ≈ OI_WAVELENGTH_AIR_M (within a few fm)
+    # Shift by the a-priori LOS velocity
+    lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
+
+    lc_lo = lc_seed - 0.75 * fsr_oi
+    lc_hi = lc_seed + 0.75 * fsr_oi
     scan  = np.linspace(lc_lo, lc_hi, n_scan)
+
+    log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
+             f"(v_prior={v_los_prior_ms:+.0f} m/s, "
+             f"eps_OI_exp={eps_OI_exp:.6f})")
+    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}, "
+             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s")
 
     r_fine   = np.linspace(0.0, r_max, n_fine)
     n_good   = len(r_good)
@@ -240,19 +277,16 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
              f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.1f} m/s")
 
     return lambda_c_best, chi2_min, scan_ambiguous
-
-
-# ---------------------------------------------------------------------------
-# Stage 2: LM refinement
-# ---------------------------------------------------------------------------
-
 def _run_lm(r_good, prof_good, sigma_good, r_max, cal,
             fsr_oi, lc_init, Y_init, B_init, n_fine=500):
     """LM fit over {λ_c, Y_line, B_sci} with soft-bound penalties.
-    Bounds match the ±2.0 FSR scan range (using cal.t_m-derived FSR).
+    Bounds are ±0.75 FSR around lc_init (= scan best-fit), matching the scan window.
     """
-    lc_lo = OI_WAVELENGTH_AIR_M - 2.0 * fsr_oi
-    lc_hi = OI_WAVELENGTH_AIR_M + 2.0 * fsr_oi
+    # Bounds match the scan window; lc_seed is passed via lc_init
+    # (which is the scan best-fit from _lambda_c_scan).
+    # Use +- 0.75 FSR around lc_init to keep LM inside the selected FSR bin.
+    lc_lo = lc_init - 0.75 * fsr_oi
+    lc_hi = lc_init + 0.75 * fsr_oi
     Y_lo  = 0.0;  Y_hi  = 1e8
     B_lo  = 0.0;  B_hi  = float(np.min(prof_good)) * 2.0 if np.min(prof_good) > 0 else 1e6
 
@@ -573,6 +607,21 @@ def main():
         parent=_tk3) or 110.0
     _tk3.destroy()
 
+    # ---- 3b. a-priori LOS velocity (for along-track disambiguation) ----
+    # For cross-track observations pass 0 (default).
+    # For along-track, enter the satellite-atmosphere relative LOS velocity
+    # (orbit geometry, negative for receding source), e.g. -6000 m/s.
+    _tk3b = tk.Tk(); _tk3b.withdraw()
+    v_los_prior_ms = simpledialog.askfloat(
+        "A-priori LOS velocity",
+        "A-priori line-of-sight velocity (m/s).\n"
+        "Cross-track: enter 0.\n"
+        "Along-track: enter estimated satellite\u2013atmosphere LOS velocity (e.g. \u22126000).",
+        initialvalue=0.0, minvalue=-20000.0, maxvalue=20000.0,
+        parent=_tk3b) or 0.0
+    _tk3b.destroy()
+    print(f"  v_los_prior = {v_los_prior_ms:+.0f} m/s")
+
     # ---- 4. Load calibration result ----
     cal = load_cal_result(cal_path)
     print(f"\nCalibration result loaded:")
@@ -622,10 +671,11 @@ def main():
     log.info(f"FSR from cal.t_m={cal.t_m*1e3:.7f} mm: {fsr_oi*1e15:.2f} fm  ({v_fsr:.1f} m/s)")
 
     # ---- 6. Stage 1: λ_c scan ----
-    print(f"\nStage 1 — brute-force λ_c scan (±2.0 FSR, 300 points)…")
-    print(f"  FSR = {v_fsr:.1f} m/s  scan spans ±{2.0*v_fsr:.0f} m/s")
+    print(f"\nStage 1 — brute-force λ_c scan (±0.75 FSR around lc_seed, 300 pts)…")
+    print(f"  FSR = {v_fsr:.1f} m/s  v_los_prior = {v_los_prior_ms:+.0f} m/s  window = ±{0.75*v_fsr:.0f} m/s")
     lc_best, chi2_scan, scan_ambiguous = _lambda_c_scan(
-        r_grid, profile_adu, sigma_adu, r_max, cal, fsr_oi)
+        r_grid, profile_adu, sigma_adu, r_max, cal, fsr_oi,
+        v_los_prior_ms=v_los_prior_ms)
 
     # Initial Y_line, B_sci from analytic solve at lc_best
     r_fine = np.linspace(0.0, r_max, 500)
