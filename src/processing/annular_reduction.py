@@ -846,153 +846,14 @@ def main() -> None:
     print(f"Profile vs r²  saved : {profile_r2_path}  shape (3, {fp.n_bins})")
 
     # -- Plotting --------------------------------------------------------------
-    n_peaks    = len(fp.peak_fits)
-    table_h    = max(1.5, 0.32 * (n_peaks + 2))
-    fig = plt.figure(figsize=(14, 10 + table_h))
-    gs  = fig.add_gridspec(3, 1, hspace=0.40, height_ratios=[4, 4, table_h])
-
-    # Top panel — image with centre overlaid
-    ax0 = fig.add_subplot(gs[0])
-    vlo = float(np.percentile(image,  1))
-    vhi = float(np.percentile(image, 99))
-    ax0.imshow(image, cmap="gray", origin="lower", vmin=vlo, vmax=vhi,
-               aspect="equal")
-    ax0.axhline(cy, color="cyan", linewidth=0.8, linestyle="--", alpha=0.9)
-    ax0.axvline(cx, color="cyan", linewidth=0.8, linestyle="--", alpha=0.9)
-    ax0.plot(cx, cy, "+", color="yellow", markersize=14, markeredgewidth=1.5)
-    ax0.set_title(
-        f"Fine Center Determination from Nelder-Mead:  "
-        f"cx = {cx:.3f} +/- {sigma_cx:.3f} px,  cy = {cy:.3f} +/- {sigma_cy:.3f} px",
-        fontsize=9,
-    )
-    ax0.set_xlabel("Column (pixel)", fontsize=8)
-    ax0.set_ylabel("Row (pixel)",    fontsize=8)
-    ax0.tick_params(labelsize=7)
-
-    # Bottom panel — radial profile with peak labels
-    ax1    = fig.add_subplot(gs[1])
     good   = ~fp.masked
     finite = good & np.isfinite(fp.sigma_profile)
+    vlo    = float(np.percentile(image,  1))
+    vhi    = float(np.percentile(image, 99))
+    hdr_bg = "#2C3E50"
+    alt_bg = "#EBF5FB"
 
-    # +/-2-sigma outer band (context)
-    ax1.errorbar(
-        fp.r_grid[finite], fp.profile[finite],
-        yerr=fp.two_sigma_profile[finite],
-        fmt="none", ecolor="navy", alpha=0.45, linewidth=0.9,
-        label="+/-2 sigma SEM",
-    )
-    # +/-1-sigma inner band — these are the actual fit weights passed to cal_inversion
-    ax1.errorbar(
-        fp.r_grid[finite], fp.profile[finite],
-        yerr=fp.sigma_profile[finite],
-        fmt="none", ecolor="darkblue", alpha=0.85, linewidth=1.8,
-        label="+/-1 sigma SEM  (fit weight)",
-    )
-    ax1.plot(fp.r_grid[good], fp.profile[good],
-             color="steelblue", linewidth=1.0,
-             marker=".", markersize=10, markerfacecolor="steelblue",
-             markeredgewidth=0, label="Mean ADU")
-    if fp.masked.any():
-        ax1.plot(fp.r_grid[fp.masked], fp.profile[fp.masked],
-                 "rx", markersize=4, label="Masked bins")
-
-
-    for i, pf in enumerate(fp.peak_fits):
-        # Dashed orange line at raw detection position
-        ax1.axvline(pf.r_raw_px, color="darkorange", linewidth=0.9,
-                    linestyle="--", alpha=0.7,
-                    label="Detected peak" if i == 0 else None)
-
-        if pf.fit_ok:
-            # Solid crimson line + shaded +/-1-sigma band at Gaussian centroid
-            ax1.axvline(pf.r_fit_px, color="crimson", linewidth=1.4,
-                        linestyle="-", alpha=0.9,
-                        label="Gaussian centroid" if i == 0 else None)
-            # Red band = ±1σ uncertainty on the Gaussian centroid μ (from pcov diagonal)
-            ax1.axvspan(pf.r_fit_px - pf.sigma_r_fit_px,
-                        pf.r_fit_px + pf.sigma_r_fit_px,
-                        alpha=0.10, color="crimson")
-
-    ax1.set_title(
-        f"Radial profile  ({good_bins}/{fp.n_bins} bins)  |  "
-        f"r_max = {fp.r_max_px:.0f} px  |  "
-        f"{len(fp.peak_fits)} peak(s) found  |  "
-        f"{'SPARSE' if fp.sparse_bins else 'OK'}",
-        fontsize=9,
-    )
-    ax1.set_xlabel("Radius  (pixel)", fontsize=8)
-    ax1.set_ylabel("Mean intensity  (ADU)", fontsize=8)
-    ax1.tick_params(labelsize=7)
-    ax1.legend(fontsize=7)
-
-    # Peak fit results table
-    ax2 = fig.add_subplot(gs[2])
-    ax2.axis("off")
-    col_labels = [
-        "Peak", "r_raw (px)", "r_fit (px)", "+/-sig_r (px)",
-        "r_fit (px²)", "+/-sig_r (px²)", "Amp (ADU)", "FWHM (px)", "Width sig (px)", "χ²_red",
-    ]
-    cell_text = []
-    for i, pf in enumerate(fp.peak_fits):
-        if pf.fit_ok:
-            r_fit_sq   = pf.r_fit_px ** 2
-            sig_r_sq   = 2.0 * pf.r_fit_px * pf.sigma_r_fit_px
-            cell_text.append([
-                str(i + 1),
-                f"{pf.r_raw_px:.2f}",
-                f"{pf.r_fit_px:.3f}",
-                f"{pf.sigma_r_fit_px:.3f}",
-                f"{r_fit_sq:.2f}",
-                f"{sig_r_sq:.3f}",
-                f"{pf.amplitude_adu:.1f}",
-                f"{2.3548 * pf.width_px:.2f}",
-                f"{pf.width_px:.2f}",
-                f"{pf.reduced_chi2:.3f}",
-            ])
-        else:
-            cell_text.append([
-                str(i + 1),
-                f"{pf.r_raw_px:.2f}",
-                "---", "---", "---", "---",
-                f"{pf.profile_raw:.1f}",
-                "---", "---", "---",
-            ])
-    if not cell_text:
-        cell_text = [["—"] * len(col_labels)]
-
-    tbl = ax2.table(
-        cellText=cell_text,
-        colLabels=col_labels,
-        loc="upper center",
-        cellLoc="center",
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8.5)
-    hdr_bg  = "#2C3E50"
-    alt_bg  = "#EBF5FB"
-    n_cols  = len(col_labels)
-    n_rows  = len(cell_text)
-    for c in range(n_cols):
-        tbl[0, c].set_facecolor(hdr_bg)
-        tbl[0, c].set_text_props(color="white", fontweight="bold")
-        tbl[0, c].set_edgecolor("#CCCCCC")
-    for r_idx in range(n_rows):
-        for c in range(n_cols):
-            tbl[r_idx + 1, c].set_edgecolor("#CCCCCC")
-            if r_idx % 2 == 1:
-                tbl[r_idx + 1, c].set_facecolor(alt_bg)
-    ax2.set_title(
-        f"Peak Fit Results -> Used by tolansky.py\n{peaks_path.name}",
-        fontsize=10, fontweight="bold", pad=8,
-    )
-
-    fig.suptitle(
-        f"Annular Reduction -- {src.name}",
-        fontsize=11, fontweight="bold",
-    )
-    fig.tight_layout()
-
-    # ── Figure 2: Annular Reduction (r² domain) ───────────────────────────────
+    # ── Figure: Annular Reduction (r² domain) ────────────────────────────────
     n_peaks_r2 = len(fp.peak_fits_r2)
     table_h_r2 = max(1.5, 0.32 * (n_peaks_r2 + 2))
     fig2 = plt.figure(figsize=(14, 10 + table_h_r2))
@@ -1127,22 +988,15 @@ def main() -> None:
     # -- Peak tables to terminal -----------------------------------------------
     _print_peak_table(fp.peak_fits)
     _print_peak_table_r2(fp.peak_fits_r2)
-    if fp.peak_fits:
-        _plot_first_fringe_diagnostic(fp, fit_half_window=40)
     if fp.peak_fits_r2:
         _plot_first_fringe_diagnostic_r2(fp, fit_half_window=40)
-    if fp.peak_fits:
-        _plot_all_fringe_diagnostics(fp)
     if fp.peak_fits_r2:
         _plot_all_fringe_diagnostics_r2(fp)
 
     plt.show()
 
 
-def _plot_first_fringe_diagnostic(
-    fp: FringeProfile,
-    fit_half_window: int = 20,
-) -> None:
+def _plot_first_fringe_diagnostic_REMOVED_PLACEHOLDER(
     """
     Diagnostic figure for the Gaussian fit to the first detected fringe peak.
 

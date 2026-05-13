@@ -133,8 +133,8 @@ def azimuthal_variance_centre(
         return _variance_cost(xy[0], xy[1], image, r_min_sq, r_max_sq, var_n_bins)
 
     # --- Pass 1: coarse grid search ---
-    grid_step = max(2.0, var_search_px / 8.0)
-    offsets   = np.arange(-var_search_px, var_search_px + grid_step * 0.5, grid_step)
+    offsets   = np.linspace(-var_search_px, var_search_px, 20)
+    grid_step = float(offsets[1] - offsets[0])   # used for simplex_r below
 
     best_cost = np.inf
     best_cx   = cx_seed
@@ -338,7 +338,8 @@ def main() -> None:
     r_max_sq     = var_r_max_px ** 2
     n_var_bins   = 250
     var_search_px = 15.0
-    grid_step     = max(2.0, var_search_px / 8.0)
+    grid_offsets  = np.linspace(-var_search_px, var_search_px, 20)
+    grid_step     = float(grid_offsets[1] - grid_offsets[0])
 
     p99_5 = float(np.percentile(image, 99.5))
     img_c = np.clip(image, None, p99_5)
@@ -348,7 +349,6 @@ def main() -> None:
     # These are the actual points the grid search evaluated along each axis.
     cx_seed = (W - 1) / 2.0
     cy_seed = (H - 1) / 2.0
-    grid_offsets = np.arange(-var_search_px, var_search_px + grid_step * 0.5, grid_step)
     grid_cx_pts  = cx_seed + grid_offsets
     grid_cy_pts  = cy_seed + grid_offsets
     grid_cost_cx = np.array([

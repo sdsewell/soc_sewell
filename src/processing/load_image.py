@@ -6,6 +6,8 @@ load_image.py — Load and display a WindCube FPI binary image from the
 
 Outputs
 -------
+- <stem>_raw_L0.npy   : 2-D uint16 numpy array of the full raw image
+      (all rows × cols, no cropping), saved alongside the source .bin file.
 - <stem>_ROI_L1.1.npy : 2-D uint16 numpy array of the user-selected ROI,
       saved alongside the source .bin file.  This file is the primary input
       to center_finder.py.
@@ -72,7 +74,7 @@ DARK_THRESHOLD = 0.5
 
 # Half-width/height of the ROI in pixels (ROI will be 2×ROI_HALF × 2×ROI_HALF).
 # 240-pixel ROI → ROI_HALF = 120
-ROI_HALF = 108
+ROI_HALF = 130
 
 # ── Fixed geometry ─────────────────────────────────────────────────────────────
 
@@ -80,8 +82,8 @@ ROWS, COLS = 259, 276   # image pixels only (excludes header row)
 
 # Initial fringe centre (row, col) — set to image midpoint.
 # Updated interactively via mouse click after the figure is displayed.
-FRINGE_CENTER = (ROWS // 2, COLS // 2)
-
+#FRINGE_CENTER = (ROWS // 2, COLS // 2)
+FRINGE_CENTER = (144,141)
 
 # ---------------------------------------------------------------------------
 # Loading
@@ -479,8 +481,9 @@ def main() -> None:
     # ── Detect binning and set defaults ───────────────────────────────────
     n_rows, n_cols = image.shape
     unbinned        = (n_cols >= 500)          # 552 cols → 1×1; 276 cols → 2×2
-    roi_half_default   = 216 if unbinned else 108
-    fringe_center_default = (n_rows // 2, n_cols // 2)
+    roi_half_default   = 216 if unbinned else 130
+    #fringe_center_default = (n_rows // 2, n_cols // 2)
+    fringe_center_default = (144,144)
     print(f"Binning       : {'1×1 unbinned' if unbinned else '2×2 binned'}")
 
     # ── Prompt for ROI half-size ───────────────────────────────────────────
@@ -553,13 +556,21 @@ def main() -> None:
                         roi_half)
     plt.show()
 
-    # ── Save ROI as numpy array alongside the source binary ────────────────
+    # ── Save outputs alongside the source binary ──────────────────────────
     src = pathlib.Path(bin_file)
-    roi_path = src.with_name(src.stem.replace("_L0", "") + "_ROI_L1.1.npy")
+    stem = src.stem.replace("_L0", "")
+
+    raw_path = src.with_name(stem + "_raw_L0.npy")
+    np.save(raw_path, image)
+    print(f"Raw image saved : {raw_path}")
+    print(f"  shape         : {image.shape}  dtype: {image.dtype}")
+    print(f"  range         : {image.min()} – {image.max()}  ADU")
+
+    roi_path = src.with_name(stem + "_ROI_L1.1.npy")
     np.save(roi_path, roi)
-    print(f"ROI saved : {roi_path}")
-    print(f"  shape   : {roi.shape}  dtype: {roi.dtype}")
-    print(f"  range   : {roi.min()} – {roi.max()}  ADU")
+    print(f"ROI saved       : {roi_path}")
+    print(f"  shape         : {roi.shape}  dtype: {roi.dtype}")
+    print(f"  range         : {roi.min()} – {roi.max()}  ADU")
 
 
 if __name__ == "__main__":
