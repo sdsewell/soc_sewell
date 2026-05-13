@@ -71,7 +71,7 @@ Q_d(T) = Q_dd × f(T_K) / f(T_ref)
 
 f(T)  = 1.14 × 10⁶ × T³ × exp(−9080 / T)
 
-T_ref = 293.15 K  (20 °C, exactly; use 273.15 K offset throughout)
+T_ref = 293.15 K  (20 °C reference)
 Q_dd  = 400 e⁻/pixel/s  (typical)  or  800 e⁻/pixel/s  (maximum)
 Valid range: 150 K – 300 K  (−123 °C to +27 °C)
 ```
@@ -206,7 +206,7 @@ snr_actual  = delta_S / sigma_mean_adu if sigma_mean_adu > 0 else np.inf
 | M03-C1 | χ²/ν from H06 inversion of H03 synthetic at T=−20°C, t=10s | 0.5 ≤ χ²/ν ≤ 2.0 |
 | M03-C2 | `dark_rate_e_per_s` at T=−20°C | 1.90 – 2.05 e⁻/pix/s |
 | M03-C3 | `dark_rate_e_per_s` at T=+20°C | 390 – 420 e⁻/pix/s |
-| M03-C4 | `snr_actual` at T=−20°C, t=10s, I0=6479.9 (cal), Y_line=1.0 | 30–65 (signal-shot dominated) |
+| M03-C4 | `snr_actual` at T=−20°C, t=10s, Y_line=6480 | 30–60 (signal-shot dominated) |
 | M03-C5 | `add_noise=False` returns noiseless image unchanged | image == image_ideal_ADU |
 | M03-C6 | Pixel dtype of noisy image | uint16 |
 | M03-C7 | No pixel value exceeds 65535 | assert image_noisy.max() ≤ 65535 |
@@ -220,7 +220,6 @@ snr_actual  = delta_S / sigma_mean_adu if sigma_mean_adu > 0 else np.inf
 | 1 | 2026-05-05 | SOC | Initial spec |
 | 2 | 2026-05-12 | SOC | SNR dialog and Gaussian noise model |
 | 3 | 2026-05-13 | SOC | Replace SNR/Gaussian with physical CCD noise model.  Add `T_focal_plane_C`, `exp_time_s`, `gain_e_per_adu`, `read_noise_e`, `Qdd_at_20C`.  Remove `noise_type`, `snr`. |
-| 3.1 | 2026-05-13 | SOC | Corrections from M03 implementation report: (1) C4 check parameter clarified from `Y_line=6480` to `I0=6479.9, Y_line=1.0` (H05 calibration params); (2) C4 pass range widened from 30–60 to 30–65 to avoid boundary sensitivity at the design point; (3) T_ref locked to 293.15 K throughout (use `T_celsius + 273.15` consistently). |
 
 ---
 
