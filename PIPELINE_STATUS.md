@@ -30,6 +30,7 @@
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
+| H06  | airglow-inv | PASS   | 2/2      | 2026-05-13    |
 
 ## Known pre-existing test failures (not introduced by current work)
 
