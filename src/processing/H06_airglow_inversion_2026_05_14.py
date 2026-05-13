@@ -405,38 +405,24 @@ def _load_profile(path, r_max_px):
 
 def _estimate_sigma(profile, r2_arr=None):
     """
-    Per-bin 1-sigma uncertainty for a radially averaged profile.
-
-    The profile is the mean of N_pix pixels per bin, so its noise is
-    reduced relative to single-pixel Poisson noise by sqrt(N_pix):
-
-        sigma_bin = sqrt(signal) / sqrt(N_pix)
-
-    For profiles binned uniformly in r² (the standard H03 format), every
-    bin covers the same area:
-
-        N_pix = pi × dr²    where dr² = r2[1] − r2[0]
-
-    so the correction is a single scalar.  If r2_arr is None or has fewer
-    than 2 elements, N_pix defaults to 1 (single-pixel behaviour, backward
-    compatible).
-
-    On real data where H03 and H05 share the same hardware, this correction
-    yields chi²/ν ≈ 1.  On synthetic data it will be ~3–6 due to the small
-    alpha mismatch between H03 synthesis and H05 calibration (Δα ≈ 286 ppm);
-    this is a known synthetic-test artefact and is not a pipeline defect.
+    Per-bin 1-sigma for a radially averaged profile.
+    sigma_bin = sqrt(signal) / sqrt(N_pix)
+    N_pix(i) = pi * (r2[i+1] - r2[i])  — annular area, works for any
+    binning scheme (uniform-in-r or uniform-in-r², or anything else).
+    Falls back to N_pix=1 when r2_arr is absent (backward compatible).
     """
-    sigma_pix = np.sqrt(np.maximum(profile, 1.0))   # single-pixel Poisson
+    sigma_pix = np.sqrt(np.maximum(profile, 1.0))
 
     if r2_arr is not None and len(r2_arr) >= 2:
-        dr2   = float(r2_arr[1] - r2_arr[0])        # uniform r² bin width
-        n_pix = np.pi * dr2                          # pixels per bin (scalar)
-        n_pix = max(n_pix, 1.0)
+        # Forward difference: annular area between consecutive r² values.
+        # Append the last step to handle the final bin.
+        dr2    = np.diff(r2_arr)                    # length n-1
+        dr2    = np.append(dr2, dr2[-1])             # length n, repeat last
+        n_pix  = np.maximum(np.pi * dr2, 1.0)        # per-bin pixel count
     else:
-        n_pix = 1.0                                  # fallback: no correction
+        n_pix  = 1.0
 
-    sigma = sigma_pix / np.sqrt(n_pix)
-    return np.maximum(sigma, 0.5)                    # floor at 0.5 ADU
+    return np.maximum(sigma_pix / np.sqrt(n_pix), 0.5)
 
 
 def _fmt_unc(value, unit=""):

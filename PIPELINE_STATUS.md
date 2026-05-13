@@ -31,7 +31,7 @@
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
-| H06  | airglow-inv | PASS   | 2/2      | 2026-05-13    |
+| H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
 
 ## Known pre-existing test failures (not introduced by current work)
 
