@@ -123,7 +123,7 @@ _DEFAULTS = {
     'sigma0':           0.5528,         # px
     'B':                2010.7,         # ADU bias pedestal
     # Source
-    'Y_line':           1000.0,         # ADU per wavelength bin
+    'Y_line':           1.0,            # dimensionless Airy scale factor
     'Y_bg':             0.0,            # ADU per wavelength bin
     # Noise
     'add_noise':        True,
@@ -252,11 +252,11 @@ def _ask_source_and_noise(root):
     """Prompt for source and noise parameters."""
     Y_line = simpledialog.askfloat(
         "Line intensity Y_line",
-        "OI 630 nm line intensity scale factor.\n"
-        "Multiplies the Airy function peak amplitude.\n"
-        "With I₀≈6480, R≈0.24: Y_line=1 → ~390 ADU peak above bias.\n"
-        "Typical values: 0.5–5 for realistic airglow.",
-        initialvalue=_DEFAULTS['Y_line'], minvalue=0.01, maxvalue=10000.0,
+        "Dimensionless scale factor on the Airy function output.\n"
+        "airy_modified() already returns values in ADU (I0-scaled).\n"
+        "Y_line=1.0 → ΔS ≈ 3929 ADU  (physically correct, within 14-bit range)\n"
+        "Y_line=0.5 → fainter airglow  Y_line=2.0 → brighter",
+        initialvalue=_DEFAULTS['Y_line'], minvalue=0.01, maxvalue=100.0,
         parent=root) or _DEFAULTS['Y_line']
 
     Y_bg = simpledialog.askfloat(
@@ -371,7 +371,7 @@ def main():
     # ---- Build InstrumentParams ----
     params = InstrumentParams(
         t      = instr['t_eff_mm'] * 1e-3,
-        R_erfl  = instr['R_refl'],
+        R_refl  = instr['R_refl'],
         n      = 1.0,
         alpha  = instr['alpha'],
         r_max  = instr['r_max_px'],

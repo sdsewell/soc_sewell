@@ -30,6 +30,11 @@ Changes from 2026_05_05:
     The anti-inverse-crime rule (L_synth ≠ L_inv) was relevant only for the
     matrix path and does not apply to the direct call; L_synth and lam_grid
     are no longer needed and have been removed from synthesise_airglow_image().
+  - Y_line default changed from 1000.0 to 1.0. airy_modified() already returns
+    values in ADU (I0-scaled, range ~2400–6480 ADU for current instrument params).
+    Y_line=1000 therefore produced signal levels ~3.9×10⁶ ADU — far exceeding
+    the 14-bit detector maximum of 16383 ADU. Y_line=1.0 gives ΔS≈3929 ADU,
+    which is physically correct. Y_line is a pure dimensionless scale factor.
   - Y_bg support retained: background adds a flat offset Y_bg to the profile.
   - lam_grid removed from output dict (no longer computed).
   - L_synth and n_fsr parameters retained as no-ops for API compatibility
@@ -120,7 +125,7 @@ def add_gaussian_noise(
 def synthesise_airglow_image(
     params: "InstrumentParams",
     v_rel_ms: float,
-    Y_line: float = 1000.0,
+    Y_line: float = 1.0,
     Y_bg: float = 0.0,
     image_size: int = 256,
     cx: float = None,
@@ -158,10 +163,14 @@ def synthesise_airglow_image(
     ----------
     params     : InstrumentParams from H01.
     v_rel_ms   : line-of-sight velocity (m/s). Positive = recession (redshift).
-    Y_line     : OI line intensity scale factor (dimensionless multiplier on
-                 the Airy function). Default 1000. With I0≈6480, R≈0.24, the
-                 Airy peak ≈ 0.06 × I0 ≈ 390 ADU, so Y_line=1 gives ~390 ADU
-                 peak above bias. Use Y_line≈1–10 for realistic airglow levels.
+    Y_line     : Dimensionless scale factor applied to the Airy function output.
+                 Default 1.0 = use instrument-calibrated signal levels directly.
+                 airy_modified() already returns values in ADU (range ~B to ~I0),
+                 so Y_line=1.0 gives a physically correct synthetic image.
+                 With I0≈6480, R≈0.24: fringe peak ≈ 6480 ADU, trough ≈ 2400 ADU,
+                 ΔS ≈ 3929 ADU — well within the 14-bit range (16383 ADU max).
+                 Use Y_line < 1 for fainter airglow, Y_line > 1 to simulate
+                 brighter emission or higher exposure.
     Y_bg       : flat sky background added uniformly to all radial bins (ADU).
                  Default 0.
     image_size : CCD active dimension in pixels. Default 256 (2×2 binned).
@@ -214,7 +223,10 @@ def synthesise_airglow_image(
 
     # Step 4: 1D fringe profile — direct Airy call at lambda_c_m
     # Delta-function source: integral over Y(λ)·A(r,λ)dλ = Y_line·A(r,λ_c)
-    # Signal levels: bias + Y_line × airy_peak (physically ~2000–3000 ADU)
+    # airy_modified() returns ADU in range [I0/(1+F), I0] ≈ [2445, 6480] ADU.
+    # Adding Y_bg and params.B gives profile in range ~[4456, 8491] ADU (Y_line=1),
+    # well within the 14-bit detector maximum of 16383 ADU.
+    # ΔS ≈ 4035 ADU for Y_line=1.0 with current instrument parameters.
     airy_profile = airy_modified(r_bins, lambda_c_m, params)
     profile_1d   = Y_line * airy_profile + Y_bg + params.B
 
