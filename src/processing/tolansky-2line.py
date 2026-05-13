@@ -1255,8 +1255,33 @@ if __name__ == "__main__":
             sys.exit(0)
         peaks_path = pathlib.Path(_p)
 
+    # ── Count peaks and prompt for number of pairs to fit ────────────────────
+    import numpy as _np
+    from tkinter import simpledialog as _simpledialog
+    _raw = _np.load(str(peaks_path))
+    _n_total = _raw.shape[0]
+    _n_pairs_max = _n_total // 2          # drop last peak if odd total
+    print(f"Peaks file    : {peaks_path.name}")
+    print(f"Total peaks   : {_n_total}  →  max pairs = {_n_pairs_max}")
+    _root2 = tk.Tk()
+    _root2.withdraw()
+    _n_pairs = _simpledialog.askinteger(
+        "Ring pairs",
+        f"Found {_n_pairs_max} peak pairs ({_n_total} total peaks).\n"
+        f"How many pairs should be used in the WLS fit?",
+        initialvalue=_n_pairs_max,
+        minvalue=2,
+        maxvalue=_n_pairs_max,
+        parent=_root2,
+    )
+    _root2.destroy()
+    if _n_pairs is None:
+        print("Ring-pair count not set — exiting.")
+        sys.exit(0)
+    print(f"Using {_n_pairs} pairs per neon line")
+
     # ── Run S13a analysis and print rectangular array ─────────────────────────
-    result = _run_tolansky(peaks_path)
+    result = _run_tolansky(peaks_path, n_pairs=_n_pairs)
     _print_rectangular_array(result)
 
     # ── M05 priors handoff ────────────────────────────────────────────────────

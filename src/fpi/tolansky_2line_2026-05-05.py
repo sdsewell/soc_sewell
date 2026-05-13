@@ -108,10 +108,17 @@ class TolanskyResult:
 # Task 2 -- input loading and family assignment
 # ---------------------------------------------------------------------------
 
-def load_and_split_families(path_or_array):
+def load_and_split_families(path_or_array, n_pairs: int | None = None):
     """
     Load _peak_fits.npy (or accept a pre-loaded array) and split into the
     two neon-line families by median-amplitude threshold.
+
+    Parameters
+    ----------
+    path_or_array : str, Path, or ndarray
+    n_pairs : int or None
+        If given, keep only the innermost n_pairs rings from each family
+        (i.e. use n_pairs pairs for the WLS fit).  None keeps all rings.
 
     Returns
     -------
@@ -151,6 +158,11 @@ def load_and_split_families(path_or_array):
 
     peaks_a = peaks_ok[mask_a]
     peaks_b = peaks_ok[mask_b]
+
+    if n_pairs is not None:
+        n_pairs = int(n_pairs)
+        peaks_a = peaks_a[:n_pairs]
+        peaks_b = peaks_b[:n_pairs]
 
     if peaks_a.shape[0] < 2 or peaks_b.shape[0] < 2:
         raise InsufficientRingsError(
@@ -273,6 +285,7 @@ def run_tolansky(
     lam_b_m:   float = 638.2991e-9,
     d_prior_m: float = 20.008e-3,
     n_air:     float = 1.0,
+    n_pairs:   int | None = None,
 ) -> TolanskyResult:
     """
     Run the full S13a two-line Tolansky analysis on a neon calibration image.
@@ -291,6 +304,9 @@ def run_tolansky(
         Default: 20.008 mm (ICOS build report).
     n_air : float
         Refractive index of etalon gap.  Default: 1.0.
+    n_pairs : int or None
+        Number of ring pairs (one per neon line) to use in the WLS fit.
+        Keeps the innermost n_pairs rings from each family.  None uses all.
 
     Returns
     -------
@@ -302,7 +318,8 @@ def run_tolansky(
     (p_a, r2_a, sigma_r2_a,
      p_b, r2_b, sigma_r2_b,
      amp_threshold, Y_B_obs,
-     n_nan_dropped, n_peaks_total) = load_and_split_families(peaks_input)
+     n_nan_dropped, n_peaks_total) = load_and_split_families(peaks_input,
+                                                              n_pairs=n_pairs)
 
     fit_a = _wls(p_a, r2_a, sigma_r2_a)
     fit_b = _wls(p_b, r2_b, sigma_r2_b)

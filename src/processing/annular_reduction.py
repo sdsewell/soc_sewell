@@ -104,7 +104,7 @@ import os
 import pathlib
 import tkinter as tk
 from dataclasses import dataclass, field
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -741,6 +741,21 @@ def main() -> None:
     if image.ndim != 2:
         raise ValueError(f"Expected a 2-D array, got shape {image.shape}")
 
+    r_max_default = min(image.shape) // 2
+    root2 = tk.Tk()
+    root2.withdraw()
+    r_max_px = simpledialog.askfloat(
+        "Outer radius",
+        f"Maximum fringe radius r_max (px).\nImage size: {image.shape[1]}×{image.shape[0]}",
+        initialvalue=float(r_max_default),
+        minvalue=10.0, maxvalue=float(min(image.shape)),
+        parent=root2,
+    )
+    root2.destroy()
+    if r_max_px is None:
+        print("r_max not set — exiting.")
+        return
+
     cdata = np.load(centre_file)
     available_keys = list(cdata.keys())
     print(f"Centre file keys: {available_keys}")
@@ -761,8 +776,8 @@ def main() -> None:
           f"cy = {cy:.3f} +/- {sigma_cy:.3f} px  "
           f"(from {pathlib.Path(centre_file).name})")
 
-    print("\nRunning annular reduction ...")
-    fp = annular_reduce(image, cx, cy, sigma_cx, sigma_cy)
+    print(f"\nRunning annular reduction  (r_max = {r_max_px:.1f} px) ...")
+    fp = annular_reduce(image, cx, cy, sigma_cx, sigma_cy, r_max_px=r_max_px)
 
     good_bins = int((~fp.masked).sum())
     print(f"Bins   : {fp.n_bins} total,  {good_bins} good,  "
