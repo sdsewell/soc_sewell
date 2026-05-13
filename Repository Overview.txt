@@ -55,6 +55,26 @@
     "C:\Users\sewell\Documents\GitHub\soc_sewell\src\processing\H05_calibration_inversion_2026_05_06.py"
     "C:\Users\sewell\real_data\1_cal_120sexp_swapped_ROI_L1.1_profile_vs_r2.npy"
 
+8) H03_airglow_synthesis_2026_05_12.py
+    Purpose: Generate a synthetic OI 630 nm airglow fringe image using the
+    WindCube FPI forward model, display it with its pixel histogram,
+    and optionally save the image and 1D profile as .npy files.
+
+    This script is the interactive companion to m03_airglow_synthesis.
+    It prompts the user for all parameters that vary on orbit, provides
+    physically motivated defaults, then calls synthesise_airglow_image()
+    and displays the result.
+
+9) H06_airglow_inversion_2026_05_13.py
+    Purpose: Load an OI 630 nm airglow fringe profile (real or synthetic),
+    load a calibration result from H05, run the H06 staged airglow
+    inversion to recover the line-of-sight wind velocity, and produce
+    a diagnostic figure modelled on Harding et al. (2014) Fig. 5.
+
+10) gen01_synthetic_metadata_generator_2026_04_16
+    Ask claude to double check that this now uses the new models in H02 and H03.  then rename it
+    to something like GEN01_Mission_Data_Simulation.py
+
 To Do:
 develop a more accurate source strength model
 start by seeing how source strenght is define in the pipline but
