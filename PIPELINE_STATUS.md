@@ -12,7 +12,7 @@
 | S09  | M01         | impl   | passing  | 2026-04-06    |
 | S10  | M02         | impl   | passing  | 2026-04-06    |
 | S11  | M04         | impl   | passing  | 2026-04-06    |
-| S12  | M03         | impl   | passing  | 2026-04-06    |
+| S12  | M03         | PASS   | 6/7      | 2026-05-13    |
 | S13  | Tolansky    | impl   | passing  | 2026-04-06    |
 | S13a | tolansky_2line_2026-05-05 | impl | 7/7 | 2026-05-05 |
 | S13b | tolansky_1line_2026-05-05 | impl | 6/6 | 2026-05-05 |
