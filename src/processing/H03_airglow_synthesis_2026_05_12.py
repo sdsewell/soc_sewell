@@ -318,7 +318,7 @@ def make_figure(result: dict, params: InstrumentParams,
         f"v_rel = {v_rel_ms:+.1f} m/s  ({v_check:+.1f} m/s check)\n"
         f"λ_c = {lam_c*1e9:.6f} nm   fringe_order_offset = {forder}\n"
         f"t = {params.t*1e3:.7f} mm   α = {params.alpha:.4e} rad/px\n"
-        f"R = {params.R_eff:.4f}   σ₀ = {params.sigma0:.4f} px\n"
+        f"R = {params.R_refl:.4f}   σ₀ = {params.sigma0:.4f} px\n"
         f"I₀ = {params.I0:.0f}   B = {params.B:.0f} ADU\n"
         f"SNR = {snr:.1f} (requested)   SNR_actual = {snr_act:.2f}\n"
         f"mode = {mode_str}   image = {image.shape[0]}×{image.shape[1]} px\n"
@@ -369,7 +369,7 @@ def main():
     # ---- Build InstrumentParams ----
     params = InstrumentParams(
         t      = instr['t_eff_mm'] * 1e-3,
-        R_eff  = instr['R_refl'],
+        R_refl  = instr['R_refl'],
         n      = 1.0,
         alpha  = instr['alpha'],
         r_max  = instr['r_max_px'],
@@ -385,7 +385,7 @@ def main():
     # ---- Synthesise ----
     print(f"\nSynthesising airglow image…")
     print(f"  mode={obs_mode}   v_rel={v_rel_ms:+.1f} m/s")
-    print(f"  t={params.t*1e3:.7f} mm   R={params.R_eff:.4f}   "
+    print(f"  t={params.t*1e3:.7f} mm   R={params.R_refl:.4f}   "
           f"α={params.alpha:.4e}   σ₀={params.sigma0:.4f}")
     print(f"  Y_line={src['Y_line']:.0f}   SNR={src['snr']:.1f}   "
           f"image={instr['image_size']}×{instr['image_size']} px")
