@@ -673,16 +673,16 @@ def main():
         initialvalue=110.0, minvalue=50.0, maxvalue=200.0) or 110.0
 
     t_tolansky_mm = simpledialog.askfloat("Tolansky gap",
-        "Tolansky-recovered etalon gap (mm).\nExample: 20.1070707",
-        initialvalue=20.1070707, minvalue=19.5, maxvalue=20.5) or 20.1070707
+        "Tolansky-recovered etalon gap (mm).\nExample: 20.10703",
+        initialvalue=20.10703, minvalue=19.5, maxvalue=20.5) or 20.10703
 
     eps_a = simpledialog.askfloat("Tolansky ε_a",
-        "Tolansky excess fraction ε_a for λ₁ = 640.2248 nm.\nExample: 0.23286",
-        initialvalue=0.23286, minvalue=0.0, maxvalue=0.9999) or 0.23286
+        "Tolansky excess fraction ε_a for λ₁ = 640.2248 nm.\nExample: 0.23325",
+        initialvalue=0.23325, minvalue=0.0, maxvalue=0.9999) or 0.23325
 
     alpha_tolansky = simpledialog.askfloat("Tolansky alpha",
-        "Tolansky plate scale α (rad/px, 2×2 binned).\nExample: 1.6084e-4",
-        initialvalue=1.6084e-4, minvalue=1e-5, maxvalue=1e-3) or 1.6084e-4
+        "Tolansky plate scale α (rad/px, 2×2 binned).\nExample: 1.608295e-4",
+        initialvalue=1.608295e-4, minvalue=1e-5, maxvalue=1e-3) or 1.608295e-4
 
     R1_init = simpledialog.askfloat("R1 initial guess",
         "Starting guess for λ₁ (640.2 nm) effective reflectivity.\nFlatSat: 0.53",
