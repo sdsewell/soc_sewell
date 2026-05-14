@@ -178,3 +178,31 @@ V_REL_CROSSTRACK_MAX_MS  =  1000.0   # m/s; symmetric: valid range [-1000, +1000
 # Along-track (odd orbits): spacecraft orbital velocity + wind projected onto LOS
 V_REL_ALONGTRACK_MIN_MS  = -8000.0   # m/s; lower bound (maximum blueshift)
 V_REL_ALONGTRACK_MAX_MS  = -6000.0   # m/s; upper bound (minimum blueshift)
+
+# ---------------------------------------------------------------------------
+# H07 — Wind vector retrieval constants (H07_wind_vector_retrieval_2026-05-14_v03.md §10)
+# ---------------------------------------------------------------------------
+
+# Earth rotation rate [rad/s] — same value as src.constants.EARTH_OMEGA_RAD_S
+# H07 imports from src.constants directly; this alias allows windcube-only use.
+EARTH_OMEGA_RAD_S  : float = 7.2921150e-5
+
+# WGS84 reference ellipsoid semi-axes [m]
+WGS84_A_M          : float = 6_378_137.0     # equatorial radius
+WGS84_B_M          : float = 6_356_752.3142  # polar radius
+
+# OI 630.0 nm rest wavelength (nominal Harding convention value) [nm]
+OI_LAMBDA0_NM      : float = 630.0
+
+# Nominal OI emission layer altitude [km]
+OI_EMISSION_ALT_KM : float = 250.0
+
+# Speed of light [m/s] — alias; same value as SPEED_OF_LIGHT_MS above
+C_M_S              : float = 299_792_458.0
+
+# Wind vector inversion thresholds (Stage I)
+GDOP_MAX           : float = 100.0   # condition number threshold for ill-conditioning flag
+N_MIN_FRAMES       : int   = 4       # minimum frames per bin; fewer → n_frames_flag=True
+
+# FPI payload boresight in spacecraft body frame (-X_BRF per SI-UCAR-WC-RP-004 §2.4.2.1)
+H07_BORESIGHT_BODY : list  = [-1.0, 0.0, 0.0]
