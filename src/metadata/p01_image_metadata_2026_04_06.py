@@ -1,11 +1,11 @@
 """
 P01 — ImageMetadata dataclass, binary ingest, and Level-0 sidecar JSON.
 
-Spec:        docs/specs/S19_p01_metadata_2026-04-06.md
-Spec date:   2026-04-06
-Generated:   2026-04-07
+Spec:        docs/specs/S19_p01_metadata_2026-05-14.md
+Spec date:   2026-05-14
+Generated:   2026-04-06
 Tool:        Claude Code
-Last tested: 2026-04-07  (8/8 tests pass)
+Last tested: 2026-05-14  (9/9 tests pass)
 Depends on:  src.constants, src.geometry (NB01/NB02 outputs),
              src.fpi.m01 (InstrumentParams)
 """
@@ -124,10 +124,43 @@ class ImageMetadata:
     etalon_gap_mm:      Optional[float] = None
     noise_seed:         Optional[int]   = None
 
-    # ── Section 3.10: Etalon thermal correction hook ────────────────────────
+    # ── Section 3.10: Observation geometry parameter ─────────────────────────
+    h_target_km_obs: Optional[float] = None
+    # Intended emission layer altitude for this observation, km.
+    #
+    # This is a PIPELINE PARAMETER, not a hardware measurement. It is the
+    # altitude at which the tangent point is targeted — i.e., the value
+    # passed to NB02a/NB02b as h_target_km.
+    #
+    # Why this field exists: the binary header does not encode the intended
+    # tangent height, yet H07 (wind vector retrieval) needs it to ray-trace
+    # the LOS from the attitude quaternion to the emission layer. Without it,
+    # H07 must assume a default (250 km), which is incorrect if the operator
+    # or simulation used a different value.
+    #
+    # Population rules:
+    #   Synthetic images (GEN01): populated from the 'Tangent height' prompt
+    #     value (default 250.0 km). GEN01 v14 and later write this field.
+    #     The achieved tangent_alt_km (from NB02b ray-trace) may differ by
+    #     up to ~0.1 km due to WGS84 ellipsoid geometry; h_target_km_obs is
+    #     the INTENDED value, tangent_alt_km is the ACHIEVED value.
+    #   Real images: populated by the SOC pipeline configuration at ingest
+    #     time. The operator supplies the nominal emission altitude for the
+    #     observation campaign (default 250.0 km). This value is passed to
+    #     ingest_real_image() as a keyword argument.
+    #   Backward compatibility: if this field is None (pre-v2 sidecars),
+    #     all consumers must treat it as 250.0 km and log a warning.
+    #
+    # Storage: JSON sidecar only. NOT encoded in binary header words 110–275
+    # (those remain reserved/zero). This avoids breaking the binary format
+    # for an operationally constant value.
+    #
+    # Default: 250.0 km (OI 630.0 nm airglow peak altitude per WC-SE-0003).
+
+    # ── Section 3.11: Etalon thermal correction hook ────────────────────────
     etalon_gap_corrected_mm: Optional[float] = None
 
-    # ── Section 3.11: Grafana telemetry hook ────────────────────────────────
+    # ── Section 3.12: Grafana telemetry hook ────────────────────────────────
     grafana_record_id: Optional[str] = None
 
 
@@ -347,6 +380,7 @@ def ingest_real_image(
     obs_mode: str = "unknown",
     orbit_number: Optional[int] = None,
     frame_sequence: Optional[int] = None,
+    h_target_km_obs: float = 250.0,
 ) -> tuple:
     """
     Load a WindCube FPI binary image and parse its metadata header.
@@ -361,6 +395,10 @@ def ingest_real_image(
         Absolute orbit counter.
     frame_sequence : int, optional
         Frame index within this orbit.
+    h_target_km_obs : float
+        Intended emission layer altitude for this observation, km.
+        Default 250.0 km. Supply from SOC pipeline configuration if
+        the campaign used a non-default value.
 
     Returns
     -------
@@ -438,6 +476,7 @@ def ingest_real_image(
         # All synthetic fields → None / defaults
         is_synthetic        = False,
     )
+    meta.h_target_km_obs = h_target_km_obs
     return meta, image
 
 
@@ -459,6 +498,7 @@ def build_synthetic_metadata(
     frame_sequence: Optional[int] = None,
     noise_seed: Optional[int] = None,
     snr: float = 5.0,
+    h_target_km_obs: float = 250.0,
 ) -> ImageMetadata:
     """
     Construct an ImageMetadata for a synthetic image from geometry pipeline outputs.
@@ -577,6 +617,7 @@ def build_synthetic_metadata(
         tangent_alt_km      = float(nb02_tp["tp_alt_km"]),
         etalon_gap_mm       = etalon_gap_mm,
         noise_seed          = noise_seed,
+        h_target_km_obs     = h_target_km_obs,
     )
 
 
@@ -597,9 +638,19 @@ def read_sidecar(path) -> ImageMetadata:
     Read a Level-0 JSON sidecar and return an ImageMetadata.
     Applies legacy typo normalisation automatically.
     """
+    import warnings
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
     # Legacy normalisation
     if "attitude_quadternion" in d:
         d["attitude_quaternion"] = d.pop("attitude_quadternion")
+    # Backward compatibility: v1 sidecars lack h_target_km_obs
+    if "h_target_km_obs" not in d:
+        warnings.warn(
+            "Sidecar missing 'h_target_km_obs' (pre-v2 file). "
+            "Defaulting to 250.0 km. Re-ingest to populate correctly.",
+            UserWarning,
+            stacklevel=2,
+        )
+        d["h_target_km_obs"] = 250.0
     return ImageMetadata(**d)

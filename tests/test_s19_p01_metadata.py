@@ -282,6 +282,42 @@ def test_file_size_validation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# T9 — h_target_km_obs: round-trip and backward compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_h_target_km_obs():
+    """
+    T9a: h_target_km_obs is written to and read from the JSON sidecar.
+    T9b: A v1 sidecar without h_target_km_obs key causes read_sidecar to
+         supply the default 250.0 km and emit a UserWarning.
+    """
+    import warnings
+
+    # T9a: round-trip with explicit non-default value
+    meta = _make_minimal_real_metadata()
+    meta.h_target_km_obs = 230.0
+    with tempfile.NamedTemporaryFile(suffix="_L0.json", delete=False) as f:
+        path = pathlib.Path(f.name)
+    write_sidecar(meta, path)
+    meta2 = read_sidecar(path)
+    assert abs(meta2.h_target_km_obs - 230.0) < 1e-10
+
+    # T9b: v1 sidecar (key absent) → read_sidecar supplies 250.0 default
+    with tempfile.NamedTemporaryFile(
+            mode="w", suffix="_L0.json", delete=False) as f:
+        d = _make_minimal_real_metadata_dict()
+        d.pop("h_target_km_obs", None)   # simulate v1 sidecar
+        json.dump(d, f)
+        path_v1 = pathlib.Path(f.name)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        meta_v1 = read_sidecar(path_v1)
+    assert abs(meta_v1.h_target_km_obs - 250.0) < 1e-10
+    assert any("h_target_km_obs" in str(warning.message) for warning in w)
+
+
+# ---------------------------------------------------------------------------
 # Import needed for T5
 # ---------------------------------------------------------------------------
 
