@@ -95,7 +95,7 @@ R_REFL           = 0.725          # Effective R from real fringe sharpness
 N_GAP            = 1.0            # Refractive index of etalon gap (air)
 C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
 
-FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 26.5 for R=0.725
+FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # F ≈ 38.35 (Airy denominator coeff); reflective finesse N_R = π√R/(1−R) ≈ 9.73
 
 # CCD / pixel layout — keyed by binning factor (1 or 2)
 # Layout: row 0 of file = header (276 words, zero-padded to N_COLS_FRAME);
