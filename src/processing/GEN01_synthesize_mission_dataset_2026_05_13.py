@@ -140,9 +140,7 @@ SCI_PEAK_ADU     = 5000
 CAL_PEAK_ADU     = 12000
 REL_638          = 0.344          # weak(638nm)/strong(640nm); real-image measurement
 
-# Dark model
-DARK_REF_ADU_S   = 0.05
-T_REF_DARK_C     = -20.0
+# Dark model — doubling interval (shared by science and dark generators)
 T_DOUBLE_C       = 6.5
 
 # CCD97 physical noise model (Teledyne e2v datasheet)
@@ -307,7 +305,8 @@ def _build_wind_map(choice: str, rng, h_target_km: float, **user_params):
 
 def _build_schedule(
     df_sched: pd.DataFrame,
-    lat_band_deg: float,
+    lat_min_deg: float,
+    lat_max_deg: float,
     n_caldark: int,
     step: int,
 ) -> tuple:
@@ -323,7 +322,7 @@ def _build_schedule(
     band_entry_i    = None
 
     for i in range(n):
-        if abs(lat[i]) <= lat_band_deg:
+        if lat_min_deg <= lat[i] <= lat_max_deg:
             if not in_band:
                 in_band      = True
                 band_entry_i = i
@@ -501,7 +500,7 @@ def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float,
 def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
                            nx: int, ny: int) -> np.ndarray:
     """Generate dark frame based on CCD temperature and exposure time."""
-    dark_rate = DARK_REF_ADU_S * 2.0**((ccd_temp1_c - T_REF_DARK_C) / T_DOUBLE_C)
+    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp1_c - 20.0) / T_DOUBLE_C)
     mean_dark = max(dark_rate * exp_time_s, 0.0)
     dark_arr  = rng.poisson(mean_dark, size=(ny, nx)).astype(float)
     image     = np.round(dark_arr + OFFSET_ADU).astype(np.float32)
@@ -509,13 +508,12 @@ def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
 
 
 def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
-                     exp_time_cts: int, rng, binning_cfg: dict,
+                     exp_time_s: float, rng, binning_cfg: dict,
                      cx: float, cy: float) -> np.ndarray:
     """Dispatch to the appropriate pixel generator."""
     nx          = binning_cfg["nx_pix"]
     ny          = binning_cfg["ny_pix"]
     plate_scale = binning_cfg["plate_scale"]
-    exp_time_s  = exp_time_cts * TIMER_PERIOD_S
     if frame_type == "science":
         return _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale,
                                          cx, cy, ccd_temp1_c, exp_time_s)
@@ -595,7 +593,8 @@ def _plot_ground_tracks(
     metadata_list: list,
     obs_indices:   list,
     frame_types:   list,
-    lat_band_deg:  float,
+    lat_min_deg:   float,
+    lat_max_deg:   float,
     switch_at:     list,
     save_path:     pathlib.Path,
 ) -> None:
@@ -734,7 +733,7 @@ def _plot_ground_tracks(
                     lw=0.9, alpha=0.55, zorder=4)
 
     # Science band boundaries
-    for bnd in [lat_band_deg, -lat_band_deg]:
+    for bnd in [lat_min_deg, lat_max_deg]:
         _ln([-180, 180], [bnd, bnd], linestyle=":", color="k", lw=0.8, alpha=0.55)
 
     # --- Event markers ---
@@ -784,8 +783,8 @@ def _plot_ground_tracks(
 
     # --- Science band latitude labels (left edge of map) ---
     for bnd, valign, offset in [
-        ( lat_band_deg, "bottom", 2),
-        (-lat_band_deg, "top",   -2),
+        (lat_max_deg, "bottom", 2),
+        (lat_min_deg, "top",   -2),
     ]:
         label_kw = {}
         if _cartopy:
@@ -846,18 +845,24 @@ def main():
     duration_days = _prompt(
         "Duration             [days,  default   1       ] : ",
         1.0, float, 0.1, 365.0)
-    lat_band_deg  = _prompt(
-        "Science band         [deg,   default  40       ] : ",
-        40.0, float, 5.0, 89.0)
+    lat_min_deg   = _prompt(
+        "Science band min lat [deg,   default -40       ] : ",
+        -40.0, float, -89.0, 89.0)
+    lat_max_deg   = _prompt(
+        "Science band max lat [deg,   default +40       ] : ",
+        40.0, float, -89.0, 89.0)
     obs_cadence_s = _prompt(
         "Obs. cadence         [sec,   default  10       ] : ",
         10.0, float, 10.0, 3600.0)
     n_caldark     = _prompt(
         "Cal/dark frames (n)  [int,   default   5       ] : ",
         5, int, 1, 50)
-    exp_time_cts  = _prompt(
-        "Exposure time        [cts,   default 8000      ] : ",
-        8000, int, 100, 100000)
+    exp_time_sci_s = _prompt(
+        "Science exposure     [sec,   default  10       ] : ",
+        10.0, float, 1.0, 3600.0)
+    exp_time_cal_s = _prompt(
+        "Cal/dark exposure    [sec,   default 120       ] : ",
+        120.0, float, 1.0, 3600.0)
     _bin_factor   = _prompt(
         "Binning              [1 or 2, default  2       ] : ",
         2, int, 1, 2)
@@ -889,7 +894,8 @@ def main():
         "Random seed          [int,   default  42       ] : ",
         42, int, 0, None)
 
-    exp_time_cs = round(exp_time_cts * TIMER_PERIOD_S * 100)
+    exp_time_sci_cs = round(exp_time_sci_s * 100)   # centiseconds for P01 metadata
+    exp_time_cal_cs = round(exp_time_cal_s * 100)
 
     # -----------------------------------------------------------------------
     # Wind map selection menu
@@ -961,10 +967,10 @@ def main():
     )
     print(f"  Output directory : {output_dir}")
 
-    if lat_band_deg >= CAL_TRIGGER_LAT_DEG:
+    if lat_max_deg >= CAL_TRIGGER_LAT_DEG or lat_min_deg <= -CAL_TRIGGER_LAT_DEG:
         print(
-            f"\n  WARNING: science band (±{lat_band_deg}°) overlaps the "
-            f"{CAL_TRIGGER_LAT_DEG}°N cal/dark trigger latitude. "
+            f"\n  WARNING: science band ({lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°) "
+            f"overlaps the ±{CAL_TRIGGER_LAT_DEG}°N/S cal/dark trigger latitude. "
             "Cal/dark takes precedence at trigger epochs."
         )
     seq_duration_s = 2 * n_caldark * obs_cadence_s
@@ -987,16 +993,15 @@ def main():
     print(f"\nParameters:")
     print(f"  Start epoch      : {t_start} UTC")
     print(f"  Duration         : {duration_days:.1f} days")
-    print(f"  Science band     : ±{lat_band_deg:.1f}°")
+    print(f"  Science band     : {lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°")
     print(f"  Obs. cadence     : {obs_cadence_s:.1f} s requested → "
           f"{actual_cadence:.1f} s actual (step={step})")
     print(f"  Cal/dark per orb : {n_caldark} + {n_caldark} = {2*n_caldark} frames  "
           f"({seq_duration_s:.1f} s sequence)")
     print(f"  Cal trigger lat  : {CAL_TRIGGER_LAT_DEG:.1f}°N ascending  "
           "[CONOPS TBD document, §TBD]")
-    print(f"  Exp. time        : {exp_time_cts} counts × {TIMER_PERIOD_S*1000:.1f} ms/count "
-          f"= {exp_time_cts * TIMER_PERIOD_S:.3f} s  ({exp_time_cs} cs in P01,  "
-          f"exp_unit={EXP_UNIT})")
+    print(f"  Exp. time (sci)  : {exp_time_sci_s:.1f} s  ({exp_time_sci_cs} cs in P01)")
+    print(f"  Exp. time (cal)  : {exp_time_cal_s:.1f} s  ({exp_time_cal_cs} cs in P01)")
     print(f"  Binning          : {_bin_factor}×{_bin_factor}  "
           f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
           f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)")
@@ -1036,7 +1041,7 @@ def main():
     # Step 2: Build observation schedule
     # -----------------------------------------------------------------------
     obs_indices, frame_types, cal_trigger_indices = _build_schedule(
-        df_sched, lat_band_deg, n_caldark, step
+        df_sched, lat_min_deg, lat_max_deg, n_caldark, step
     )
 
     # Attitude switches just after each cal/dark sequence completes.
@@ -1069,7 +1074,7 @@ def main():
     print(f"  Total frames   : {n_obs}")
 
     if n_science == 0:
-        print("\nFATAL: zero science frames produced. Check lat_band_deg and schedule.")
+        print("\nFATAL: zero science frames produced. Check lat_min_deg/lat_max_deg and schedule.")
         return
     if n_cal == 0:
         print("\nFATAL: zero cal frames produced. Check CAL_TRIGGER_LAT_DEG and orbit propagation.")
@@ -1105,7 +1110,7 @@ def main():
         f"Orbital period     : {T_ORBIT_S:.1f} s  ({T_ORBIT_S / 60:.2f} min)",
         "",
         "--- Observation Schedule ---",
-        f"Science band       : ±{lat_band_deg:.1f}°",
+        f"Science band       : {lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°",
         f"Cal trigger lat    : {CAL_TRIGGER_LAT_DEG:.1f}°N  (ascending)",
         f"Obs. cadence       : {obs_cadence_s:.1f} s requested  →  {actual_cadence:.1f} s actual  (step={step})",
         f"Cal/dark per orbit : {n_caldark} cal + {n_caldark} dark = {2 * n_caldark} frames",
@@ -1118,8 +1123,8 @@ def main():
         f"Tangent height     : {h_target_km:.1f} km",
         f"Fringe centre      : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
         f"(offset Δcx={cx_offset:+.2f}, Δcy={cy_offset:+.2f})",
-        f"Exposure time      : {exp_time_cts} counts × {TIMER_PERIOD_S * 1000:.1f} ms/count"
-        f"  =  {exp_time_cts * TIMER_PERIOD_S:.3f} s  (exp_unit={EXP_UNIT})",
+        f"Exposure time (sci): {exp_time_sci_s:.1f} s  ({exp_time_sci_cs} cs in P01)",
+        f"Exposure time (cal): {exp_time_cal_s:.1f} s  ({exp_time_cal_cs} cs in P01)",
         "",
         "--- Wind Map ---",
         f"Model              : {windmap_label}  (tag='{windmap_tag}')",
@@ -1212,10 +1217,11 @@ def main():
             "adcs_timestamp": lua_ts,
         })
 
+        _exp_cs = exp_time_sci_cs if frame_type == "science" else exp_time_cal_cs
         meta = ImageMetadata(
             rows                 = binning_cfg["rows_meta"],
             cols                 = binning_cfg["cols_meta"],
-            exp_time             = exp_time_cs,
+            exp_time             = _exp_cs,
             exp_unit             = EXP_UNIT,
             binning              = _bin_factor,
             img_type             = img_type,
@@ -1261,8 +1267,9 @@ def main():
         })
 
         # Binary image synthesis — pixel draws follow the 9 metadata draws
+        _exp_s = exp_time_sci_s if frame_type == "science" else exp_time_cal_s
         pixels = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
-                                  exp_time_cts, rng, binning_cfg,
+                                  _exp_s, rng, binning_cfg,
                                   cx_centre, cy_centre)
         _write_bin_file(meta, pixels, bin_dir / _bin_filename(meta), binning_cfg)
 
@@ -1504,7 +1511,8 @@ def main():
         metadata_list = metadata_list,
         obs_indices   = obs_indices,
         frame_types   = frame_types,
-        lat_band_deg  = lat_band_deg,
+        lat_min_deg   = lat_min_deg,
+        lat_max_deg   = lat_max_deg,
         switch_at     = switch_at,
         save_path     = gt_path,
     )
@@ -1620,10 +1628,14 @@ def main():
                f"{np.sum(np.isnan(tp_col[sci_mask]))} NaN science rows found")
 
     if sci_mask.any():
-        max_tp_lat = float(np.nanmax(np.abs(tp_col[sci_mask])))
-        c16 = _chk(f"C16 tp_lat_deg within lat_band+5° ({lat_band_deg+5:.1f}°) of equator",
-                   max_tp_lat <= lat_band_deg + 5.0,
-                   f"max |tp_lat|={max_tp_lat:.2f}°")
+        min_tp = float(np.nanmin(tp_col[sci_mask]))
+        max_tp = float(np.nanmax(tp_col[sci_mask]))
+        c16 = _chk(
+            f"C16 tp_lat_deg within science band ±5° "
+            f"({lat_min_deg-5:.1f}° to {lat_max_deg+5:.1f}°)",
+            min_tp >= lat_min_deg - 5.0 and max_tp <= lat_max_deg + 5.0,
+            f"tp_lat range [{min_tp:.2f}°, {max_tp:.2f}°]",
+        )
     else:
         c16 = _chk("C16 tp_lat_deg within lat_band+5° of equator", True)
 
