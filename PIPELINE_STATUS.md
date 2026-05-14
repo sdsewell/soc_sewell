@@ -30,7 +30,7 @@
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
-| G01  | GEN01 mission-dataset-syn | PASS v13 | smoke | 2026-05-14 |
+| G01  | GEN01 mission-dataset-syn | PASS v14 | smoke | 2026-05-14 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
 
