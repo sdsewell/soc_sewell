@@ -73,15 +73,15 @@ hardwired constants). They are user-prompted in Z03 with the values below as def
 
 | Constant | Symbol | Value | Source |
 |----------|--------|-------|--------|
-| Etalon gap | `d` | **20.0005 mm** | Benoit excess-fraction two-line recovery |
-| Plate scale (2×2 binned) | `α` | **1.6000e-4 rad/px** | Tolansky two-line WLS |
-| Plate scale (1×1 unbinned) | `α` | **0.8000e-4 rad/px** | = 1.6000e-4 / 2 |
-| Effective reflectivity | `R` | **0.725** | Gives finesse N_R = 10.0; default (prompted) |
+| Etalon gap | `d` | **20.106 mm** | Benoit two-line Tolansky recovery |
+| Plate scale (2×2 binned) | `α` | **1.6083e-4 rad/px** | Tolansky two-line WLS |
+| Plate scale (1×1 unbinned) | `α` | **0.8042e-4 rad/px** | = 1.6083e-4 / 2 |
+| Effective reflectivity | `R` | **0.725** | Gives finesse N_R ≈ 9.73; default (prompted) |
 | Ne 640.2 nm wavelength | `λ₁` | **640.2248e-9 m** | Burns, Adams & Longwell (1950) IAU |
 | Ne 638.3 nm wavelength | `λ₂` | **638.2991e-9 m** | Burns, Adams & Longwell (1950) IAU |
 | 638/640 intensity ratio | `rel_638` | **0.344** | Radial-profile average of real cal images |
 | Electronic offset | `offset` | **5 ADU** | Bias + read noise combined; real-image pedestal |
-| Dark reference rate | `dark_ref` | **0.05 ADU/px/s** | At T_ref = −20°C |
+| Dark reference rate | `QDD_AT_20C` | **400.0 e-/px/s** | At T_ref = +20°C (CCD97) |
 | Dark doubling interval | `T_double` | **6.5°C** | Standard CCD rule |
 | Focal plane temperature | `T_fp` | **−20°C** | Default operating temperature (prompted) |
 
@@ -122,14 +122,14 @@ See v1.4 §4.1a–§4.1b for mode-dependent defaults and hard limits.
 
 | Prompt | Variable | Default | Units | Notes |
 |--------|----------|---------|-------|-------|
-| Etalon gap `d` | `d_mm` | **20.0005** | mm | Benoit two-line recovery |
+| Etalon gap `d` | `d_mm` | **20.106** | mm | Benoit two-line Tolansky recovery |
 | Plate scale `α` | `alpha` | *(mode-dependent, see §3)* | rad/px | Tolansky WLS result |
 
 ### Group 2 — Etalon Reflectivity
 
 | Prompt | Variable | Default | Units | Notes |
 |--------|----------|---------|-------|-------|
-| Effective reflectivity `R` | `R` | **0.725** | — | Finesse N_R = 10; absorbs mirror quality + any PSF effect |
+| Effective reflectivity `R` | `R` | **0.725** | — | Finesse N_R ≈ 9.73; absorbs mirror quality + any PSF effect |
 
 > The old Group 2 PSF parameters (σ₀, σ₁, σ₂) are **removed** in v1.5. They are no longer
 > prompted and no longer appear in `SynthParams` or `_truth.json`.
@@ -229,7 +229,7 @@ where `I₀ = I_peak / (1 + rel_638)`.
 
 ```python
 # Calibration image pixel synthesis
-dark_rate = DARK_REF_ADU_S * 2.0**((T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+dark_rate = QDD_AT_20C * 2.0**((T_fp_c - 20.0) / T_DOUBLE_C)
 mean_dark = dark_rate * exp_time_s           # typically negligible at −20°C
 
 signal = S_cal(r)                            # neon fringe + offset
@@ -239,7 +239,7 @@ pixel  = clip(round(pixel), 0, 16383).astype(uint16)
 
 ```python
 # Dark image pixel synthesis
-dark_rate = DARK_REF_ADU_S * 2.0**((T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+dark_rate = QDD_AT_20C * 2.0**((T_fp_c - 20.0) / T_DOUBLE_C)
 mean_dark = dark_rate * exp_time_s
 pixel     = Poisson(mean_dark) + OFFSET_ADU
 pixel     = clip(round(pixel), 0, 16383).astype(uint16)
@@ -275,7 +275,7 @@ from 4 to 1.
 | `cx_default` | 137.5 | 275.5 | (ncols − 1) / 2 |
 | `cy_default` | 130.0 | 264.0 | (nrows − 1) / 2; updated for 1-row header |
 | `r_max_px` | 110.0 | 220.0 | FlatSat/flight; unbinned = 2 × binned |
-| `alpha_default` | **1.6000e-4** | **0.8000e-4** | Updated from 1.6133e-4 / 0.8067e-4 |
+| `alpha_default` | **1.6083e-4** | **0.8042e-4** | Updated from 1.6000e-4 / 0.8000e-4 |
 | `pix_m` | 32.0e-6 | 16.0e-6 | Physical pixel pitch |
 | `label` | `"2x2_binned"` | `"1x1_unbinned"` | Appears in output filenames |
 
@@ -291,8 +291,7 @@ from 4 to 1.
 | Constant | Symbol | Value | Notes |
 |----------|--------|-------|-------|
 | Electronic offset | `OFFSET_ADU` | **5** | Bias + read noise; fixed, not prompted |
-| Dark reference rate | `DARK_REF_ADU_S` | `0.05` | ADU/px/s at T_REF_DARK_C |
-| Dark reference temperature | `T_REF_DARK_C` | `−20.0` | °C |
+| Dark reference rate | `QDD_AT_20C` | `400.0` | e-/px/s at +20°C (CCD97) |
 | Dark doubling interval | `T_DOUBLE_C` | `6.5` | °C |
 | Radial bins | `R_BINS` | `2000` | Avoids interpolation artefacts |
 | Refractive index | `N_REF` | `1.0` | Air gap |
@@ -313,7 +312,7 @@ class SynthParams:
     cx:        float   # fringe centre column, pixels
     cy:        float   # fringe centre row, pixels
     # Group 1 — etalon geometry
-    d_mm:      float   # etalon gap, mm  (default 20.0005)
+    d_mm:      float   # etalon gap, mm  (default 20.106)
     alpha:     float   # plate scale, rad/px  (mode-dependent default)
     # Group 2 — reflectivity (PSF params removed)
     R:         float   # effective reflectivity  (default 0.725)
@@ -367,7 +366,7 @@ I0       = I_peak / (1.0 + rel_638)
 F_coef   = 4 * R / (1 - R)**2
 N_R      = math.pi * math.sqrt(R) / (1 - R)
 FSR_m    = LAM_640**2 / (2.0 * d_mm * 1e-3)
-dark_rate = DARK_REF_ADU_S * 2.0**((T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+dark_rate = QDD_AT_20C * 2.0**((T_fp_c - 20.0) / T_DOUBLE_C)
 ```
 
 Printed to terminal including finesse value computed from R.
@@ -454,8 +453,8 @@ Output filenames unchanged from v1.4.
     "binning":   2,
     "cx":        137.5,
     "cy":        130.0,
-    "d_mm":      20.0005,
-    "alpha":     1.6000e-4,
+    "d_mm":      20.106,
+    "alpha":     1.6083e-4,
     "R":         0.725,
     "snr_peak":  50.0,
     "I1":       -0.1,
@@ -464,20 +463,19 @@ Output filenames unchanged from v1.4.
     "rel_638":   0.344
   },
   "derived_params": {
-    "alpha_rad_per_px":       1.6000e-4,
+    "alpha_rad_per_px":       1.6083e-4,
     "I_peak_adu":             2500.0,
     "I0_adu":                 1860.0,
     "Y_B":                    0.344,
-    "finesse_N_R":            10.0,
-    "finesse_coefficient_F":  9.63,
-    "FSR_m":                  1.0238e-11,
-    "dark_rate_adu_px_s":     0.05
+    "finesse_N_R":            9.73,
+    "finesse_coefficient_F":  38.35,
+    "FSR_m":                  1.0193e-11,
+    "dark_rate_adu_px_s":     5.62
   },
   "fixed_constants": {
-    "offset_adu":      5,
-    "dark_ref_adu_s":  0.05,
-    "T_ref_dark_c":   -20.0,
-    "T_double_c":      6.5,
+    "offset_adu":          5,
+    "qdd_at_20c_adu_px_s": 400.0,
+    "T_double_c":          6.5,
     "R_bins":          2000,
     "n_ref":           1.0,
     "lam_640_m":       6.402248e-7,

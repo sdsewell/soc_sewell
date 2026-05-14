@@ -45,9 +45,8 @@ from src.fpi.archive.m02_calibration_synthesis_2026_04_05 import radial_profile_
 # ---------------------------------------------------------------------------
 
 OFFSET_ADU       = 5          # ADU — bias + read noise combined; fixed pedestal
-DARK_REF_ADU_S   = 0.5       # ADU/px/s at T_REF_DARK_C
-T_REF_DARK_C     = 10.0      # °C — dark reference temperature
-T_DOUBLE_C       = 4.0        # °C — dark doubling interval
+QDD_AT_20C       = 400.0     # e-/px/s dark current at 20°C (CCD97)
+T_DOUBLE_C       = 6.5       # °C — dark doubling interval
 R_BINS           = 2000       # radial bins
 N_REF            = 1.0        # refractive index, air gap
 LAM_640          = 640.2248e-9  # m — Ne primary line (Burns et al. 1950)
@@ -76,12 +75,12 @@ _BINNING_CONFIGS: dict[int, BinningConfig] = {
     2: BinningConfig(
         nrows=260, ncols=276, active_rows=259, n_meta_rows=1,
         cx_default=137.5, cy_default=130.0, r_max_px=110.0,
-        alpha_default=1.6000e-4, pix_m=32.0e-6, label="2x2_binned",
+        alpha_default=1.6083e-4, pix_m=32.0e-6, label="2x2_binned",
     ),
     1: BinningConfig(
         nrows=528, ncols=552, active_rows=527, n_meta_rows=1,
         cx_default=275.5, cy_default=264.0, r_max_px=220.0,
-        alpha_default=0.8000e-4, pix_m=16.0e-6, label="1x1_unbinned",
+        alpha_default=0.8042e-4, pix_m=16.0e-6, label="1x1_unbinned",
     ),
 }
 
@@ -104,7 +103,7 @@ class SynthParams:
     cx:        float   # fringe centre column, pixels
     cy:        float   # fringe centre row, pixels (full-frame coords)
     # Group 1 — etalon geometry
-    d_mm:      float   # etalon gap, mm  (default 20.008)
+    d_mm:      float   # etalon gap, mm  (default 20.106)
     alpha:     float   # plate scale, rad/px  (mode-dependent default)
     # Group 2 — reflectivity
     R:         float   # effective reflectivity  (default 0.725)
@@ -165,7 +164,7 @@ def derive_secondary(params: SynthParams) -> DerivedParams:
     FSR         = LAM_640**2 / (2.0 * N_REF * d_m)
     F           = 4.0 * params.R / (1.0 - params.R)**2
     N_R         = math.pi * math.sqrt(params.R) / (1.0 - params.R)
-    dark_rate   = DARK_REF_ADU_S * 2.0**((params.T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+    dark_rate   = QDD_AT_20C * 2.0**((params.T_fp_c - 20.0) / T_DOUBLE_C)
     return DerivedParams(
         alpha_rad_per_px = params.alpha,
         I_peak           = I_peak,
@@ -422,10 +421,9 @@ def write_truth_json(
             "dark_rate_adu_px_s":    derived.dark_rate,
         },
         "fixed_constants": {
-            "offset_adu":    OFFSET_ADU,
-            "dark_ref_adu_s": DARK_REF_ADU_S,
-            "T_ref_dark_c":  T_REF_DARK_C,
-            "T_double_c":    T_DOUBLE_C,
+            "offset_adu":         OFFSET_ADU,
+            "qdd_at_20c_adu_px_s": QDD_AT_20C,
+            "T_double_c":         T_DOUBLE_C,
             "R_bins":        R_BINS,
             "n_ref":         N_REF,
             "lam_640_m":     LAM_640,
@@ -882,7 +880,7 @@ def prompt_all_params() -> SynthParams:
                                cfg.cy_default - 50, cfg.cy_default + 50)
 
         print("\n── GROUP 1  ETALON GEOMETRY ──")
-        d_mm  = _validated_prompt("Etalon gap d",   20.008,          "mm",    15.0,  25.0, 19.5, 20.5)
+        d_mm  = _validated_prompt("Etalon gap d",   20.106,          "mm",    15.0,  25.0, 19.5, 20.5)
         alpha = _validated_prompt("Plate scale α", cfg.alpha_default, "rad/px", 1e-5, 1e-3, 0.5e-4, 5e-4)
 
         print("\n── GROUP 2  ETALON REFLECTIVITY ──")

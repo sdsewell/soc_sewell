@@ -56,7 +56,7 @@ if str(_REPO_ROOT) not in sys.path:
 from validation.z03_synthetic_calibration_image_generator_2026_04_28 import (
     BinningConfig,
     DerivedParams,
-    DARK_REF_ADU_S,
+    QDD_AT_20C,
     LAM_638,
     LAM_640,
     N_REF,
@@ -64,7 +64,6 @@ from validation.z03_synthetic_calibration_image_generator_2026_04_28 import (
     R_BINS,
     SynthParams,
     T_DOUBLE_C,
-    T_REF_DARK_C,
     check_vignetting_positive,
     derive_secondary,
     get_binning_config,
@@ -129,7 +128,7 @@ def test_binning_config_binned():
     assert cfg.cx_default   == pytest.approx(137.5)
     assert cfg.cy_default   == pytest.approx(130.0)
     assert cfg.r_max_px     == pytest.approx(110.0)
-    assert cfg.alpha_default == pytest.approx(1.6000e-4)
+    assert cfg.alpha_default == pytest.approx(1.6083e-4)
     assert cfg.pix_m        == pytest.approx(32.0e-6)
     assert cfg.label        == "2x2_binned"
 
@@ -144,7 +143,7 @@ def test_binning_config_unbinned():
     assert cfg.cx_default   == pytest.approx(275.5)
     assert cfg.cy_default   == pytest.approx(264.0)
     assert cfg.r_max_px     == pytest.approx(220.0)
-    assert cfg.alpha_default == pytest.approx(0.8000e-4)
+    assert cfg.alpha_default == pytest.approx(0.8042e-4)
     assert cfg.pix_m        == pytest.approx(16.0e-6)
     assert cfg.label        == "1x1_unbinned"
 
@@ -178,7 +177,7 @@ def test_derive_secondary():
     N_R_expected = math.pi * math.sqrt(params.R) / (1.0 - params.R)
     assert derived.finesse_N_R == pytest.approx(N_R_expected, rel=1e-6)
 
-    dark_expected = DARK_REF_ADU_S * 2.0**((params.T_fp_c - T_REF_DARK_C) / T_DOUBLE_C)
+    dark_expected = QDD_AT_20C * 2.0**((params.T_fp_c - 20.0) / T_DOUBLE_C)
     assert derived.dark_rate == pytest.approx(dark_expected, rel=1e-6)
 
 
@@ -359,7 +358,7 @@ def test_truth_json_complete(tmp_path):
         "finesse_N_R", "finesse_coefficient_F", "FSR_m", "dark_rate_adu_px_s",
     }
     expected_fixed_keys = {
-        "offset_adu", "dark_ref_adu_s", "T_ref_dark_c", "T_double_c",
+        "offset_adu", "qdd_at_20c_adu_px_s", "T_double_c",
         "R_bins", "n_ref", "lam_640_m", "lam_638_m",
         "n_meta_rows", "nrows", "ncols", "active_rows", "r_max_px", "pix_m", "label",
     }
@@ -537,8 +536,8 @@ def test_no_sigma_params():
 def test_dark_current_scales_with_temperature():
     """Dark rate at −10°C must be at least 1.5× higher than at −20°C."""
     exp_time_s = 1.0
-    rate_cold  = DARK_REF_ADU_S * 2.0**((-20.0 - T_REF_DARK_C) / T_DOUBLE_C)
-    rate_warm  = DARK_REF_ADU_S * 2.0**((-10.0 - T_REF_DARK_C) / T_DOUBLE_C)
+    rate_cold  = QDD_AT_20C * 2.0**((-20.0 - 20.0) / T_DOUBLE_C)
+    rate_warm  = QDD_AT_20C * 2.0**((-10.0 - 20.0) / T_DOUBLE_C)
     assert rate_warm > rate_cold * 1.5, (
         f"Dark rate at -10°C ({rate_warm:.4f}) should be >1.5× rate at -20°C ({rate_cold:.4f})"
     )
