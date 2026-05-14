@@ -579,7 +579,7 @@ def make_figure(r2_data, profile, sigma,
 
     rows = [
         ("t",        f"{fit.t_m*1e3:.7f} mm",
-                     f"±{fit.sigma_t_m*1e6:.2e} µm" if not np.isnan(fit.sigma_t_m) else "fixed",
+                     f"±{fit.sigma_t_m*1e9:.1f} nm" if not np.isnan(fit.sigma_t_m) else "fixed",
                      "Etalon gap  [Tolansky-seeded, Group A]"),
         ("α",        f"{fit.alpha:.5e} rad/px",
                      _fmt_unc(fit.sigma_alpha), "Plate scale  [Tolansky-seeded, Group A]"),
@@ -741,7 +741,7 @@ def main():
     print(f"{'='*68}")
     print(f"  Converged: {fit.converged}   χ²/ν: {fit.chi2_reduced:.4f}   "
           f"bins: {fit.n_bins_used}")
-    print(f"  t      = {fit.t_m*1e3:.7f} mm   {_fmt_unc(fit.sigma_t_m*1e6)} µm")
+    print(f"  t      = {fit.t_m*1e3:.7f} mm   ±{fit.sigma_t_m*1e9:.1f} nm")
     print(f"  alpha  = {fit.alpha:.5e}   {_fmt_unc(fit.sigma_alpha)} rad/px")
     print(f"  R1     = {fit.R1:.5f}   {_fmt_unc(fit.sigma_R1)}  [λ₁, → H06 R_refl]")
     print(f"  R2     = {fit.R2:.5f}   {_fmt_unc(fit.sigma_R2)}  [λ₂, reference]")
