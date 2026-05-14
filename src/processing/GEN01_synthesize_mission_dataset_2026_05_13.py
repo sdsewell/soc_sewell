@@ -919,6 +919,7 @@ def _plot_vrel_histogram(
     Two-panel histogram of v_rel by look mode, with truth v_wind_LOS overlay.
     For TimeVaryingStormWindMap, adds a third panel showing the ap ramp profile.
     """
+    import matplotlib.pyplot as plt
     is_storm_onset = isinstance(wind_map, TimeVaryingStormWindMap)
 
     if is_storm_onset:
