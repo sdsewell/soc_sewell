@@ -1,8 +1,8 @@
 """
-GEN01 v11 — Synthetic Metadata Generator.
+GEN01 v14 — Synthetic Metadata Generator.
 
-Spec:      docs/specs/G01_synthetic_metadata_generator_2026-05-13.md
-Spec date: 2026-05-13
+Spec:      specs/G01_synthetic_metadata_generator_2026-05-14.md
+Spec date: 2026-05-14
 Generated: 2026-05-13
 Tool:      Claude Code
 CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
@@ -1324,7 +1324,7 @@ def main():
         f"Total obs frames   : {n_obs}",
         "",
         "--- Instrument ---",
-        f"Tangent height     : {h_target_km:.1f} km",
+        f"Tangent height     : {h_target_km:.1f} km   (h_target_km_obs in metadata)",
         f"Fringe centre      : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
         f"(offset Δcx={cx_offset:+.2f}, Δcy={cy_offset:+.2f})",
         f"Exposure time (sci): {exp_time_sci_s:.1f} s  ({exp_time_sci_cs} cs in P01)",
@@ -1349,6 +1349,19 @@ def main():
         f"Frame size         : {binning_cfg['n_rows_frame']} rows × "
         f"{binning_cfg['n_cols_frame']} cols × 2 bytes = "
         f"{binning_cfg['n_rows_frame'] * binning_cfg['n_cols_frame'] * 2:,} bytes",
+        "",
+        "--- LOS velocity sign conventions ---",
+        "v_*_los_approach_ms columns: dot(velocity, los_eci) per NB02c.",
+        "  Positive = velocity component along the instrument boresight direction.",
+        "  These are diagnostic/truth columns; not consumed directly by H07.",
+        "",
+        "v_rel_ms: Harding recession convention (NB02c formula).",
+        "  Positive = source receding from spacecraft (redshift, λ increases).",
+        "  Used directly by M06 pixel generator and H07 wind inversion.",
+        "  Relationship (from NB02c compute_v_rel):",
+        "    v_rel_ms = v_wind_los_approach_ms",
+        "               - v_sc_los_approach_ms",
+        "               - v_earth_los_approach_ms",
     ]
     _readme_stem = (f"GEN01_{t_start[:10].replace('-', '')}_{duration_days:05.1f}d_"
                     f"{windmap_tag}_seed{rng_seed:04d}")
@@ -1467,6 +1480,7 @@ def main():
             truth_v_zonal        = v_zonal,
             truth_v_meridional   = v_merid,
             truth_v_los          = v_wind_LOS,   # populated for science frames (v9)
+            h_target_km_obs      = h_target_km,  # v14: intended emission layer altitude
         )
         metadata_list.append(meta)
 
@@ -1600,7 +1614,7 @@ def main():
     }
 
     # CSV: one row per obs-cadence step across the full schedule.
-    # Observed frames carry full metadata (48 cols: obs_type + 46 data cols + ap_current).
+    # Observed frames carry full metadata (50 cols: obs_type + obs_mode + 46 data cols + ap_current).
     # Non-observing steps have exp_time=0, obs_type='none', NaN for frame fields.
     all_indices = sorted(set(range(0, len(df_sched), step)) | set(obs_indices))
 
@@ -1613,17 +1627,18 @@ def main():
         if idx in obs_data:
             r, vd, ft = obs_data[idx]
             rows_csv.append({
-                "obs_type":             ft,
-                "rows":                 r["rows"],
-                "cols":                 r["cols"],
-                "exp_time":             r["exp_time"],
-                "exp_unit":             r["exp_unit"],
-                "ccd_temp1":            r["ccd_temp1"],
-                "lua_timestamp":        r["lua_timestamp"],
-                "adcs_timestamp":       r["adcs_timestamp"],
-                "spacecraft_latitude":  r["spacecraft_latitude"],
-                "spacecraft_longitude": r["spacecraft_longitude"],
-                "spacecraft_altitude":  r["spacecraft_altitude"],
+                "obs_type":               ft,
+                "obs_mode":               r["obs_mode"],          # v14: 1a
+                "rows":                   r["rows"],
+                "cols":                   r["cols"],
+                "exp_time":               r["exp_time"],
+                "exp_unit":               r["exp_unit"],
+                "ccd_temp1":              r["ccd_temp1"],
+                "lua_timestamp":          r["lua_timestamp"],
+                "adcs_timestamp":         r["adcs_timestamp"],
+                "spacecraft_latitude":    r["spacecraft_latitude"],
+                "spacecraft_longitude":   r["spacecraft_longitude"],
+                "spacecraft_altitude":    r["spacecraft_altitude"],
                 "att_q_x":  r["attitude_quaternion"][0],
                 "att_q_y":  r["attitude_quaternion"][1],
                 "att_q_z":  r["attitude_quaternion"][2],
@@ -1652,30 +1667,32 @@ def main():
                 "lamp_3": r["lamp_ch_array"][3],
                 "lamp_4": r["lamp_ch_array"][4],
                 "lamp_5": r["lamp_ch_array"][5],
-                "tp_lat_deg":      r["tangent_lat"]       if r["tangent_lat"]       is not None else _nan,
-                "tp_lon_deg":      r["tangent_lon"]        if r["tangent_lon"]        is not None else _nan,
-                "wind_v_zonal_ms": r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else _nan,
-                "wind_v_merid_ms": r["truth_v_meridional"] if r["truth_v_meridional"] is not None else _nan,
-                "v_wind_los_ms":   vd["v_wind_los_ms"],
-                "v_earth_los_ms":  vd["v_earth_los_ms"],
-                "v_sc_los_ms":     vd["v_sc_los_ms"],
-                "v_rel_ms":        vd["v_rel_ms"],
-                "ap_current":      vd["ap_current"],
+                "tp_lat_deg":               r["tangent_lat"]       if r["tangent_lat"]       is not None else _nan,
+                "tp_lon_deg":               r["tangent_lon"]        if r["tangent_lon"]        is not None else _nan,
+                "h_target_km_obs":          r["h_target_km_obs"]    if r["h_target_km_obs"]    is not None else _nan,  # v14: 1c
+                "wind_v_zonal_ms":          r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else _nan,
+                "wind_v_merid_ms":          r["truth_v_meridional"] if r["truth_v_meridional"] is not None else _nan,
+                "v_wind_los_approach_ms":   vd["v_wind_los_ms"],    # v14: 1b renamed
+                "v_earth_los_approach_ms":  vd["v_earth_los_ms"],   # v14: 1b renamed
+                "v_sc_los_approach_ms":     vd["v_sc_los_ms"],      # v14: 1b renamed
+                "v_rel_ms":                 vd["v_rel_ms"],
+                "ap_current":               vd["ap_current"],
             })
         else:
             # Non-observing step: orbital state only, exp_time=0
             rows_csv.append({
-                "obs_type":             "none",
-                "rows":                 0,
-                "cols":                 0,
-                "exp_time":             0,
-                "exp_unit":             0,
-                "ccd_temp1":            _nan,
-                "lua_timestamp":        lua_ts,
-                "adcs_timestamp":       lua_ts,
-                "spacecraft_latitude":  float(np.radians(srow.lat_deg)),
-                "spacecraft_longitude": float(np.radians(srow.lon_deg)),
-                "spacecraft_altitude":  float(srow.alt_km * 1e3),
+                "obs_type":               "none",
+                "obs_mode":               _nan,                    # v14: 1a
+                "rows":                   0,
+                "cols":                   0,
+                "exp_time":               0,
+                "exp_unit":               0,
+                "ccd_temp1":              _nan,
+                "lua_timestamp":          lua_ts,
+                "adcs_timestamp":         lua_ts,
+                "spacecraft_latitude":    float(np.radians(srow.lat_deg)),
+                "spacecraft_longitude":   float(np.radians(srow.lon_deg)),
+                "spacecraft_altitude":    float(srow.alt_km * 1e3),
                 "att_q_x":  _nan, "att_q_y":  _nan,
                 "att_q_z":  _nan, "att_q_w":  _nan,
                 "pe_q_x":   _nan, "pe_q_y":   _nan,
@@ -1691,11 +1708,14 @@ def main():
                 "gpio_0": 0, "gpio_1": 0, "gpio_2": 0, "gpio_3": 0,
                 "lamp_0": 0, "lamp_1": 0, "lamp_2": 0,
                 "lamp_3": 0, "lamp_4": 0, "lamp_5": 0,
-                "tp_lat_deg":      _nan, "tp_lon_deg":      _nan,
-                "wind_v_zonal_ms": _nan, "wind_v_merid_ms": _nan,
-                "v_wind_los_ms":   _nan, "v_earth_los_ms":  _nan,
-                "v_sc_los_ms":     _nan, "v_rel_ms":        _nan,
-                "ap_current":      _nan,
+                "tp_lat_deg":               _nan, "tp_lon_deg":               _nan,
+                "h_target_km_obs":          _nan,                  # v14: 1c
+                "wind_v_zonal_ms":          _nan, "wind_v_merid_ms":          _nan,
+                "v_wind_los_approach_ms":   _nan,                  # v14: 1b renamed
+                "v_earth_los_approach_ms":  _nan,                  # v14: 1b renamed
+                "v_sc_los_approach_ms":     _nan,                  # v14: 1b renamed
+                "v_rel_ms":                 _nan,
+                "ap_current":               _nan,
             })
 
     df_csv = pd.DataFrame(rows_csv)
@@ -1832,8 +1852,8 @@ def main():
                c11_dev <= 0.05,
                f"got {n_dark} ({c11_dev*100:.1f}% off)")
 
-    c12 = _chk("C12 CSV has exactly 48 columns",
-               len(df_csv.columns) == 48,
+    c12 = _chk("C12 CSV has exactly 50 columns",
+               len(df_csv.columns) == 50,
                f"got {len(df_csv.columns)}")
 
     try:
@@ -1906,8 +1926,74 @@ def main():
     except Exception as exc:
         c21 = _chk("C21 Header round-trip lua_timestamp matches CSV", False, str(exc))
 
+    # C25 — obs_mode column present and valid
+    obs_mode_col = df_csv["obs_mode"].values if "obs_mode" in df_csv.columns else None
+    if obs_mode_col is not None:
+        valid_modes = {"along_track", "cross_track"}
+        sci_modes_ok = all(
+            str(v) in valid_modes for v in obs_mode_col[sci_mask]
+        )
+        none_modes_nan = all(
+            (isinstance(v, float) and np.isnan(v))
+            for v in obs_mode_col[obs_type_col == "none"]
+        )
+        c25 = _chk("C25 obs_mode valid for science rows; NaN for none rows",
+                   sci_modes_ok and none_modes_nan,
+                   f"sci_modes_ok={sci_modes_ok}, none_modes_nan={none_modes_nan}")
+    else:
+        c25 = _chk("C25 obs_mode column present", False, "column missing")
+
+    # C26 — h_target_km_obs column present and consistent with prompt value
+    if "h_target_km_obs" in df_csv.columns:
+        hto_col = df_csv["h_target_km_obs"].values.astype(float)
+        sci_hto_ok = bool(np.all(np.abs(hto_col[sci_mask] - h_target_km) < 1e-9))
+        # also check tangent_alt_km within 0.5 km of h_target_km_obs for science rows
+        if "tangent_alt_km" in df_csv.columns:
+            talt = df_csv["tangent_alt_km"].values.astype(float)
+            sci_talt_valid = ~np.isnan(talt[sci_mask])
+            talt_diff_ok = bool(np.all(
+                np.abs(talt[sci_mask][sci_talt_valid] - hto_col[sci_mask][sci_talt_valid]) < 0.5
+            ))
+        else:
+            talt_diff_ok = True
+        c26 = _chk("C26 h_target_km_obs == prompt value for science rows; tangent_alt_km within 0.5 km",
+                   sci_hto_ok and talt_diff_ok,
+                   f"sci_hto_ok={sci_hto_ok}, talt_diff_ok={talt_diff_ok}")
+    else:
+        c26 = _chk("C26 h_target_km_obs column present", False, "column missing")
+
+    # C27 — renamed columns present, old names absent
+    new_los_cols = {"v_wind_los_approach_ms", "v_earth_los_approach_ms", "v_sc_los_approach_ms"}
+    old_los_cols = {"v_wind_los_ms", "v_earth_los_ms", "v_sc_los_ms"}
+    csv_cols = set(df_csv.columns)
+    new_present = new_los_cols.issubset(csv_cols)
+    old_absent  = old_los_cols.isdisjoint(csv_cols)
+    c27 = _chk("C27 Renamed LOS columns present; old names absent",
+               new_present and old_absent,
+               f"new_present={new_present}, old_absent={old_absent} "
+               f"(old found: {old_los_cols & csv_cols})")
+
+    # C28 — sign convention self-consistency per NB02c formula:
+    #   v_rel = v_wind_los_approach - v_sc_los_approach - v_earth_los_approach
+    if sci_mask.any() and new_present and "v_rel_ms" in df_csv.columns:
+        vw  = df_csv["v_wind_los_approach_ms"].values[sci_mask].astype(float)
+        ve  = df_csv["v_earth_los_approach_ms"].values[sci_mask].astype(float)
+        vs  = df_csv["v_sc_los_approach_ms"].values[sci_mask].astype(float)
+        vr  = df_csv["v_rel_ms"].values[sci_mask].astype(float)
+        valid = ~(np.isnan(vw) | np.isnan(ve) | np.isnan(vs) | np.isnan(vr))
+        if valid.any():
+            residual = np.abs(vr[valid] - (vw[valid] - vs[valid] - ve[valid]))
+            max_res  = float(np.max(residual))
+            c28 = _chk("C28 Sign convention: v_rel == v_wind - v_sc - v_earth (NB02c) within 0.01 m/s",
+                       max_res < 0.01,
+                       f"max residual = {max_res:.4f} m/s")
+        else:
+            c28 = _chk("C28 Sign convention self-consistency", True, "no valid science rows to check")
+    else:
+        c28 = _chk("C28 Sign convention self-consistency", True, "skipped (no science rows or columns missing)")
+
     all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
-                    c14, c15, c16, c17, c18, c19, c20, c21])
+                    c14, c15, c16, c17, c18, c19, c20, c21, c25, c26, c27, c28])
     print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
 
     print("\nG01 complete.")
