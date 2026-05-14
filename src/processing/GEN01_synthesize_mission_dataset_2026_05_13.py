@@ -78,6 +78,7 @@ WIND_MAP_TAGS = {
     "3": "wave4",
     "4": "hwm14",
     "5": "storm",
+    "6": "storm_onset",
 }
 
 # ---------------------------------------------------------------------------
@@ -280,16 +281,86 @@ def _build_storm(rng, h_target_km, day_of_year=355, ut_hours=3.0,
                         ut_hours=ut_hours, f107=f107, ap=float(ap))
 
 
+@dataclasses.dataclass
+class TimeVaryingStormWindMap:
+    """
+    HWM14 storm wind map with a trapezoidal ap ramp centred on onset_hour.
+
+    Trapezoidal profile (hours from campaign start):
+      t < onset_hour                      : ap = ap_quiet
+      onset_hour <= t < onset + ramp_up_h : linear ramp ap_quiet → ap_peak
+      onset+ramp_up <= t < onset+ramp_down: ap = ap_peak
+      onset+ramp_down <= t < onset+2*ramp_down: linear recovery ap_peak → ap_quiet
+      t >= onset + 2*ramp_down            : ap = ap_quiet
+
+    Call set_ap(ap) before wind_components() on each frame.
+    """
+    h_target_km:  float
+    day_of_year:  int
+    f107:         float
+    ap_quiet:     float
+    ap_peak:      float
+    onset_hour:   float
+    ramp_up_h:    float
+    ramp_down_h:  float
+    _current_ap:  float = dataclasses.field(init=False)
+
+    def __post_init__(self):
+        self._current_ap = self.ap_quiet
+
+    def ap_at(self, t_hours_from_start: float) -> float:
+        t  = t_hours_from_start
+        t0 = self.onset_hour
+        t1 = t0 + self.ramp_up_h
+        t2 = t1 + self.ramp_down_h
+        t3 = t2 + self.ramp_down_h
+        if t < t0:
+            return self.ap_quiet
+        elif t < t1:
+            return self.ap_quiet + (t - t0) / (t1 - t0) * (self.ap_peak - self.ap_quiet)
+        elif t < t2:
+            return self.ap_peak
+        elif t < t3:
+            return self.ap_peak - (t - t2) / (t3 - t2) * (self.ap_peak - self.ap_quiet)
+        else:
+            return self.ap_quiet
+
+    def set_ap(self, ap: float):
+        self._current_ap = ap
+
+    def wind_components(self, lat_deg, lon_deg):
+        from src.windmap import StormWindMap
+        wm = StormWindMap(alt_km=self.h_target_km,
+                          day_of_year=self.day_of_year,
+                          f107=self.f107, ap=self._current_ap)
+        return wm.wind_components(lat_deg, lon_deg)
+
+    def plot(self, **kwargs):
+        pass   # no-op — ground-track figure calls wind_map.plot() unconditionally
+
+
+def _build_storm_onset(rng, h_target_km, day_of_year=355, ut_hours=3.0,
+                       f107=180.0, ap_quiet=4.0, ap_peak=150.0,
+                       onset_hour=12.0, ramp_up_h=3.0, ramp_down_h=9.0):
+    return TimeVaryingStormWindMap(
+        h_target_km=h_target_km, day_of_year=int(day_of_year),
+        f107=float(f107), ap_quiet=float(ap_quiet), ap_peak=float(ap_peak),
+        onset_hour=float(onset_hour), ramp_up_h=float(ramp_up_h),
+        ramp_down_h=float(ramp_down_h),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Wind map registry  (§3)
 # ---------------------------------------------------------------------------
 
 WIND_MAP_REGISTRY: dict = {
-    "1": ("Uniform constant",   _build_uniform),
-    "2": ("Analytic sine_lat",  _build_analytic_sine),
-    "3": ("Analytic wave4/DE3", _build_analytic_wave4),
-    "4": ("HWM14 quiet-time",   _build_hwm14),
-    "5": ("HWM14 storm/DWM07",  _build_storm),
+    "1": ("Uniform constant",          _build_uniform),
+    "2": ("Analytic sine_lat",         _build_analytic_sine),
+    "3": ("Analytic wave4/DE3",        _build_analytic_wave4),
+    "4": ("HWM14 quiet-time",          _build_hwm14),
+    "5": ("HWM14 storm/DWM07",         _build_storm),
+    "6": ("HWM14 storm with onset ramp", _build_storm_onset),
 }
 
 
@@ -833,6 +904,120 @@ def _plot_ground_tracks(
 
 
 # ---------------------------------------------------------------------------
+# v_rel histogram figure  (§D)
+# ---------------------------------------------------------------------------
+
+def _plot_vrel_histogram(
+    metadata_list: list,
+    vrel_list: list,
+    windmap_label: str,
+    rng_seed: int,
+    wind_map,
+    save_path,
+):
+    """
+    Two-panel histogram of v_rel by look mode, with truth v_wind_LOS overlay.
+    For TimeVaryingStormWindMap, adds a third panel showing the ap ramp profile.
+    """
+    is_storm_onset = isinstance(wind_map, TimeVaryingStormWindMap)
+
+    if is_storm_onset:
+        fig, axes = plt.subplots(
+            1, 3, figsize=(13, 4),
+            gridspec_kw={"width_ratios": [1, 1, 0.4]},
+        )
+        ax_at, ax_ct, ax_ap = axes
+    else:
+        fig, (ax_at, ax_ct) = plt.subplots(1, 2, figsize=(10, 4))
+
+    panels = [
+        (ax_at, "along_track",
+         "Along-track  (odd orbits, LOS ∥ track)",  "#0057C2"),
+        (ax_ct, "cross_track",
+         "Cross-track  (even orbits, LOS ⊥ track)", "#003479"),
+    ]
+
+    for ax, mode, title, color in panels:
+        sci_pairs = [
+            (m, d) for m, d in zip(metadata_list, vrel_list)
+            if m.img_type == "science" and m.obs_mode == mode
+            and not np.isnan(d["v_rel_ms"])
+        ]
+        vrel_vals  = np.array([d["v_rel_ms"]      for _, d in sci_pairs])
+        vwind_vals = np.array([m.truth_v_los       for m, _ in sci_pairs])
+
+        if vrel_vals.size == 0:
+            ax.set_title(title)
+            ax.text(0.5, 0.5, "No data", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
+
+        ax.hist(vrel_vals, bins=40, color=color, alpha=0.75,
+                edgecolor="white", linewidth=0.4)
+        mean_vwind = float(np.nanmean(vwind_vals))
+        ax.axvline(mean_vwind, color="#b5651d", linewidth=1.5, linestyle="--",
+                   label=f"mean v_wind_LOS = {mean_vwind:.0f} m/s")
+        ax.axvline(0.0, color="k", linewidth=0.8, linestyle=":")
+
+        stats_str = (f"v_rel: {vrel_vals.mean():.0f} ± {vrel_vals.std():.0f} m/s"
+                     f"\n(n={vrel_vals.size})")
+        ax.text(0.03, 0.97, stats_str, transform=ax.transAxes,
+                fontsize=8, va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
+
+        ax.set_xlabel("v_rel  (m/s)")
+        ax.set_ylabel("Frame count")
+        ax.set_title(title)
+        ax.legend(loc="lower right", fontsize=8)
+
+    if is_storm_onset:
+        wm = wind_map
+        t_total = wm.onset_hour + 2 * wm.ramp_down_h + 4.0
+        t_pts   = np.linspace(0.0, t_total, 2000)
+        ap_pts  = np.array([wm.ap_at(t) for t in t_pts])
+
+        # colour by phase
+        phase_colours = {
+            "quiet":    "#aaaaaa",
+            "ramp_up":  "#e67e22",
+            "peak":     "#c0392b",
+            "recovery": "#f39c12",
+        }
+        t0, t1 = wm.onset_hour, wm.onset_hour + wm.ramp_up_h
+        t2, t3 = t1 + wm.ramp_down_h, t1 + 2 * wm.ramp_down_h
+
+        def _phase(t):
+            if t < t0:            return "quiet"
+            elif t < t1:          return "ramp_up"
+            elif t < t2:          return "peak"
+            elif t < t3:          return "recovery"
+            else:                 return "quiet"
+
+        prev = 0
+        for k in range(1, len(t_pts)):
+            ph = _phase(t_pts[k])
+            if ph != _phase(t_pts[k - 1]) or k == len(t_pts) - 1:
+                c = phase_colours[_phase(t_pts[prev])]
+                ax_ap.fill_between(t_pts[prev:k+1], ap_pts[prev:k+1],
+                                   color=c, alpha=0.7, step=None)
+                prev = k
+        ax_ap.plot(t_pts, ap_pts, color="k", lw=0.8)
+        ax_ap.set_xlabel("Hours from start")
+        ax_ap.set_ylabel("ap index")
+        ax_ap.set_title("ap ramp")
+        ax_ap.yaxis.set_label_position("right")
+        ax_ap.yaxis.tick_right()
+
+    fig.suptitle(
+        f"GEN01 v_rel distribution — {windmap_label}  (seed={rng_seed})",
+        fontsize=11, y=1.02,
+    )
+    plt.tight_layout()
+    fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -947,6 +1132,24 @@ def main():
                 "  f107        [default 180.0]: ", 180.0, float, 60.0, 300.0)
             wm_params["ap"]          = _prompt(
                 "  ap          [default  80  ]: ", 80.0, float, 0.0, 400.0)
+        elif wm_choice == "6":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 355 ] : ", 355, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default   3.0]: ", 3.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 180.0]: ", 180.0, float, 60.0, 300.0)
+            wm_params["ap_quiet"]    = _prompt(
+                "  ap_quiet    [default   4  ]: ", 4.0, float, 0.0, 50.0)
+            wm_params["ap_peak"]     = _prompt(
+                "  ap_peak     [default 150  ]: ", 150.0, float, 20.0, 400.0)
+            wm_params["onset_hour"]  = _prompt(
+                "  onset_hour  [hrs from campaign start, default 12]: ",
+                12.0, float, 0.0, 999.0)
+            wm_params["ramp_up_h"]   = _prompt(
+                "  ramp_up_h   [hrs, default  3]: ", 3.0, float, 0.5, 24.0)
+            wm_params["ramp_down_h"] = _prompt(
+                "  ramp_down_h [hrs, default  9]: ", 9.0, float, 1.0, 48.0)
 
         try:
             wind_map = _build_wind_map(wm_choice, None, h_target_km, **wm_params)
@@ -1154,12 +1357,19 @@ def main():
     metadata_list  = []
     vrel_list      = []   # CSV-only LOS velocity components per frame
 
+    _campaign_start_ts = df_sched.iloc[0]["epoch"].timestamp()
+
     for i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
         row = df_sched.loc[idx]
 
         pos       = np.array([row.pos_eci_x, row.pos_eci_y, row.pos_eci_z])
         vel       = np.array([row.vel_eci_x, row.vel_eci_y, row.vel_eci_z])
         look_mode = str(row.look_mode)
+
+        # Storm-onset ramp: update ap before computing wind
+        if isinstance(wind_map, TimeVaryingStormWindMap):
+            t_elapsed_h = (row.epoch.timestamp() - _campaign_start_ts) / 3600.0
+            wind_map.set_ap(wind_map.ap_at(t_elapsed_h))
 
         # NB02a: attitude quaternion + LOS vector (los_eci retained for NB02b/c)
         los_eci, q = compute_los_eci(
@@ -1259,11 +1469,15 @@ def main():
         )
         metadata_list.append(meta)
 
+        _ap_now = (wind_map._current_ap
+                   if isinstance(wind_map, TimeVaryingStormWindMap)
+                   else float("nan"))
         vrel_list.append({
             "v_wind_los_ms":  v_wind_LOS  if frame_type == "science" else float("nan"),
             "v_earth_los_ms": v_earth_LOS if frame_type == "science" else float("nan"),
             "v_sc_los_ms":    V_sc_LOS    if frame_type == "science" else float("nan"),
             "v_rel_ms":       v_rel_val   if frame_type == "science" else float("nan"),
+            "ap_current":     _ap_now,
         })
 
         # Binary image synthesis — pixel draws follow the 9 metadata draws
@@ -1385,7 +1599,7 @@ def main():
     }
 
     # CSV: one row per obs-cadence step across the full schedule.
-    # Observed frames carry full metadata (47 cols: obs_type + 46 data cols).
+    # Observed frames carry full metadata (48 cols: obs_type + 46 data cols + ap_current).
     # Non-observing steps have exp_time=0, obs_type='none', NaN for frame fields.
     all_indices = sorted(set(range(0, len(df_sched), step)) | set(obs_indices))
 
@@ -1445,6 +1659,7 @@ def main():
                 "v_earth_los_ms":  vd["v_earth_los_ms"],
                 "v_sc_los_ms":     vd["v_sc_los_ms"],
                 "v_rel_ms":        vd["v_rel_ms"],
+                "ap_current":      vd["ap_current"],
             })
         else:
             # Non-observing step: orbital state only, exp_time=0
@@ -1479,6 +1694,7 @@ def main():
                 "wind_v_zonal_ms": _nan, "wind_v_merid_ms": _nan,
                 "v_wind_los_ms":   _nan, "v_earth_los_ms":  _nan,
                 "v_sc_los_ms":     _nan, "v_rel_ms":        _nan,
+                "ap_current":      _nan,
             })
 
     df_csv = pd.DataFrame(rows_csv)
@@ -1518,15 +1734,29 @@ def main():
     )
     print("done")
 
+    vh_path = out_path / f"{stem}_vrel_histogram.png"
+    print("Saving v_rel histogram figure ...", end=" ", flush=True)
+    _plot_vrel_histogram(
+        metadata_list = metadata_list,
+        vrel_list     = vrel_list,
+        windmap_label = windmap_label,
+        rng_seed      = rng_seed,
+        wind_map      = wind_map,
+        save_path     = vh_path,
+    )
+    print("done")
+
     npy_mb = npy_path.stat().st_size / 1e6
     csv_mb = csv_path.stat().st_size / 1e6
     png_kb = png_path.stat().st_size / 1e3
     gt_kb  = gt_path.stat().st_size  / 1e3
+    vh_kb  = vh_path.stat().st_size  / 1e3
     print(f"\nOutput files:")
     print(f"  {npy_path}  ({npy_mb:.1f} MB)")
     print(f"  {csv_path}  ({csv_mb:.1f} MB)")
     print(f"  {png_path}  ({png_kb:.0f} KB)")
     print(f"  {gt_path}  ({gt_kb:.0f} KB)")
+    print(f"  {vh_path}  ({vh_kb:.0f} KB)")
 
     # -----------------------------------------------------------------------
     # Step 6: Verification checks C1–C21
@@ -1601,8 +1831,8 @@ def main():
                c11_dev <= 0.05,
                f"got {n_dark} ({c11_dev*100:.1f}% off)")
 
-    c12 = _chk("C12 CSV has exactly 47 columns",
-               len(df_csv.columns) == 47,
+    c12 = _chk("C12 CSV has exactly 48 columns",
+               len(df_csv.columns) == 48,
                f"got {len(df_csv.columns)}")
 
     try:
