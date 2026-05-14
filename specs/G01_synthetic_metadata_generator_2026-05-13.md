@@ -1,15 +1,15 @@
 # G01 — Synthetic Metadata Generator Specification
 
 **Spec ID:** G01  
-**Spec file:** `docs/specs/G01_synthetic_metadata_generator_2026-05-13.md`  
+**Spec file:** `specs/G01_synthetic_metadata_generator_2026-05-13.md`  
 **Script:** `src/processing/GEN01_synthesize_mission_dataset_2026_05_13.py`  
 **Previous script:** `validation/gen01_synthetic_metadata_generator_2026_04_16.py`  
 **Project:** WindCube FPI Science Operations Center Pipeline  
 **Institution:** NCAR / High Altitude Observatory (HAO)  
-**Status:** Authoritative — v12  
-**Spec version:** 12  
+**Status:** Authoritative — v13  
+**Spec version:** 13  
 **Date:** 2026-05-13  
-**Git commit:** `46a44af`  
+**Git commit:** `fbea032`  
 
 **Depends on:**
 - NB01 (`nb01_orbit_propagator_2026_04_16.py`) — `propagate_orbit(t_start, duration_s, dt_s)`
@@ -43,7 +43,8 @@
 | 1–9 | 2026-04-16 | See archive. Incremental development through binary synthesis. |
 | 10 | 2026-04-28 | Physics alignment with Z03 v1.5. **Introduced regression:** `ETALON_GAP_M = 20.0005e-3` (ICOS spacer value, not Benoit result). `PLATE_SCALE_RPX = 1.6000e-4` (rounded, not Tolansky). Read noise removed, `OFFSET_ADU=5` added, `REL_638=0.344` added. |
 | 11 | 2026-05-13 | Correct Tolansky constants from real cal image analysis. Add Doppler shift to science pixel generator. Physical CCD97 noise model in science frames. Rename script to `GEN01_synthesize_mission_dataset_2026_05_13.py`. |
-| **12** | **2026-05-13** | **Separate sci/cal exposure time prompts (`exp_time_sci_s`, `exp_time_cal_s`). Asymmetric lat band (`lat_min_deg`, `lat_max_deg` replace single `lat_band_deg`). Unified dark model: `QDD_AT_20C` path used for both dark and science frames. C16 rewritten for asymmetric band check. Removed stale constants: `DARK_REF_ADU_S`, `T_REF_DARK_C`. Commit `46a44af`.** |
+| 12 | 2026-05-13 | Separate sci/cal exposure time prompts (`exp_time_sci_s`, `exp_time_cal_s`). Asymmetric lat band (`lat_min_deg`, `lat_max_deg`). Unified dark model (`QDD_AT_20C` path). C16 rewritten. Removed `DARK_REF_ADU_S`, `T_REF_DARK_C`. Commit `46a44af`. |
+| **13** | **2026-05-13** | **Doppler shift verified: r₁ shift direction and magnitude confirmed (3% of analytic at v=±2000 m/s). `TimeVaryingStormWindMap`: trapezoidal ap ramp, wind map option 6. `_plot_vrel_histogram()`: 2-panel (3-panel for option 6) figure. `ap_current` added to per-frame vrel_list CSV column. Commit `fbea032`.** |
 
 ---
 
@@ -100,15 +101,57 @@ Science and calibration exposures have different durations in CONOPS and drive
 different noise budgets (dark current at 10 s vs. 120 s differs by 12×).
 Both values are written to the README sidecar and the metadata CSV.
 
-All other prompts (start epoch, duration, obs cadence, cal/dark count,
-binning, fringe centre offsets, altitude, tangent height, random seed, wind
-map selection) are unchanged from v9.
+**Added in v13 — wind map option 6:**
+
+```
+[6] HWM14 storm with onset ramp
+    Prompts:
+      day_of_year   [default 355]
+      ut_hours      [default   3.0]
+      f107          [default 180.0]
+      ap_quiet      [default   4.0]   background Kp-equivalent
+      ap_peak       [default 150.0]   storm main-phase peak
+      onset_hour    [default  12.0]   hours from campaign start
+      ramp_up_h     [default   3.0]   hours quiet→peak
+      ramp_down_h   [default   9.0]   hours at peak; symmetric recovery follows
+```
+
+When option 6 is selected, `ap_current` is written to the per-frame CSV column
+for science frames. Non-option-6 wind maps write `NaN` to that column.
 
 ---
 
-## 3. Wind map registry
+## 3. Wind map registry (v13)
 
-Unchanged from v9.
+| Key | Label | Builder | Notes |
+|-----|-------|---------|-------|
+| `"1"` | Uniform constant | `_build_uniform` | v_zonal, v_merid |
+| `"2"` | Analytic sine_lat | `_build_analytic_sine` | A_zonal, A_merid |
+| `"3"` | Analytic wave4/DE3 | `_build_analytic_wave4` | A_zonal, A_merid, phase_rad |
+| `"4"` | HWM14 quiet-time | `_build_hwm14` | doy, ut, f107, ap |
+| `"5"` | HWM14 storm/DWM07 | `_build_storm` | doy, ut, f107, ap (fixed) |
+| `"6"` | HWM14 storm with onset ramp | `_build_storm_onset` | returns `TimeVaryingStormWindMap` |
+
+### `TimeVaryingStormWindMap` (v13)
+
+A dataclass that wraps `StormWindMap` with a trapezoidal ap time profile.
+The main frame loop calls `wind_map.set_ap(wind_map.ap_at(t_elapsed_h))`
+before each `compute_v_rel()` call when this wind map type is active.
+
+```
+ap(t):
+  t < onset_hour                         → ap_quiet
+  onset_hour ≤ t < onset + ramp_up_h     → linear ramp ap_quiet → ap_peak
+  onset+ramp_up ≤ t < onset+ramp_up+ramp_down_h  → ap_peak
+  t ≥ onset+ramp_up+ramp_down_h          → linear ramp ap_peak → ap_quiet
+                                            (over ramp_down_h, then stays quiet)
+```
+
+Methods: `ap_at(t_hours_from_start)`, `set_ap(ap)`, `wind_components(lat, lon)`.
+
+Options 1–5 return a standard `WindMap`; only option 6 returns a
+`TimeVaryingStormWindMap`. The main loop checks `isinstance` to decide
+whether to call `set_ap()`.
 
 ---
 
@@ -118,12 +161,25 @@ Unchanged from v9.
 
 ---
 
-## 5. Main metadata loop
+## 5. Main metadata loop (v13 additions)
 
-Unchanged from v9. Note: `ccd_temp1` (drawn per-frame from
-`Normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C)`) is now passed through to
-`_generate_science_pixels()` so the dark current in science frames varies
-realistically with the per-frame simulated focal-plane temperature.
+Two additions to the per-frame loop:
+
+**ap ramp update (option 6 only):** Before each `compute_v_rel()` call:
+```python
+if isinstance(wind_map, TimeVaryingStormWindMap):
+    t_elapsed_h = (row.epoch.timestamp() -
+                   df_sched.iloc[0].epoch.timestamp()) / 3600.0
+    wind_map.set_ap(wind_map.ap_at(t_elapsed_h))
+```
+
+**ap_current in vrel_list:** Each frame's `vrel_list` entry includes:
+```python
+"ap_current": wind_map._current_ap if isinstance(wind_map, TimeVaryingStormWindMap)
+              else float("nan")
+```
+This column appears in the output CSV for all frame types; NaN for non-option-6
+wind maps.
 
 ---
 
@@ -308,80 +364,6 @@ the unified `QDD_AT_20C` CCD97 datasheet formula, identical to the science
 frame generator. The 35% discrepancy noted in v11 §11 is eliminated.
 Dark frames receive `exp_time_cal_s` (120 s default) from the dispatcher.
 
-#### `_generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale, cx, cy, ccd_temp_c, exp_time_s)`
-
-```python
-def _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale,
-                              cx, cy, ccd_temp_c, exp_time_s):
-    """
-    Generate OI 630 nm Airy fringe image with Doppler shift v_rel_ms.
-
-    Noise model: Poisson photon noise + temperature-dependent dark current
-    (CCD97 physical model).  No Gaussian read noise draw (absorbed into
-    OFFSET_ADU = 5).
-
-    Parameters
-    ----------
-    v_rel_ms    : float — LOS velocity, m/s (positive = recession = inward fringe shift)
-    ccd_temp_c  : float — focal-plane temperature, °C (per-frame from metadata draw)
-    exp_time_s  : float — science exposure duration, s  (exp_time_sci_s from prompt)
-    """
-    lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
-
-    x = np.arange(nx) - cx
-    y = np.arange(ny) - cy
-    XX, YY = np.meshgrid(x, y)
-    r_px   = np.sqrt(XX**2 + YY**2)
-    theta  = r_px * plate_scale
-    delta  = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
-    I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
-
-    signal = SCI_PEAK_ADU * I_airy
-
-    # Physical dark current: CCD97 formula, reference at +20°C
-    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp_c - 20.0) / T_DOUBLE_C)
-    dark_mean = max(dark_rate * exp_time_s, 0.0)
-
-    photon = rng.poisson(np.clip(signal, 0, None))
-    dark   = rng.poisson(np.full(signal.shape, dark_mean))
-    image  = np.round(photon + dark + OFFSET_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
-```
-
-Key changes from v9:
-- `lambda_obs` depends on `v_rel_ms` — Doppler shift encoded in fringe (v11)
-- `ccd_temp_c` and `exp_time_s` passed per-frame from dispatcher (v11)
-- Dark current uses unified CCD97 path at +20°C reference (v12)
-- Gaussian read noise draw removed (v11)
-
-#### `_generate_cal_pixels(rng, nx, ny, plate_scale, cx, cy)`
-
-```python
-    I_cal = (_airy(LAMBDA_NE1_M) + REL_638 * _airy(LAMBDA_NE2_M)) / (1.0 + REL_638)
-    signal = CAL_PEAK_ADU * I_cal
-    photon = rng.poisson(np.clip(signal, 0, None))
-    image  = np.round(photon + OFFSET_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
-```
-
-Cal frames are photon-noise limited (per H02 §2.3). No dark current term
-(120 s at −20°C adds ~4 ADU/px, negligible vs. CAL_PEAK_ADU = 12000).
-
-#### `_generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny)`
-
-```python
-    # Unified CCD97 path (same formula as science frames, v12)
-    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp1_c - 20.0) / T_DOUBLE_C)
-    mean_dark = max(dark_rate * exp_time_s, 0.0)
-    dark_arr  = rng.poisson(mean_dark, size=(ny, nx)).astype(float)
-    image     = np.round(dark_arr + OFFSET_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
-```
-
-v12 change: replaces the legacy `DARK_REF_ADU_S / T_REF_DARK_C` path with
-the unified `QDD_AT_20C` CCD97 formula. The 35% discrepancy noted in v11 §11
-is eliminated. Dark frames receive `exp_time_cal_s` (120 s default).
-
 #### `_generate_pixels()` dispatcher (v12)
 
 ```python
@@ -415,10 +397,37 @@ Unchanged from v9.
 
 ---
 
-## 8. Output files
+## 8. Output files (v13)
 
-Unchanged from v9. README `.txt` sidecar, `.npy`, `.csv`, ground track `.png`,
-and per-frame `.bin` files.
+Per-run outputs (all saved to user-selected output folder):
+
+| File | Description |
+|------|-------------|
+| `{stem}.npy` | NumPy object array of `ImageMetadata` records |
+| `{stem}.csv` | Full-schedule CSV including `ap_current` column (v13) |
+| `{stem}.txt` | README sidecar with all prompt values |
+| `{stem}_ground_tracks.png` | S/C ground tracks + tangent points (existing) |
+| `{stem}_vrel_histogram.png` | v_rel distribution by look mode (v13, see §8.1) |
+| `bin/{timestamp}_{type}.bin` | Per-frame binary FPI images |
+
+### 8.1 v_rel histogram figure (`_plot_vrel_histogram`)
+
+Two-panel figure (three panels for wind map option 6), figsize=(10, 4):
+
+**Left panel — along-track frames** (odd orbits, LOS ∥ track):
+- Histogram of `v_rel_ms`, bins=40, color `#0057C2`
+- Vertical dashed line at mean `v_wind_LOS` (truth wind LOS projection), color `#b5651d`
+- Vertical dotted line at 0 m/s
+- Text annotation: mean ± std of `v_rel`
+
+**Right panel — cross-track frames** (even orbits, LOS ⊥ track):
+- Same layout, color `#003479`
+
+**Third panel (option 6 only) — ap vs. time:**
+- Step plot of ap index vs. hours from campaign start
+- Phase-colored: quiet=`#aaaaaa`, ramp-up=`#e67e22`, peak=`#c0392b`, recovery=`#f39c12`
+
+Supertitle: `f"GEN01 v_rel distribution — {windmap_label}  (seed={rng_seed})"`
 
 ---
 
@@ -428,22 +437,27 @@ and per-frame `.bin` files.
 
 Unchanged from v9.
 
-### 9.2 Verification checks (C1–C22)
+### 9.2 Verification checks (C1–C24)
 
-All checks carry forward from v9 with two updates:
+All checks carry forward from v12. Additions:
 
-**C16** (science band): rewritten for asymmetric band. All science tangent-point
-latitudes must satisfy `lat_min_deg − 5° ≤ tp_lat ≤ lat_max_deg + 5°`. The
-5° tolerance accommodates orbit geometry near the band edges. (Previously
-checked `|tp_lat| ≤ lat_band_deg + 5°`.)
+**C16** (science band): `lat_min_deg − 5° ≤ tp_lat ≤ lat_max_deg + 5°` (v12).
 
-**C20** (pixel floor): minimum pixel value in any frame must be ≥ `OFFSET_ADU − 1 = 4`.
+**C20** (pixel floor): minimum pixel value ≥ `OFFSET_ADU − 1 = 4`.
 
-**New check C22 — Doppler round-trip (recommended manual check):**
-For a science frame with `v_rel_ms` in the truth CSV, extract the binary image,
-run M03 annular reduction, locate the first Airy peak radius r₁, and verify
-that r₁² shifts in the expected direction (positive v_rel → recession →
-smaller r₁). Expected Δr₁² ≈ 0.04 px² per 100 m/s for typical r₁ ≈ 35 px.
+**C22 — Doppler round-trip (confirmed v13):**
+Verified at v = ±2000 m/s: r₁(0) = 26 px, r₁(+2000) = 13 px, r₁(−2000) = 34 px.
+Observed Δr² = 507 px² vs. analytic 524 px² (ratio 0.97 — integer-bin rounding).
+Direction: recession → inward ✓, approach → outward ✓.
+
+**C23 — Storm onset ramp (option 6 only):**
+`ap_current` column non-NaN for science frames; values span [ap_quiet, ap_peak];
+peak ap occurs at `onset_hour + ramp_up_h` ± one obs cadence.
+
+**C24 — v_rel histogram figure:**
+`{stem}_vrel_histogram.png` exists after run. Along-track frames show wide
+distribution centered near ±7000 m/s (spacecraft LOS velocity dominant);
+cross-track frames show narrower distribution centered near truth wind.
 
 ---
 
@@ -453,11 +467,11 @@ smaller r₁). Expected Δr₁² ≈ 0.04 px² per 100 m/s for typical r₁ ≈ 
 soc_sewell/
 ├── src/
 │   └── processing/
-│       └── GEN01_synthesize_mission_dataset_2026_05_13.py   ← authoritative (v12)
+│       └── GEN01_synthesize_mission_dataset_2026_05_13.py   ← authoritative (v13)
 ├── validation/
 │   └── gen01_synthetic_metadata_generator_2026_04_16.py    ← v9 archive
-└── docs/specs/
-    ├── G01_synthetic_metadata_generator_2026-05-13.md       ← this file (v12)
+└── specs/
+    ├── G01_synthetic_metadata_generator_2026-05-13.md       ← this file (v13)
     └── archive/
         └── G01_synthetic_metadata_generator_2026-04-28.md   ← v10 archive
 ```
@@ -469,7 +483,7 @@ soc_sewell/
 This table is the authoritative cross-check. Any future edit to a shared
 constant must update **all three specs** in the same commit.
 
-| Constant | GEN01 v12 | Z03 symbol | H02 symbol | Value |
+| Constant | GEN01 v13 | Z03 symbol | H02 symbol | Value |
 |----------|-----------|------------|------------|-------|
 | Etalon gap | `ETALON_GAP_M` | `d_mm` default | `params.t` default | **20.106 mm** (20.10702 mm precise) |
 | Plate scale (2×2) | `PLATE_SCALE_RPX` | `alpha` default | `params.alpha` default | **1.6083e-4 rad/px** |
@@ -517,4 +531,4 @@ is measured from real images.
 
 ---
 
-*End of G01 Spec v12 — 2026-05-13 — commit 46a44af*
+*End of G01 Spec v13 — 2026-05-13 — commit fbea032*
