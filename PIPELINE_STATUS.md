@@ -21,7 +21,7 @@
 | S16  | M07         | impl   | 8/8      | 2026-04-06    |
 | S17  | INT02       | impl   | 16/16    | 2026-04-07    |
 | S18  | INT03       | impl   | 14/14    | 2026-04-11    |
-| S19  | P01         | impl   | passing  | 2026-04-06    |
+| S19  | P01         | impl   | 9/9      | 2026-05-14    |
 | S20  | L2 product  | impl   | passing  | 2026-04-11    |
 | Z01  | validate-cal| impl   | 6-stage  | 2026-04-11    |
 | Z01a | OI630-cal   | impl   | 16/16    | 2026-04-12    |
