@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import re
 import sys
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ── Project root on sys.path ───────────────────────────────────────────────
@@ -72,6 +74,44 @@ except (ImportError, ModuleNotFoundError):
     pass
 
 
+def _find_nearest_dark_frame(lua_timestamp_ms: int, dark_paths: list):
+    """
+    Find the dark frame with the closest timestamp to lua_timestamp_ms.
+
+    Parameters
+    ----------
+    lua_timestamp_ms : int
+        Science frame timestamp in Unix milliseconds.
+    dark_paths : list[Path]
+        All *_dark.bin paths in the same folder (sorted order acceptable).
+
+    Returns
+    -------
+    (Path, float) — (nearest_dark_path, dt_seconds), or None if no match.
+    """
+    best_path = None
+    best_dt_ms = float("inf")
+    for p in dark_paths:
+        m = re.match(
+            r"(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})Z", p.name
+        )
+        if not m:
+            continue
+        dt_obj = datetime(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6)),
+            tzinfo=timezone.utc,
+        )
+        dark_ms = int(dt_obj.timestamp() * 1000)
+        dt_ms = abs(lua_timestamp_ms - dark_ms)
+        if dt_ms < best_dt_ms:
+            best_dt_ms = dt_ms
+            best_path = p
+    if best_path is None:
+        return None
+    return best_path, best_dt_ms / 1000.0
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="WindCube FPI single-frame diagnostic validation tool.",
@@ -114,7 +154,11 @@ def _parse_args() -> argparse.Namespace:
         "--sidecar",
         default=None,
         metavar="PATH",
-        help="Path to JSON sidecar file (default: auto-detect <stem>_L0.json)",
+        help=(
+            "Path to JSON sidecar file (real data only). "
+            "GEN01 synthetic data does not produce JSON sidecars — "
+            "use --obs-mode to supply obs_mode directly for synthetic frames."
+        ),
     )
     parser.add_argument(
         "--no-plots",
@@ -336,12 +380,36 @@ def _run(args: argparse.Namespace, path: Path) -> None:
 
     # ── Stage 1 — Dark subtraction (optional) ─────────────────────────────────
     dark_candidates = sorted(path.parent.glob("*_dark.bin"))
-    if dark_candidates and _HAS_M03:
-        try:
-            image = _m03_module.subtract_dark(image, dark_candidates[0])
-            print(f"Dark subtracted using: {dark_candidates[0].name}")
-        except Exception as exc:
-            print(f"WARNING: Dark subtraction failed: {exc}")
+    _ONE_ORBIT_SEC = 6000.0
+    if dark_candidates:
+        nearest = _find_nearest_dark_frame(meta.lua_timestamp, dark_candidates)
+        if nearest is not None:
+            dark_path, dt_sec = nearest
+            if dt_sec <= _ONE_ORBIT_SEC:
+                if _HAS_M03:
+                    try:
+                        image = _m03_module.subtract_dark(image, dark_path)
+                        print(f"Dark subtracted using: {dark_path.name} (dt={dt_sec:.0f}s)")
+                    except Exception as exc:
+                        print(f"WARNING: Dark subtraction (M03) failed: {exc}")
+                else:
+                    # M03 not available — native subtraction via ingest
+                    try:
+                        _, dark_pixels = ingest_real_image(dark_path)
+                        image = np.clip(
+                            image.astype(np.float32) - dark_pixels.astype(np.float32),
+                            0, 16383,
+                        ).astype(np.uint16)
+                        print(f"Dark subtracted using: {dark_path.name} (dt={dt_sec:.0f}s)")
+                    except Exception as exc:
+                        print(f"WARNING: Dark subtraction failed: {exc}")
+            else:
+                print(
+                    f"WARNING: Nearest dark {dark_path.name} is {dt_sec:.0f}s away "
+                    f"(> 1 orbit) — skipping dark subtraction"
+                )
+        else:
+            print("WARNING: No dark frame found — skipping dark subtraction")
     else:
         print("WARNING: No dark frame found — skipping dark subtraction")
 

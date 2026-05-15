@@ -22,7 +22,9 @@ windcube.m08.write_l2_netcdf(wind_solutions, output_path).
 from __future__ import annotations
 
 import argparse
+import bisect
 import logging
+import re
 import sys
 import time
 import warnings
@@ -102,9 +104,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dt-min",
         type=float,
-        default=30.0,
+        default=0.0,
         metavar="MIN",
-        help="Bin time width in minutes (default: 30.0)",
+        help=(
+            "Bin time width in minutes. "
+            "Use 0 for geographic-only binning (recommended for single-day "
+            "datasets — accumulates both orbital modes per location). "
+            "Default: 0"
+        ),
     )
     parser.add_argument(
         "--n-days",
@@ -157,11 +164,12 @@ def _parse_args() -> argparse.Namespace:
 
 def _load_vrel_csv(csv_path: Path, sigma_v: float) -> dict:
     """
-    Read a GEN01 CSV and build a v_rel lookup dict.
+    Read a GEN01 CSV and build a per-frame metadata lookup dict.
 
-    Returns {lua_timestamp_int: (v_rel_ms_float, sigma_v_float)}.
-    Only science rows (obs_type == 'science') are included when the
-    obs_type column is present.
+    Returns {lua_timestamp_int: dict} where each dict has keys:
+        v_rel, sigma_v, obs_mode, tangent_lat, tangent_lon,
+        h_target_km_obs, is_synthetic.
+    Only science rows are included when the obs_type column is present.
     """
     import pandas as pd
     df = pd.read_csv(csv_path)
@@ -174,11 +182,86 @@ def _load_vrel_csv(csv_path: Path, sigma_v: float) -> dict:
         )
     if "lua_timestamp" not in df.columns:
         raise ValueError(f"Column 'lua_timestamp' not found in {csv_path}.")
-    lookup = {
-        int(row["lua_timestamp"]): (float(row["v_rel_ms"]), float(sigma_v))
-        for _, row in df.iterrows()
-    }
+
+    lookup = {}
+    has_tangent = "tp_lat_deg" in df.columns and "tp_lon_deg" in df.columns
+    has_h_target = "h_target_km_obs" in df.columns
+    has_obs_mode = "obs_mode" in df.columns
+
+    for _, row in df.iterrows():
+        ts = int(row["lua_timestamp"])
+        entry: dict = {
+            "v_rel": float(row["v_rel_ms"]),
+            "sigma_v": float(sigma_v),
+            "obs_mode": None,
+            "tangent_lat": None,
+            "tangent_lon": None,
+            "h_target_km_obs": None,
+            "is_synthetic": has_tangent,  # GEN01 CSV implies synthetic
+        }
+        if has_obs_mode:
+            om = row["obs_mode"]
+            entry["obs_mode"] = str(om) if om == om else None  # NaN guard
+        if has_tangent:
+            lat = row["tp_lat_deg"]
+            lon = row["tp_lon_deg"]
+            entry["tangent_lat"] = float(lat) if lat == lat else None
+            entry["tangent_lon"] = float(lon) if lon == lon else None
+        if has_h_target:
+            htk = row["h_target_km_obs"]
+            entry["h_target_km_obs"] = float(htk) if htk == htk else None
+        lookup[ts] = entry
     return lookup
+
+
+# ---------------------------------------------------------------------------
+# Dark-frame helpers (Fix 3)
+# ---------------------------------------------------------------------------
+
+
+def _parse_filename_timestamp_ms(fname: str) -> int | None:
+    """
+    Parse YYYY-MM-DDTHH-MM-SSZ from a filename stem.
+    Returns Unix milliseconds or None if the pattern is not found.
+    """
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})Z", fname)
+    if not m:
+        return None
+    dt = datetime(
+        int(m.group(1)), int(m.group(2)), int(m.group(3)),
+        int(m.group(4)), int(m.group(5)), int(m.group(6)),
+        tzinfo=timezone.utc,
+    )
+    return int(dt.timestamp() * 1000)
+
+
+def _load_dark_frames(folder: Path) -> list:
+    """
+    Scan folder for *_dark.bin files and return a sorted list of
+    (unix_ms, Path) tuples.  Returns [] if none found.
+    """
+    result = []
+    for p in sorted(folder.glob("*_dark.bin")):
+        ts = _parse_filename_timestamp_ms(p.name)
+        if ts is not None:
+            result.append((ts, p))
+    result.sort(key=lambda x: x[0])
+    return result
+
+
+def _find_nearest_dark(ts_ms: int, dark_frames: list) -> tuple:
+    """
+    Return the (unix_ms, Path) entry from dark_frames whose timestamp
+    is closest to ts_ms.  dark_frames must be sorted by timestamp.
+    """
+    times = [t for t, _ in dark_frames]
+    idx = bisect.bisect_left(times, ts_ms)
+    candidates = []
+    if idx < len(dark_frames):
+        candidates.append(dark_frames[idx])
+    if idx > 0:
+        candidates.append(dark_frames[idx - 1])
+    return min(candidates, key=lambda x: abs(x[0] - ts_ms))
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +307,7 @@ def _process_one(
     bin_path: Path,
     vrel_lookup,
     args: argparse.Namespace,
+    dark_frames: list = None,
 ) -> tuple:
     """
     Process a single *_science.bin file through H07.
@@ -239,6 +323,7 @@ def _process_one(
         'm06_missing'    — no CSV and no M06 available
         'geometry_error' — process_frame raised ValueError
     """
+    import numpy as np
     from src.metadata.p01_image_metadata_2026_04_06 import (
         AdcsQualityFlags,
         ingest_real_image,
@@ -247,7 +332,7 @@ def _process_one(
 
     # Step 2a — Ingest
     try:
-        meta, _image = ingest_real_image(bin_path, h_target_km_obs=args.h_target_km)
+        meta, pixels = ingest_real_image(bin_path, h_target_km_obs=args.h_target_km)
     except Exception as exc:
         log.warning("Ingest failed for %s: %s", bin_path.name, exc)
         return None, "ingest_error"
@@ -262,7 +347,7 @@ def _process_one(
         log.warning("Skipping %s: SLEW_IN_PROGRESS flag set", bin_path.name)
         return None, "slew"
 
-    # Step 2b — Get v_rel
+    # Step 2b — Get v_rel and apply per-frame metadata from CSV
     if vrel_lookup is not None:
         entry = vrel_lookup.get(meta.lua_timestamp)
         if entry is None:
@@ -272,10 +357,47 @@ def _process_one(
                 bin_path.name,
             )
             return None, "vrel_missing"
-        v_rel, sigma_v = entry
+        v_rel = entry["v_rel"]
+        sigma_v = entry["sigma_v"]
+        # Apply metadata fields from GEN01 CSV (fixes obs_mode and tangent point)
+        if entry.get("obs_mode") not in (None, "unknown"):
+            meta.obs_mode = entry["obs_mode"]
+        if entry.get("tangent_lat") is not None:
+            meta.tangent_lat = entry["tangent_lat"]
+            meta.tangent_lon = entry.get("tangent_lon")
+            meta.is_synthetic = True
+        if entry.get("h_target_km_obs") is not None:
+            meta.h_target_km_obs = entry["h_target_km_obs"]
     else:
         # M06 not available and no CSV supplied
         return None, "m06_missing"
+
+    # Step 2a2 — Dark subtraction (nearest dark frame within 1 orbit)
+    _ONE_ORBIT_MS = 6_000_000
+    if dark_frames:
+        dark_ms, dark_path = _find_nearest_dark(meta.lua_timestamp, dark_frames)
+        dt_ms = abs(meta.lua_timestamp - dark_ms)
+        if dt_ms <= _ONE_ORBIT_MS:
+            try:
+                _, dark_pixels = ingest_real_image(dark_path)
+                pixels_corrected = np.clip(
+                    pixels.astype(np.float32) - dark_pixels.astype(np.float32),
+                    0, 16383,
+                ).astype(np.uint16)
+                log.info(
+                    "Dark subtracted: %s (dt=%.0fs)",
+                    dark_path.name, dt_ms / 1000.0,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Dark subtraction failed for %s using %s: %s",
+                    bin_path.name, dark_path.name, exc,
+                )
+        else:
+            log.warning(
+                "No dark frame within 1 orbit of %s — skipping dark subtraction",
+                bin_path.name,
+            )
 
     # Step 2c — H07 geometry + correction
     try:
@@ -398,7 +520,11 @@ def _write_summary(
         ),
         f"  Geometry error        : {skip_counts.get('geometry_error', 0)} frames",
         "-" * 64,
-        f"Bin parameters : dlat={dlat}°  dlon={dlon}°  dt={dt_min} min",
+        (
+            f"Bin parameters : dlat={dlat}°  dlon={dlon}°  dt=geographic-only"
+            if dt_min == 0 else
+            f"Bin parameters : dlat={dlat}°  dlon={dlon}°  dt={dt_min} min"
+        ),
         f"Total bins     : {n_bins}",
         f"Good solutions : {n_good}  ({pct(n_good):.1f}%)",
         f"GDOP flagged   : {n_gdop}  ({pct(n_gdop):.1f}%)",
@@ -521,6 +647,13 @@ def main() -> None:
         print("ERROR: No *_science.bin files found in input folder.", file=sys.stderr)
         sys.exit(1)
 
+    # ── Step 0b — Discover dark frames ────────────────────────────────────────
+    dark_frames = _load_dark_frames(input_folder)
+    if dark_frames:
+        print(f"Found {len(dark_frames)} dark frames for subtraction")
+    else:
+        log.warning("No dark frames found in %s — skipping dark subtraction", input_folder)
+
     # ── Step 1 — Load v_rel lookup ─────────────────────────────────────────────
     vrel_lookup = None
     if args.v_rel_csv:
@@ -547,7 +680,9 @@ def main() -> None:
         )
         from concurrent.futures import ThreadPoolExecutor
         import functools
-        fn = functools.partial(_process_one, vrel_lookup=vrel_lookup, args=args)
+        fn = functools.partial(
+            _process_one, vrel_lookup=vrel_lookup, args=args, dark_frames=dark_frames
+        )
         with ThreadPoolExecutor(max_workers=args.max_workers) as pool:
             n_done = 0
             n_skipped_so_far = 0
@@ -563,7 +698,7 @@ def main() -> None:
     else:
         n_skipped_so_far = 0
         for i, bin_path in enumerate(bin_files, 1):
-            obs, reason = _process_one(bin_path, vrel_lookup, args)
+            obs, reason = _process_one(bin_path, vrel_lookup, args, dark_frames=dark_frames)
             if obs is not None:
                 obs_list.append(obs)
             else:

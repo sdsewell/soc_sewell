@@ -27,7 +27,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 import numpy as np
-from scipy.optimize import brentq
+from scipy.optimize import brentq, minimize_scalar
 from scipy.spatial.transform import Rotation
 
 import astropy.units as u
@@ -199,6 +199,12 @@ def _eci_to_ecef_vec(vec_eci: np.ndarray, epoch: Time) -> np.ndarray:
     ])
 
 
+def _geodetic_altitude(r_ecef: np.ndarray) -> float:
+    """Geodetic altitude above WGS84 in metres."""
+    _, _, alt_m = _ecef_to_geodetic(r_ecef[0], r_ecef[1], r_ecef[2])
+    return alt_m
+
+
 def _parse_epoch(meta) -> Time:
     """Parse ImageMetadata.utc_timestamp to astropy Time."""
     ts = meta.utc_timestamp
@@ -337,11 +343,26 @@ def compute_los_geometry(meta) -> LOSGeometry:
                 args=(pos_ecef, l_hat_ecef_tmp, h_target_m),
                 xtol=1.0,
             )
-        except ValueError as exc:
-            raise ValueError(
-                f"Ray-trace failed to bracket target altitude {h_target_km} km. "
-                f"Check that l_hat_eci points toward Earth."
-            ) from exc
+        except ValueError:
+            # Bracketing failure: ray floor is slightly above (or below) the
+            # target altitude due to floating-point geometry.  Find the
+            # minimum-altitude point along the ray and use it as the tangent
+            # point regardless of whether it exactly equals h_target_km.
+            def _ray_alt_m(s):
+                r = pos_ecef + s * l_hat_ecef_tmp
+                return _geodetic_altitude(r)
+
+            res = minimize_scalar(_ray_alt_m, bounds=(0.0, s_max), method="bounded")
+            s_star = res.x
+            min_alt_km = res.fun / 1e3
+            diff_km = abs(min_alt_km - h_target_km)
+            warnings.warn(
+                f"Ray-trace: brentq bracketing failed; minimum altitude "
+                f"{min_alt_km:.2f} km differs from target {h_target_km:.2f} km "
+                f"by {diff_km:.3f} km — using minimum point.",
+                UserWarning,
+                stacklevel=3,
+            )
         tp_ecef = pos_ecef + s_star * l_hat_ecef_tmp
         lat_rad, lon_rad, alt_m = _ecef_to_geodetic(tp_ecef[0], tp_ecef[1], tp_ecef[2])
         tangent_lat_deg = float(np.degrees(lat_rad))
@@ -567,21 +588,32 @@ def bin_observations(
     obs_list: list,
     dlat: float = 5.0,
     dlon: float = 5.0,
-    dt_min: float = 30.0,
+    dt_min: float = 0.0,
 ) -> dict:
     """
     Stage B: spatiotemporal binning of LOSObservation list.
 
     Returns dict keyed by (lat_centre_deg, lon_centre_deg, t_centre_unix_ms)
     mapping to lists of LOSObservation for that bin.
+
+    If dt_min == 0: bin by geographic location only (ignore time).
+    All observations within the same dlat×dlon cell accumulate together
+    regardless of when they were acquired.  This is appropriate for
+    single-day datasets where azimuthal diversity comes from different
+    orbital passes (along_track and cross_track) over the same location.
+
+    If dt_min > 0: bin by (lat, lon, time) as before.
     """
-    dt_ms = dt_min * 60.0 * 1000.0
     bins: dict = {}
     for obs in obs_list:
         lat_centre = round(obs.tangent_lat_deg / dlat) * dlat
         lon_centre = round(obs.tangent_lon_deg / dlon) * dlon
-        t_centre = round(obs.epoch_unix_ms / dt_ms) * dt_ms
-        key = (lat_centre, lon_centre, int(t_centre))
+        if dt_min == 0:
+            key = (lat_centre, lon_centre, 0)
+        else:
+            dt_ms = dt_min * 60.0 * 1000.0
+            t_centre = round(obs.epoch_unix_ms / dt_ms) * dt_ms
+            key = (lat_centre, lon_centre, int(t_centre))
         bins.setdefault(key, []).append(obs)
     return bins
 
