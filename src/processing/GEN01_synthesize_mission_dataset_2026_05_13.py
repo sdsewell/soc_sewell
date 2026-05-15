@@ -756,7 +756,10 @@ def _plot_ground_tracks(
 
     def _ln(xs, ys, **kw):
         kw_tr = {"transform": _tr} if _cartopy else {}
-        ax.plot(xs, ys, **kw, **kw_tr)
+        try:
+            ax.plot(xs, ys, **kw, **kw_tr)
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
     def _ann(lon, lat, label, marker, color, text_offset=(12, 10)):
         kw_tr = {"transform": _tr} if _cartopy else {}
@@ -1002,7 +1005,10 @@ def _plot_vrel_histogram(
                 ax_ap.fill_between(t_pts[prev:k+1], ap_pts[prev:k+1],
                                    color=c, alpha=0.7, step=None)
                 prev = k
-        ax_ap.plot(t_pts, ap_pts, color="k", lw=0.8)
+        try:
+            ax_ap.plot(t_pts, ap_pts, color="k", lw=0.8)
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
         ax_ap.set_xlabel("Hours from start")
         ax_ap.set_ylabel("ap index")
         ax_ap.set_title("ap ramp")
@@ -1867,14 +1873,17 @@ def main():
 
     png_path = out_path / f"{stem}_windmap_vector.png"
     print("Saving wind map vector plot ...", end=" ", flush=True)
-    wind_map.plot(
-        title=_wm_title,
-        alt_km=h_target_km,
-        subsample=8,
-        mode="vector",
-        save_path=str(png_path),
-    )
-    print("done")
+    try:
+        wind_map.plot(
+            title=_wm_title,
+            alt_km=h_target_km,
+            subsample=8,
+            mode="vector",
+            save_path=str(png_path),
+        )
+        print("done")
+    except Exception as e:
+        print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
     gt_path = out_path / f"{stem}_ground_tracks.png"
     print("Saving ground track figure ...", end=" ", flush=True)

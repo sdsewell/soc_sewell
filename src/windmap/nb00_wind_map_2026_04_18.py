@@ -38,11 +38,13 @@ from src.constants import (
 
 def _add_map_background(ax) -> None:
     """Draw coastlines and lat/lon grid on a plain matplotlib axes."""
-    import geopandas
-    import geodatasets
-
-    land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
-    land.boundary.plot(ax=ax, linewidth=0.5, color="black")
+    try:
+        import geopandas
+        import geodatasets
+        land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+        land.boundary.plot(ax=ax, linewidth=0.5, color="black")
+    except Exception as e:
+        print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
     ax.set_xlim(-180, 180)
     ax.set_ylim(-90, 90)
@@ -351,8 +353,6 @@ class WindMap(ABC):
     ) -> None:
         """Single-panel: streamlines of the vector wind field."""
         import matplotlib.pyplot as plt
-        import geopandas
-        import geodatasets
 
         from src.windmap.nb00_wind_map_2026_04_18 import GridWindMap
         lats = GridWindMap.LAT_GRID
@@ -377,8 +377,13 @@ class WindMap(ABC):
         plt.colorbar(strm.lines, ax=ax, orientation='horizontal',
                      pad=0.05, label='Wind speed (m/s)')
 
-        land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
-        land.boundary.plot(ax=ax, linewidth=0.6, color="gray")
+        try:
+            import geopandas
+            import geodatasets
+            land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+            land.boundary.plot(ax=ax, linewidth=0.6, color="gray")
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
         ax.set_xlim(-180, 180)
         ax.set_ylim(-90, 90)
