@@ -1,0 +1,646 @@
+#!/usr/bin/env python
+"""
+invert_wind_map.py — WindCube H07 batch processing driver.
+
+Processes an entire folder of WindCube FPI binary science images,
+accumulates H07 wind solutions into spatiotemporal bins, and writes
+results to a CSV summary file.
+
+Usage:
+    python scripts/invert_wind_map.py <input_folder> [options]
+
+Spec: H07_wind_vector_retrieval_2026-05-14_v03.md (batch mode)
+
+NOTE FOR FUTURE DEVELOPMENT:
+This script currently writes results to CSV for simplicity and visual
+validation. The production output format is netCDF-4 as defined in
+S20/M08 (specs/S20_m08_l2_netcdf_writer.md). When M08 is available,
+replace the CSV writer (Step: write_results_csv) with a call to
+windcube.m08.write_l2_netcdf(wind_solutions, output_path).
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+import time
+import warnings
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# ── Project root on sys.path ───────────────────────────────────────────────
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NULL-WIND VALIDATION
+#
+# To validate H07 with GEN01 synthetic data (null wind):
+#
+#   1. Generate a synthetic dataset with GEN01 (wind map option 1,
+#      v_zonal=0, v_merid=0). This produces:
+#        - A folder of *_science.bin files
+#        - A CSV with v_rel_ms pre-computed (GEN01_*_uniform_*.csv)
+#
+#   2. Run this script with --v-rel-csv pointing to the GEN01 CSV:
+#        python scripts/invert_wind_map.py <folder> \
+#            --v-rel-csv <GEN01_csv_path> --sigma-v 10.0
+#
+#   3. Check the summary report:
+#        v_E mean should be ~0.0 m/s (< 5 m/s systematic = PASS)
+#        v_N mean should be ~0.0 m/s (< 5 m/s systematic = PASS)
+#
+#   4. Open the output CSV in a spreadsheet or with pandas to inspect
+#      individual bin solutions.
+#
+# If v_E or v_N mean is far from zero, check:
+#   - That --v-rel-csv timestamps match the .bin file lua_timestamps
+#   - That obs_mode is being correctly read from sidecar or derived
+#   - The geometry by running invert_single_frame.py on one frame
+# ─────────────────────────────────────────────────────────────────────────────
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="WindCube H07 batch wind-map processing driver.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "input_folder",
+        help="Directory containing *_science.bin files (non-recursive)",
+    )
+    parser.add_argument(
+        "--h-target-km",
+        type=float,
+        default=250.0,
+        metavar="KM",
+        help="Emission layer altitude in km (default: 250.0)",
+    )
+    parser.add_argument(
+        "--dlat",
+        type=float,
+        default=5.0,
+        metavar="DEG",
+        help="Bin latitude width in degrees (default: 5.0)",
+    )
+    parser.add_argument(
+        "--dlon",
+        type=float,
+        default=5.0,
+        metavar="DEG",
+        help="Bin longitude width in degrees (default: 5.0)",
+    )
+    parser.add_argument(
+        "--dt-min",
+        type=float,
+        default=30.0,
+        metavar="MIN",
+        help="Bin time width in minutes (default: 30.0)",
+    )
+    parser.add_argument(
+        "--n-days",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of days to accumulate (default: process all files found)",
+    )
+    parser.add_argument(
+        "--v-rel-csv",
+        default=None,
+        metavar="PATH",
+        help=(
+            "GEN01 CSV file with v_rel_ms column keyed by lua_timestamp. "
+            "When supplied, v_rel is read from the CSV instead of M06."
+        ),
+    )
+    parser.add_argument(
+        "--sigma-v",
+        type=float,
+        default=10.0,
+        metavar="M_S",
+        help="Constant per-frame sigma_v in m/s when --v-rel-csv is supplied (default: 10.0)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        metavar="PATH",
+        help="Output directory for CSV and summary files (default: input_folder)",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Parallel worker threads (default: 1 = serial; see astropy note in code)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Set logging level to INFO for per-frame debug messages",
+    )
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# v_rel CSV loader
+# ---------------------------------------------------------------------------
+
+
+def _load_vrel_csv(csv_path: Path, sigma_v: float) -> dict:
+    """
+    Read a GEN01 CSV and build a v_rel lookup dict.
+
+    Returns {lua_timestamp_int: (v_rel_ms_float, sigma_v_float)}.
+    Only science rows (obs_type == 'science') are included when the
+    obs_type column is present.
+    """
+    import pandas as pd
+    df = pd.read_csv(csv_path)
+    if "obs_type" in df.columns:
+        df = df[df["obs_type"] == "science"].copy()
+    if "v_rel_ms" not in df.columns:
+        raise ValueError(
+            f"Column 'v_rel_ms' not found in {csv_path}. "
+            "Check that this is a GEN01 v14 CSV."
+        )
+    if "lua_timestamp" not in df.columns:
+        raise ValueError(f"Column 'lua_timestamp' not found in {csv_path}.")
+    lookup = {
+        int(row["lua_timestamp"]): (float(row["v_rel_ms"]), float(sigma_v))
+        for _, row in df.iterrows()
+    }
+    return lookup
+
+
+# ---------------------------------------------------------------------------
+# Sidecar merge helper
+# ---------------------------------------------------------------------------
+
+
+def _apply_sidecar(meta, bin_path: Path) -> None:
+    """
+    Try to merge companion JSON sidecar into meta (in-place).
+    Silently skips if no sidecar found or if reading fails.
+    """
+    from src.metadata.p01_image_metadata_2026_04_06 import read_sidecar
+    sidecar = bin_path.with_name(bin_path.stem + "_L0.json")
+    if not sidecar.exists():
+        return
+    try:
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            meta_sc = read_sidecar(sidecar)
+        if meta_sc.obs_mode not in (None, "unknown"):
+            meta.obs_mode = meta_sc.obs_mode
+        if meta_sc.h_target_km_obs is not None:
+            meta.h_target_km_obs = meta_sc.h_target_km_obs
+        for field in (
+            "is_synthetic", "truth_v_los", "truth_v_zonal",
+            "truth_v_meridional", "tangent_lat", "tangent_lon",
+            "tangent_alt_km", "etalon_gap_mm", "noise_seed",
+        ):
+            val = getattr(meta_sc, field, None)
+            if val is not None:
+                setattr(meta, field, val)
+    except Exception as exc:
+        log.warning("Failed to read sidecar %s: %s", sidecar.name, exc)
+
+
+# ---------------------------------------------------------------------------
+# Per-frame processor
+# ---------------------------------------------------------------------------
+
+
+def _process_one(
+    bin_path: Path,
+    vrel_lookup,
+    args: argparse.Namespace,
+) -> tuple:
+    """
+    Process a single *_science.bin file through H07.
+
+    Returns (LOSObservation, None) on success,
+    or (None, skip_reason_str) if the frame should be skipped.
+
+    skip_reason values:
+        'ingest_error'   — binary read failed
+        'not_science'    — img_type != 'science'
+        'slew'           — SLEW_IN_PROGRESS flag set
+        'vrel_missing'   — lua_timestamp not in v_rel CSV
+        'm06_missing'    — no CSV and no M06 available
+        'geometry_error' — process_frame raised ValueError
+    """
+    from src.metadata.p01_image_metadata_2026_04_06 import (
+        AdcsQualityFlags,
+        ingest_real_image,
+    )
+    from windcube import wind_retrieval
+
+    # Step 2a — Ingest
+    try:
+        meta, _image = ingest_real_image(bin_path, h_target_km_obs=args.h_target_km)
+    except Exception as exc:
+        log.warning("Ingest failed for %s: %s", bin_path.name, exc)
+        return None, "ingest_error"
+
+    _apply_sidecar(meta, bin_path)
+
+    if meta.img_type != "science":
+        log.debug("Skipping %s: img_type=%s", bin_path.name, meta.img_type)
+        return None, "not_science"
+
+    if meta.adcs_quality_flag & AdcsQualityFlags.SLEW_IN_PROGRESS:
+        log.warning("Skipping %s: SLEW_IN_PROGRESS flag set", bin_path.name)
+        return None, "slew"
+
+    # Step 2b — Get v_rel
+    if vrel_lookup is not None:
+        entry = vrel_lookup.get(meta.lua_timestamp)
+        if entry is None:
+            log.warning(
+                "v_rel not found for lua_timestamp=%d (%s)",
+                meta.lua_timestamp,
+                bin_path.name,
+            )
+            return None, "vrel_missing"
+        v_rel, sigma_v = entry
+    else:
+        # M06 not available and no CSV supplied
+        return None, "m06_missing"
+
+    # Step 2c — H07 geometry + correction
+    try:
+        obs = wind_retrieval.process_frame(meta, v_rel, sigma_v)
+    except ValueError as exc:
+        log.warning("process_frame failed for %s: %s", bin_path.name, exc)
+        return None, "geometry_error"
+
+    log.info(
+        "OK  %-40s  v_rel=%+.1f  v_corr=%+.1f  mode=%s",
+        bin_path.name, v_rel, obs.v_corrected, obs.obs_mode,
+    )
+    return obs, None
+
+
+# ---------------------------------------------------------------------------
+# Output writers
+# ---------------------------------------------------------------------------
+
+
+def _unix_ms_to_utc(unix_ms: int) -> str:
+    dt = datetime.fromtimestamp(unix_ms / 1000.0, tz=timezone.utc)
+    return dt.isoformat()
+
+
+def _write_results_csv(
+    bin_keys: list,
+    solutions: list,
+    output_path: Path,
+) -> None:
+    """Write wind solutions to CSV. One row per spatiotemporal bin."""
+    import csv
+    import math
+
+    columns = [
+        "bin_lat_deg", "bin_lon_deg", "bin_t_centre_unix_ms", "bin_t_centre_utc",
+        "n_frames", "obs_modes",
+        "v_E_ms", "v_N_ms", "sigma_v_E_ms", "sigma_v_N_ms",
+        "two_sigma_v_E_ms", "two_sigma_v_N_ms",
+        "condition_number", "gdop_flag", "n_frames_flag",
+        "mean_tangent_lat_deg", "mean_tangent_lon_deg", "mean_tangent_alt_km",
+        "mean_epoch_unix_ms",
+    ]
+
+    def _fmt(v):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return ""
+        return v
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for (lat_c, lon_c, t_c), sol in zip(bin_keys, solutions):
+            modes_str = "|".join(sorted(sol.obs_modes)) if sol.obs_modes else ""
+            writer.writerow({
+                "bin_lat_deg":          lat_c,
+                "bin_lon_deg":          lon_c,
+                "bin_t_centre_unix_ms": t_c,
+                "bin_t_centre_utc":     _unix_ms_to_utc(t_c),
+                "n_frames":             sol.n_frames,
+                "obs_modes":            modes_str,
+                "v_E_ms":               _fmt(sol.v_E),
+                "v_N_ms":               _fmt(sol.v_N),
+                "sigma_v_E_ms":         _fmt(sol.sigma_v_E),
+                "sigma_v_N_ms":         _fmt(sol.sigma_v_N),
+                "two_sigma_v_E_ms":     _fmt(sol.two_sigma_v_E),
+                "two_sigma_v_N_ms":     _fmt(sol.two_sigma_v_N),
+                "condition_number":     _fmt(sol.condition_number),
+                "gdop_flag":            sol.gdop_flag,
+                "n_frames_flag":        sol.n_frames_flag,
+                "mean_tangent_lat_deg": sol.mean_tangent_lat_deg,
+                "mean_tangent_lon_deg": sol.mean_tangent_lon_deg,
+                "mean_tangent_alt_km":  sol.mean_tangent_alt_km,
+                "mean_epoch_unix_ms":   sol.mean_epoch_unix_ms,
+            })
+
+
+def _write_summary(
+    input_folder: Path,
+    n_found: int,
+    n_processed: int,
+    skip_counts: dict,
+    solutions: list,
+    dlat: float,
+    dlon: float,
+    dt_min: float,
+    csv_path: Path,
+    elapsed: float,
+    output_path: Path,
+) -> str:
+    """Build, write, and return the summary report text."""
+    import numpy as np
+
+    n_skipped = n_found - n_processed
+    n_bins = len(solutions)
+    good = [s for s in solutions if not s.gdop_flag and not s.n_frames_flag]
+    n_good = len(good)
+    n_gdop = sum(1 for s in solutions if s.gdop_flag)
+    n_sparse = sum(1 for s in solutions if s.n_frames_flag)
+
+    def pct(n):
+        return 100.0 * n / n_bins if n_bins > 0 else 0.0
+
+    n_vrel_missing = skip_counts.get("vrel_missing", 0) + skip_counts.get("m06_missing", 0)
+
+    lines = [
+        "=" * 64,
+        "WindCube H07 Wind Map — Batch Processing Summary",
+        "=" * 64,
+        f"Input folder   : {input_folder}",
+        (
+            f"Science frames : {n_found} found, {n_processed} processed, "
+            f"{n_skipped} skipped"
+        ),
+        "Skipped breakdown:",
+        f"  SLEW_IN_PROGRESS flag : {skip_counts.get('slew', 0)} frames",
+        (
+            f"  v_rel not available   : {n_vrel_missing} frames"
+            f"  (M06 missing or not in CSV)"
+        ),
+        f"  Geometry error        : {skip_counts.get('geometry_error', 0)} frames",
+        "-" * 64,
+        f"Bin parameters : dlat={dlat}°  dlon={dlon}°  dt={dt_min} min",
+        f"Total bins     : {n_bins}",
+        f"Good solutions : {n_good}  ({pct(n_good):.1f}%)",
+        f"GDOP flagged   : {n_gdop}  ({pct(n_gdop):.1f}%)",
+        f"Too few frames : {n_sparse}  ({pct(n_sparse):.1f}%)",
+        "-" * 64,
+    ]
+
+    if good:
+        ve = np.array([s.v_E for s in good])
+        vn = np.array([s.v_N for s in good])
+        sve = np.array([s.sigma_v_E for s in good])
+        svn = np.array([s.sigma_v_N for s in good])
+        lines += [
+            "Wind statistics (good bins only):",
+            (
+                f"  v_E  : mean={np.mean(ve):.1f}  std={np.std(ve):.1f}  "
+                f"min={np.min(ve):.1f}  max={np.max(ve):.1f}  m/s"
+            ),
+            (
+                f"  v_N  : mean={np.mean(vn):.1f}  std={np.std(vn):.1f}  "
+                f"min={np.min(vn):.1f}  max={np.max(vn):.1f}  m/s"
+            ),
+            f"  sigma_v_E : mean={np.mean(sve):.1f}  median={np.median(sve):.1f}  m/s",
+            f"  sigma_v_N : mean={np.mean(svn):.1f}  median={np.median(svn):.1f}  m/s",
+        ]
+    else:
+        lines.append("Wind statistics: no good bins to report")
+
+    lines += [
+        "-" * 64,
+        (
+            "For null-wind validation: v_E mean and v_N mean should both be\n"
+            "near 0.0 m/s. Systematic offset > 5 m/s indicates a geometry error."
+        ),
+        "-" * 64,
+        f"Output CSV     : {csv_path}",
+        f"Processing time: {elapsed:.1f} s",
+        "=" * 64,
+    ]
+
+    text = "\n".join(lines) + "\n"
+    output_path.write_text(text, encoding="utf-8")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# n_days file-list filter
+# ---------------------------------------------------------------------------
+
+
+def _filter_by_n_days(bin_files: list, n_days: int) -> list:
+    """
+    Return only files whose filename date falls within the first n_days
+    of the dataset.  Assumes filenames begin with YYYY-MM-DD (GEN01 format).
+    Falls back to returning all files if date extraction fails.
+    """
+    if not bin_files:
+        return bin_files
+    try:
+        first_date_str = bin_files[0].name[:10]
+        first_date = datetime.strptime(first_date_str, "%Y-%m-%d").date()
+        cutoff = first_date + timedelta(days=n_days)
+        cutoff_str = cutoff.strftime("%Y-%m-%d")
+        return [f for f in bin_files if f.name[:10] < cutoff_str]
+    except (ValueError, IndexError):
+        log.warning(
+            "--n-days: could not parse date from filename '%s'; "
+            "processing all files.",
+            bin_files[0].name,
+        )
+        return bin_files
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    # Ensure UTF-8 output on Windows terminals
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    args = _parse_args()
+
+    logging.basicConfig(
+        format="%(levelname)s %(name)s: %(message)s",
+        level=logging.INFO if args.verbose else logging.WARNING,
+        stream=sys.stderr,
+    )
+
+    input_folder = Path(args.input_folder).resolve()
+    if not input_folder.is_dir():
+        print(f"ERROR: Input folder not found: {input_folder}", file=sys.stderr)
+        sys.exit(1)
+
+    output_dir = (
+        Path(args.output_dir).resolve() if args.output_dir else input_folder
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    datestamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    stem = input_folder.name
+    csv_path = output_dir / f"{stem}_wind_solutions_{datestamp}.csv"
+    summary_path = output_dir / f"{stem}_wind_summary_{datestamp}.txt"
+
+    t0 = time.monotonic()
+
+    # ── Step 0 — Discover files ────────────────────────────────────────────────
+    bin_files = sorted(input_folder.glob("*_science.bin"))
+    if args.n_days is not None:
+        bin_files = _filter_by_n_days(bin_files, args.n_days)
+
+    n_found = len(bin_files)
+    print(f"Found {n_found} science frames in {input_folder}")
+    if n_found == 0:
+        print("ERROR: No *_science.bin files found in input folder.", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Step 1 — Load v_rel lookup ─────────────────────────────────────────────
+    vrel_lookup = None
+    if args.v_rel_csv:
+        vrel_csv_path = Path(args.v_rel_csv)
+        if not vrel_csv_path.exists():
+            print(f"ERROR: v_rel CSV not found: {vrel_csv_path}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            vrel_lookup = _load_vrel_csv(vrel_csv_path, args.sigma_v)
+        except Exception as exc:
+            print(f"ERROR: Failed to load v_rel CSV: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Loaded v_rel lookup from CSV: {len(vrel_lookup)} rows")
+
+    # ── Step 2 — Process frames ────────────────────────────────────────────────
+    obs_list = []
+    skip_counts: dict = {}
+
+    if args.max_workers > 1:
+        log.warning(
+            "max_workers=%d: astropy thread-safety not verified — "
+            "use --max-workers 1 for production runs.",
+            args.max_workers,
+        )
+        from concurrent.futures import ThreadPoolExecutor
+        import functools
+        fn = functools.partial(_process_one, vrel_lookup=vrel_lookup, args=args)
+        with ThreadPoolExecutor(max_workers=args.max_workers) as pool:
+            n_done = 0
+            n_skipped_so_far = 0
+            for obs, reason in pool.map(fn, bin_files):
+                n_done += 1
+                if obs is not None:
+                    obs_list.append(obs)
+                else:
+                    skip_counts[reason] = skip_counts.get(reason, 0) + 1
+                    n_skipped_so_far += 1
+                if n_done % 100 == 0:
+                    print(f"  Processed {n_done}/{n_found}  ({n_skipped_so_far} skipped)")
+    else:
+        n_skipped_so_far = 0
+        for i, bin_path in enumerate(bin_files, 1):
+            obs, reason = _process_one(bin_path, vrel_lookup, args)
+            if obs is not None:
+                obs_list.append(obs)
+            else:
+                skip_counts[reason] = skip_counts.get(reason, 0) + 1
+                n_skipped_so_far += 1
+            if i % 100 == 0:
+                print(f"  Processed {i}/{n_found}  ({n_skipped_so_far} skipped)")
+
+    n_processed = len(obs_list)
+
+    if n_processed == 0:
+        print(
+            "WARNING: No frames produced valid LOSObservations. "
+            "Check v_rel source and skip reasons above.",
+            file=sys.stderr,
+        )
+        # Still write an empty summary
+        elapsed = time.monotonic() - t0
+        report = _write_summary(
+            input_folder=input_folder,
+            n_found=n_found,
+            n_processed=0,
+            skip_counts=skip_counts,
+            solutions=[],
+            dlat=args.dlat,
+            dlon=args.dlon,
+            dt_min=args.dt_min,
+            csv_path=csv_path,
+            elapsed=elapsed,
+            output_path=summary_path,
+        )
+        print(report, end="")
+        sys.exit(0)
+
+    # ── Step 3 — Bin and invert ────────────────────────────────────────────────
+    from windcube import wind_retrieval
+    bins = wind_retrieval.bin_observations(
+        obs_list, dlat=args.dlat, dlon=args.dlon, dt_min=args.dt_min
+    )
+    n_bins = len(bins)
+    print(f"Binning: {n_processed} observations → {n_bins} bins")
+
+    bin_keys = sorted(bins.keys())
+    solutions = []
+    for key in bin_keys:
+        sol = wind_retrieval.invert_wind_vector(bins[key])
+        solutions.append(sol)
+
+    n_good = sum(1 for s in solutions if not s.gdop_flag and not s.n_frames_flag)
+    n_gdop = sum(1 for s in solutions if s.gdop_flag)
+    n_sparse = sum(1 for s in solutions if s.n_frames_flag)
+    print(f"  Good solutions  : {n_good}")
+    print(f"  GDOP flagged    : {n_gdop}")
+    print(f"  Too few frames  : {n_sparse}")
+
+    # ── Step 4 — Write results CSV ─────────────────────────────────────────────
+    _write_results_csv(bin_keys, solutions, csv_path)
+    print(f"Results written to: {csv_path}")
+
+    # ── Step 5 — Write summary report ─────────────────────────────────────────
+    elapsed = time.monotonic() - t0
+    report = _write_summary(
+        input_folder=input_folder,
+        n_found=n_found,
+        n_processed=n_processed,
+        skip_counts=skip_counts,
+        solutions=solutions,
+        dlat=args.dlat,
+        dlon=args.dlon,
+        dt_min=args.dt_min,
+        csv_path=csv_path,
+        elapsed=elapsed,
+        output_path=summary_path,
+    )
+    print(report, end="")
+    print(f"Summary written to: {summary_path}")
+
+
+if __name__ == "__main__":
+    main()
