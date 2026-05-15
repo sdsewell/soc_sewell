@@ -39,7 +39,7 @@ if sys.platform == "win32":
 import tkinter as tk
 from tkinter import filedialog
 
-_project_root = pathlib.Path(__file__).resolve().parents[1]
+_project_root = pathlib.Path(__file__).resolve().parents[2]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 

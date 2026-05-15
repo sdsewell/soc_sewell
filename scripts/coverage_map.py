@@ -16,6 +16,8 @@ Spec: specs/G01_synthetic_metadata_generator_2026-05-14_v15.md §10
 import argparse
 import pathlib
 import sys
+import tkinter as tk
+from tkinter import filedialog
 
 import numpy as np
 import pandas as pd
@@ -268,13 +270,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="WindCube GEN01 global coverage visualization (G01 v15 §10)"
     )
-    parser.add_argument("gen01_csv_path", help="Path to GEN01 output CSV (v14+ format)")
+    parser.add_argument("gen01_csv_path", nargs="?", default=None,
+                        help="Path to GEN01 output CSV (v14+ format); omit to open a file dialog")
     parser.add_argument("--dlat",       type=float, default=5.0,  help="Bin latitude size in degrees (default: 5.0)")
     parser.add_argument("--dlon",       type=float, default=5.0,  help="Bin longitude size in degrees (default: 5.0)")
     parser.add_argument("--output-dir", default=None,             help="Directory for saved figures (default: same as CSV)")
     parser.add_argument("--save",       action="store_true",      help="Save figures to PNG instead of displaying")
     parser.add_argument("--dpi",        type=int,   default=150,  help="Figure DPI for saved files (default: 150)")
     args = parser.parse_args()
+
+    if args.gen01_csv_path is None:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        chosen = filedialog.askopenfilename(
+            title="Select GEN01 CSV file",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        root.destroy()
+        if not chosen:
+            print("No file selected. Exiting.", file=sys.stderr)
+            sys.exit(0)
+        args.gen01_csv_path = chosen
 
     csv_path = pathlib.Path(args.gen01_csv_path).resolve()
     if not csv_path.exists():
