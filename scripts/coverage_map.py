@@ -275,7 +275,7 @@ def main() -> None:
     parser.add_argument("--dlat",       type=float, default=5.0,  help="Bin latitude size in degrees (default: 5.0)")
     parser.add_argument("--dlon",       type=float, default=5.0,  help="Bin longitude size in degrees (default: 5.0)")
     parser.add_argument("--output-dir", default=None,             help="Directory for saved figures (default: same as CSV)")
-    parser.add_argument("--save",       action="store_true",      help="Save figures to PNG instead of displaying")
+    parser.add_argument("--no-save",    action="store_true",      help="Display figures interactively instead of saving to PNG")
     parser.add_argument("--dpi",        type=int,   default=150,  help="Figure DPI for saved files (default: 150)")
     args = parser.parse_args()
 
@@ -301,7 +301,7 @@ def main() -> None:
     output_dir = pathlib.Path(args.output_dir).resolve() if args.output_dir else csv_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not args.save:
+    if args.no_save:
         matplotlib.use("TkAgg")    # interactive backend for display
 
     # Load data
@@ -333,7 +333,7 @@ def main() -> None:
     fig3 = _fig_coverage_forecast(n_days, pct_mixed)
     fig4 = _fig_ground_track(at_frames, ct_frames, n_days)
 
-    if args.save:
+    if not args.no_save:
         paths = {
             f"{stem}_coverage_map.png":       fig1,
             f"{stem}_pass_count_map.png":     fig2,
