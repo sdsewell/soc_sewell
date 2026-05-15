@@ -277,3 +277,67 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
         f"sigma_v = {result.sigma_v_rel_ms:.2f} m/s > "
         f"2 × STM budget ({2 * WIND_BIAS_BUDGET_MS:.1f} m/s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# H06 refactor tests (S_H06_refactor_2026-05-14)
+# ---------------------------------------------------------------------------
+
+def test_run_airglow_inversion_returns_airglowresult():
+    """T1: run_airglow_inversion returns AirglowResult with expected fields."""
+    import numpy as np
+    from src.processing.H06_airglow_inversion_2026_05_14 import (
+        run_airglow_inversion, AirglowResult, _CalResult
+    )
+
+    # Minimal synthetic profile: flat background + small Airy-like bump
+    n = 200
+    r_grid     = np.linspace(1.0, 110.0, n)
+    profile    = np.full(n, 500.0)
+    sigma      = np.full(n, 10.0)
+
+    # Minimal cal result with realistic WindCube values
+    cal = _CalResult(
+        t_m         = 20.106e-3,
+        alpha       = 1.6071e-4,
+        R_refl      = 0.53,
+        I0          = 1000.0,
+        I1          = 0.0,
+        I2          = 0.0,
+        sigma0      = 0.553,
+        sigma1      = 0.0,
+        sigma2      = 0.0,
+        B           = 100.0,
+        epsilon_cal = 0.233,
+    )
+
+    result = run_airglow_inversion(r_grid, profile, sigma, cal,
+                                   r_max_px=110.0, v_los_prior_ms=0.0)
+
+    assert isinstance(result, AirglowResult)
+    assert np.isfinite(result.v_rel_ms)
+    assert np.isfinite(result.sigma_v_ms)
+    assert result.sigma_v_ms >= 0.0
+    assert result.n_bins == n
+    assert result.fsr_oi_m > 0.0
+    assert isinstance(result.converged, bool)
+    assert isinstance(result.scan_ambiguous, bool)
+    assert isinstance(result.budget_ok, bool)
+
+
+def test_run_airglow_inversion_raises_on_too_few_bins():
+    """T2: ValueError raised when fewer than 10 bins within r_max."""
+    import numpy as np
+    import pytest
+    from src.processing.H06_airglow_inversion_2026_05_14 import (
+        run_airglow_inversion, _CalResult
+    )
+    cal = _CalResult(t_m=20.106e-3, alpha=1.6071e-4, R_refl=0.53,
+                     I0=1000.0, I1=0.0, I2=0.0, sigma0=0.553,
+                     sigma1=0.0, sigma2=0.0, B=100.0, epsilon_cal=0.233)
+    r_grid  = np.linspace(200.0, 300.0, 50)   # all outside r_max=110
+    profile = np.full(50, 500.0)
+    sigma   = np.full(50, 10.0)
+
+    with pytest.raises(ValueError, match="bins within r_max"):
+        run_airglow_inversion(r_grid, profile, sigma, cal, r_max_px=110.0)
