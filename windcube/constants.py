@@ -206,3 +206,11 @@ N_MIN_FRAMES       : int   = 4       # minimum frames per bin; fewer → n_frame
 
 # FPI payload boresight in spacecraft body frame (-X_BRF per SI-UCAR-WC-RP-004 §2.4.2.1)
 H07_BORESIGHT_BODY : list  = [-1.0, 0.0, 0.0]
+
+# ---------------------------------------------------------------------------
+# G01 — Orbit / coverage constants (G01 v15 spec §12)
+# ---------------------------------------------------------------------------
+
+ORBIT_PERIOD_MIN           : float = 95.0    # approximate WindCube orbital period [min]
+PASSES_PER_DAY             : float = 15.2    # approximate science passes per day
+GROUND_TRACK_DELTA_LON_DEG : float = 23.75   # longitude spacing between successive passes [deg]

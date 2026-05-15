@@ -1019,6 +1019,139 @@ def _plot_vrel_histogram(
 
 
 # ---------------------------------------------------------------------------
+# Coverage diagnostic (G01 v15 §9)
+# ---------------------------------------------------------------------------
+
+def _expected_mixed_fraction(n_days: float, dlon: float = 5.0) -> float:
+    """Analytical estimate of mixed AT+CT bin fraction (G01 v15 §9.3)."""
+    passes_per_day = 15.2
+    lon_coverage = min(1.0, n_days * passes_per_day * 2 * dlon / 360.0)
+    return lon_coverage * lon_coverage
+
+
+def _run_coverage_diagnostic(
+    df: "pd.DataFrame",
+    csv_path: pathlib.Path,
+    n_days: float,
+    dlat: float = 5.0,
+    dlon: float = 5.0,
+) -> None:
+    """Print and write a G01 v15 §9 coverage diagnostic report."""
+    # 2a. Filter to science rows with valid tangent point coords
+    sci = df[df["obs_type"] == "science"].copy()
+    sci = sci.dropna(subset=["tp_lat_deg", "tp_lon_deg"])
+
+    # 2b. Assign geographic bins
+    sci["bin_lat"] = (sci["tp_lat_deg"] / dlat).round() * dlat
+    sci["bin_lon"] = (sci["tp_lon_deg"] / dlon).round() * dlon
+
+    # 2c. Per-bin AT/CT counts
+    grp = sci.groupby(["bin_lat", "bin_lon"])
+    bin_stats = grp.apply(
+        lambda g: pd.Series({
+            "n_at": (g["obs_mode"] == "along_track").sum(),
+            "n_ct": (g["obs_mode"] == "cross_track").sum(),
+        })
+    ).reset_index()
+    bin_stats["has_both"] = (bin_stats["n_at"] >= 1) & (bin_stats["n_ct"] >= 1)
+    bin_stats["at_only"]  = (bin_stats["n_at"] >= 1) & (bin_stats["n_ct"] == 0)
+    bin_stats["ct_only"]  = (bin_stats["n_ct"] >= 1) & (bin_stats["n_at"] == 0)
+
+    # 2d. Global summary
+    n_bins_sampled = len(bin_stats)
+    n_bins_mixed   = int(bin_stats["has_both"].sum())
+    n_bins_at_only = int(bin_stats["at_only"].sum())
+    n_bins_ct_only = int(bin_stats["ct_only"].sum())
+    pct_mixed = n_bins_mixed / n_bins_sampled * 100 if n_bins_sampled > 0 else 0.0
+
+    # 2e. Expected fraction and days-for-80%
+    expected_pct = _expected_mixed_fraction(n_days, dlon) * 100
+    days_for_80  = 360.0 / (15.2 * dlon)   # ~4.7 days for dlon=5
+
+    # 2f. Coverage by latitude band (bins only)
+    def _band_pct(lat_lo, lat_hi):
+        b = bin_stats[(bin_stats["bin_lat"] >= lat_lo) & (bin_stats["bin_lat"] < lat_hi)]
+        if len(b) == 0:
+            return 0.0
+        return b["has_both"].sum() / len(b) * 100
+
+    pct_south_hi = _band_pct(-60, -30)
+    pct_south_lo = _band_pct(-30,   0)
+    pct_north_lo = _band_pct(  0,  30)
+    pct_north_hi = _band_pct( 30,  60)
+
+    # 2g. Recommendation
+    if pct_mixed < 10:
+        recommendation_string = "Extend to >=5 days for useful H07 wind coverage."
+    elif pct_mixed < 50:
+        recommendation_string = "Consider extending to >=5 days for >75% H07 coverage."
+    elif pct_mixed < 80:
+        recommendation_string = "Coverage adequate for regional analysis. Extend for global."
+    else:
+        recommendation_string = "Coverage sufficient for global H07 wind map validation."
+
+    # 2h. Build and print report
+    lines = [
+        "================================================================",
+        "GEN01 Coverage Diagnostic Report",
+        "================================================================",
+        f"Dataset         : {csv_path.stem}",
+        f"Duration        : {n_days:.2f} days  ({len(sci)} science frames)",
+        f"Bin size        : {dlat}° x {dlon}°",
+        f"Orbit period    : ~95 min  (15.2 passes/day)",
+        f"Ground track Δλ : 23.75° between successive passes",
+        "----------------------------------------------------------------",
+        "Geographic coverage (5°x5° bins):",
+        f"  Bins sampled (>=1 frame)  : {n_bins_sampled}",
+        f"  Along-track only          : {n_bins_at_only}  ({100*n_bins_at_only/max(n_bins_sampled,1):.1f}%)",
+        f"  Cross-track only          : {n_bins_ct_only}  ({100*n_bins_ct_only/max(n_bins_sampled,1):.1f}%)",
+        f"  Mixed AT+CT (good H07)    : {n_bins_mixed}  ({pct_mixed:.1f}%)",
+        "----------------------------------------------------------------",
+        "H07 wind solution prediction:",
+        f"  Predicted good solutions  : {pct_mixed:.1f}%",
+        f"  Expected for {n_days:.1f}-day dataset : {expected_pct:.1f}%",
+        f"  (~{days_for_80:.1f} days needed for >80% coverage)",
+        "----------------------------------------------------------------",
+        "Coverage by latitude band:",
+        f"  60S-30S : {pct_south_hi:.0f}% mixed",
+        f"  30S-0   : {pct_south_lo:.0f}% mixed",
+        f"  0-30N   : {pct_north_lo:.0f}% mixed",
+        f"  30N-60N : {pct_north_hi:.0f}% mixed",
+        "  (Polar regions >60 deg not shown)",
+        "----------------------------------------------------------------",
+        f"Recommendation:",
+        f"  {recommendation_string}",
+        "================================================================",
+    ]
+    report_text = "\n".join(lines) + "\n"
+    for line in lines:
+        print(line)
+
+    # 2i. Write coverage report sidecar
+    report_path = csv_path.parent / (csv_path.stem + "_coverage_report.txt")
+    report_path.write_text(report_text, encoding="utf-8")
+
+    # 2j. Append one-line summary to README sidecar
+    readme_candidates = list(csv_path.parent.glob(csv_path.stem.rsplit("_seed", 1)[0] + "*.txt"))
+    # also try exact stem match
+    readme_exact = csv_path.parent / (csv_path.stem + ".txt")
+    if readme_exact.exists():
+        readme_candidates = [readme_exact]
+    # filter out the coverage report itself
+    readme_candidates = [p for p in readme_candidates if "_coverage_report" not in p.name]
+    if readme_candidates:
+        readme_path = readme_candidates[0]
+        try:
+            with open(readme_path, "a", encoding="utf-8") as fh:
+                fh.write(
+                    f"Coverage (5x5 deg, mixed AT+CT): {pct_mixed:.1f}%"
+                    f"  ({n_bins_mixed}/{n_bins_sampled} bins)\n"
+                )
+        except OSError:
+            pass   # skip silently
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1721,6 +1854,8 @@ def main():
     df_csv = pd.DataFrame(rows_csv)
     df_csv.to_csv(str(csv_path), index=False)
 
+    _run_coverage_diagnostic(df_csv, csv_path, duration_days, dlat=5.0, dlon=5.0)
+
     if wm_choice == "1":
         _wm_title = (
             f"G01  Uniform  "
@@ -1992,8 +2127,38 @@ def main():
     else:
         c28 = _chk("C28 Sign convention self-consistency", True, "skipped (no science rows or columns missing)")
 
+    # C29 — coverage report file written
+    coverage_report_path = csv_path.parent / (csv_path.stem + "_coverage_report.txt")
+    if coverage_report_path.exists():
+        report_text_check = coverage_report_path.read_text(encoding="utf-8")
+        c29 = _chk("C29 Coverage report file written and contains header",
+                   "Coverage Diagnostic Report" in report_text_check,
+                   "header string missing")
+    else:
+        c29 = _chk("C29 Coverage report file written", False, "file not found")
+
+    # C30 — coverage_map.py runs on existing CSV (skip if csv missing)
+    import subprocess, tempfile
+    _scripts_cmap = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "coverage_map.py"
+    if _scripts_cmap.exists() and csv_path.exists():
+        with tempfile.TemporaryDirectory() as _tmpdir:
+            _result = subprocess.run(
+                [sys.executable, str(_scripts_cmap), str(csv_path),
+                 "--save", "--output-dir", _tmpdir],
+                capture_output=True, text=True, timeout=120,
+            )
+            _pngs = list(pathlib.Path(_tmpdir).glob("*.png"))
+            c30 = _chk("C30 coverage_map.py produces 4 PNG files",
+                       len(_pngs) == 4 and _result.returncode == 0,
+                       f"returncode={_result.returncode}, pngs={len(_pngs)}"
+                       + (f"\n    stderr: {_result.stderr[:200]}" if _result.returncode != 0 else ""))
+    else:
+        _reason = "coverage_map.py not found" if not _scripts_cmap.exists() else "CSV not found"
+        c30 = _chk("C30 coverage_map.py smoke test", True, f"skipped — {_reason}")
+
     all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
-                    c14, c15, c16, c17, c18, c19, c20, c21, c25, c26, c27, c28])
+                    c14, c15, c16, c17, c18, c19, c20, c21, c25, c26, c27, c28,
+                    c29, c30])
     print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
 
     print("\nG01 complete.")
