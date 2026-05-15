@@ -120,7 +120,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "path_to_bin_file",
-        help="Path to a *_science.bin (or *_swapped.bin) file",
+        nargs="?",
+        default=None,
+        help="Path to *_science.bin file. If omitted, a file picker dialog opens.",
     )
     parser.add_argument(
         "--h-target-km",
@@ -556,6 +558,27 @@ def main() -> None:
             pass
 
     args = _parse_args()
+
+    # If no path supplied on command line, open a Windows file picker
+    if not args.path_to_bin_file:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        chosen = filedialog.askopenfilename(
+            title="Select a WindCube FPI science .bin file",
+            initialdir=r"C:\Users\sewell\WindCube\G01_outputs",
+            filetypes=[
+                ("WindCube binary", "*.bin"),
+                ("All files", "*.*"),
+            ],
+        )
+        root.destroy()
+        if not chosen:
+            print("No file selected — exiting.")
+            return
+        args.path_to_bin_file = chosen
+
     path = Path(args.path_to_bin_file)
 
     # File existence check
