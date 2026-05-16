@@ -38,7 +38,7 @@
 
 | Test file                                    | Reason                        |
 |----------------------------------------------|-------------------------------|
-| test_z04.py                                  | missing joblib package        |
+| test_z04.py                                  | joblib now installed; re-check pending |
 | test_s06_nb01_orbit_propagator.py            | missing module (NB01 not impl)|
 | test_z02_synthetic_airglow_generator.py      | wrong script path             |
 
@@ -59,3 +59,9 @@ assessment until the relevant modules are fixed or installed.
   T3 quiet-time equator: U=-80.9 m/s V=-32.1 m/s PASS.
   T4 storm 60N: U=+111.5 m/s V=-62.2 m/s PASS.
   GEN01 wind map options 4 (HWM14 quiet) and 5 (HWM14 storm) operational in windcube.
+
+- windcube env GEN01 dependencies (2026-05-16): all third-party packages verified present.
+  numpy 2.4.5, pandas 3.0.3, scipy 1.17.1, astropy 7.2.0, sgp4 2.25, matplotlib 3.10.9,
+  cartopy 0.25.0 (conda-forge, new), netCDF4 1.7.4 (conda-forge, new), pyhwm2014 0.0.0,
+  joblib (already present), lmfit (already present), tkinter (stdlib).
+  GEN01 import-only check: PASS (2026-05-16).
