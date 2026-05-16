@@ -30,7 +30,7 @@
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
-| G01  | GEN01 mission-dataset-syn | PASS v16 | smoke | 2026-05-16 |
+| G01  | GEN01 mission-dataset-syn | PASS v16 | smoke+HWM14 e2e | 2026-05-16 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
 
@@ -59,6 +59,13 @@ assessment until the relevant modules are fixed or installed.
   T3 quiet-time equator: U=-80.9 m/s V=-32.1 m/s PASS.
   T4 storm 60N: U=+111.5 m/s V=-62.2 m/s PASS.
   GEN01 wind map options 4 (HWM14 quiet) and 5 (HWM14 storm) operational in windcube.
+
+- GEN01 HWM14 end-to-end integration (2026-05-16): wind map option 4 (quiet-time, 250 km) verified on
+  GEN01-V2/GEN01_20270101_001.0d_hwm14_seed0042.csv (8641 rows). v_wind_los_approach_ms:
+  mean=+3.0, std=56.9, min=-126.6, max=+142.1 m/s — SPATIALLY VARYING: PASS (std >> 5 m/s threshold).
+  Wind columns present: wind_v_zonal_ms, wind_v_merid_ms, v_wind_los_approach_ms.
+  matplotlib savefig outside conda-activated env: native LoadLibrary calls bypass os.add_dll_directory;
+  fix is to prepend conda env dirs to os.environ["PATH"] before importing matplotlib.
 
 - windcube env GEN01 dependencies (2026-05-16): all third-party packages verified present.
   numpy 2.4.5, pandas 3.0.3, scipy 1.17.1, astropy 7.2.0, sgp4 2.25, matplotlib 3.10.9,
