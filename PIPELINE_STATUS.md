@@ -47,5 +47,6 @@ assessment until the relevant modules are fixed or installed.
 
 ## Notes
 
-- NB00 HWM14WindMap: uses `pyhwm2014` (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
+- NB00 HWM14WindMap (spec v2026-05-16): uses `pyhwm2014` backend (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
+  T3 quiet-time and T4 storm wind maps verified at 250 km (84c5250).
   lgpedersen/hwm14 not compatible (numpy.distutils removed in NumPy 2.x; different API).
