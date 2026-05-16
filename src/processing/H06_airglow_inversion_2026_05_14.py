@@ -274,10 +274,11 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
     """
     # Compute lc_seed from calibration phase
-    N_int_OI     = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
-    eps_OI_exp   = (2.0 * cal.t_m / OI_WAVELENGTH_AIR_M) % 1.0
+    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
+    N_int_OI     = round(2.0 * cal.t_m / 630.0e-9)
+    eps_OI_exp   = (2.0 * cal.t_m / 630.0e-9) % 1.0
     lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp)
-    # Sanity: lc_seed_0wind ≈ OI_WAVELENGTH_AIR_M (within a few fm)
+    # Sanity: lc_seed_0wind ≈ 630.0e-9 m (within a few fm)
     # Shift by the a-priori LOS velocity
     lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
 
@@ -762,8 +763,9 @@ def run_airglow_inversion(
     sigma_lc, sigma_Y, sigma_B = stderrs
 
     # ── Derived quantities ────────────────────────────────────────────────
-    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
-    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / OI_WAVELENGTH_AIR_M
+    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
+    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - 630.0e-9) / 630.0e-9
+    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / 630.0e-9
     budget_ok  = bool(sigma_v_ms <= 9.8)
 
     return AirglowResult(
