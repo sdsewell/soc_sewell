@@ -21,7 +21,7 @@ from src.geometry.nb02d_l1c_calibrator_2026_04_16 import (
     compose_v_rel,
     remove_spacecraft_velocity,
 )
-from src.windmap.nb00_wind_map_2026_04_06 import UniformWindMap
+from src.windmap.archive.nb00_wind_map_2026_04_06 import UniformWindMap
 
 # Standard test geometry: equatorial crossing at Y-axis, sun-synchronous velocity
 _POS   = np.array([0.0, 6.896e6, 0.0])

@@ -39,7 +39,7 @@ from src.geometry.nb02c_los_projection_2026_04_06 import (
 )
 
 # Wind map
-from src.windmap.nb00_wind_map_2026_04_06 import AnalyticWindMap
+from src.windmap.archive.nb00_wind_map_2026_04_06 import AnalyticWindMap
 
 # FPI chain
 from src.constants import (
