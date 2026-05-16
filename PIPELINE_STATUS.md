@@ -60,6 +60,9 @@ assessment until the relevant modules are fixed or installed.
   T4 storm 60N: U=+111.5 m/s V=-62.2 m/s PASS.
   GEN01 wind map options 4 (HWM14 quiet) and 5 (HWM14 storm) operational in windcube.
 
+- pyHWM14 submodule (2026-05-16): tracked as git submodule at 500d7dd; outer repo pointer unchanged.
+  Local working-tree changes (dirty) are WIP inside the submodule — no outer-repo commit required.
+
 - GEN01 HWM14 end-to-end integration (2026-05-16): wind map option 4 (quiet-time, 250 km) verified on
   GEN01-V2/GEN01_20270101_001.0d_hwm14_seed0042.csv (8641 rows). v_wind_los_approach_ms:
   mean=+3.0, std=56.9, min=-126.6, max=+142.1 m/s — SPATIALLY VARYING: PASS (std >> 5 m/s threshold).

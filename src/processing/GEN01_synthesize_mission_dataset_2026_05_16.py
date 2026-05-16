@@ -8,6 +8,9 @@ Tool:      Claude Code
 CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
 Usage:     python src/processing/GEN01_synthesize_mission_dataset_2026_05_16.py
 
+Must use interpreter picker to select:
+windcube (3.11.15) → ~\.conda\envs\windcube\python.exe
+
 v11 — constants corrected from Tolansky two-line Benoit result;
        science pixel generator now encodes Doppler shift and uses
        physical CCD noise model (Poisson + temperature-dependent dark);
