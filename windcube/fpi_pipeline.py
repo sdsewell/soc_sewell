@@ -108,6 +108,60 @@ from windcube.constants import NE_WAVELENGTH_1_AIR_M            # noqa: F401, E4
 
 log = logging.getLogger("fpi_pipeline")
 
+
+# ---------------------------------------------------------------------------
+# Helper: convert list[PeakFitR2] to the (N, 9) float64 array that
+# run_tolansky_2line() / load_and_split_families() expects.
+# ---------------------------------------------------------------------------
+
+def _peak_fits_r2_to_array(peak_fits_r2: list) -> np.ndarray:
+    """
+    Convert list[PeakFitR2] from annular_reduce() to the (N, 9) float64
+    array expected by run_tolansky_2line().
+
+    Column mapping (matches _peak_fits_r2.npy format from annular_reduction.py):
+        col 0: peak_num         (1-based sequential index)
+        col 1: r2_raw_px2
+        col 2: r2_fit_px2       (nan if fit_ok is False)
+        col 3: sigma_r2_fit_px2 (nan if fit_ok is False)
+        col 4: r_fit_derived    sqrt(r2_fit_px2)  (nan if fit_ok is False)
+        col 5: sigma_r_derived  sigma_r2_fit_px2 / (2*sqrt(r2_fit_px2))
+        col 6: amplitude_adu
+        col 7: width_r2_px2     (nan if fit_ok is False)
+        col 8: reduced_chi2     (nan if fit_ok is False)
+    """
+    rows = []
+    for i, p in enumerate(peak_fits_r2):
+        if p.fit_ok and p.r2_fit_px2 > 0:
+            r2_fit = float(p.r2_fit_px2)
+            sig_r2 = float(p.sigma_r2_fit_px2)
+            r_fit  = float(np.sqrt(r2_fit))
+            sig_r  = sig_r2 / (2.0 * r_fit)
+            width  = float(p.width_r2_px2)
+            chi2   = float(p.reduced_chi2)
+        else:
+            r2_fit = np.nan
+            sig_r2 = np.nan
+            r_fit  = np.nan
+            sig_r  = np.nan
+            width  = np.nan
+            chi2   = np.nan
+        rows.append([
+            float(i + 1),
+            float(p.r2_raw_px2),
+            r2_fit,
+            sig_r2,
+            r_fit,
+            sig_r,
+            float(p.amplitude_adu),
+            width,
+            chi2,
+        ])
+    if not rows:
+        raise ValueError("peak_fits_r2 is empty — no peaks detected in profile.")
+    return np.array(rows, dtype=np.float64)
+
+
 # ---------------------------------------------------------------------------
 # §2.1 CalibrationResult — wraps H05 FitResult into a stable public type
 # ---------------------------------------------------------------------------
@@ -401,7 +455,8 @@ def process_cal_frame(
     )
 
     # 3. Tolansky analysis (uses peak_fits_r2 from FringeProfile)
-    tol = run_tolansky_2line(fp.peak_fits_r2, n_pairs=tolansky_n_pairs)
+    peak_array = _peak_fits_r2_to_array(fp.peak_fits_r2)
+    tol = run_tolansky_2line(peak_array, n_pairs=tolansky_n_pairs)
 
     # 4. M05 priors
     priors = to_m05_priors(tol)
