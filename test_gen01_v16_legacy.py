@@ -41,5 +41,5 @@ _fd._real_askdir = _fd.askdirectory
 _fd.askdirectory = lambda **kw: _out
 
 print(f"Output dir: {_out}")
-from src.processing.GEN01_synthesize_mission_dataset_2026_05_13 import main
+from src.processing.archive.GEN01_synthesize_mission_dataset_2026_05_13 import main
 main()

@@ -41,5 +41,5 @@ _fd.askopenfilename = lambda **kw: _tle_path
 
 print(f"Output dir: {_out}")
 print(f"TLE file  : {_tle_path}")
-from src.processing.GEN01_synthesize_mission_dataset_2026_05_13 import main
+from src.processing.archive.GEN01_synthesize_mission_dataset_2026_05_13 import main
 main()
