@@ -88,15 +88,15 @@ WIND_MAP_TAGS = {
 LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm source wavelength, m
 LAMBDA_NE1_M     = 640.2248e-9    # Neon strong line (Burns et al. 1950)
 LAMBDA_NE2_M     = 638.2991e-9    # Neon weak line  (Burns et al. 1950)
-ETALON_GAP_M     = 20.106e-3      # Tolansky two-line Benoit: d = 20.10702 mm; use 20.106e-3
-                                   # as 6-sig-fig shorthand; authoritative 2σ = ±0.0004 mm
-PLATE_SCALE_RPX  = 1.6083e-4      # Tolansky two-line result: alpha = 1.608313e-4 rad/px;
-                                   # 2σ = ±2.77e-8 rad/px
-R_REFL           = 0.725          # Effective R from real fringe sharpness
+ETALON_GAP_M     = 20.1069751e-3  # Real FlatSat H05 fit: t_m = 20.1069751 mm
+PLATE_SCALE_RPX  = 1.60885e-4     # Real FlatSat H05 fit: alpha = 1.60885e-4 rad/px
+R_REFL           = 0.23737        # Real FlatSat H05 fit: R1 at λ1=640.2 nm
+R_REFL_2         = 0.33603        # Real FlatSat H05 fit: R2 at λ2=638.3 nm
+SIGMA0_PX        = 0.5540         # Real FlatSat H05 fit: PSF base width [px]
 N_GAP            = 1.0            # Refractive index of etalon gap (air)
 C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
 
-FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # F ≈ 38.35 (Airy denominator coeff); reflective finesse N_R = π√R/(1−R) ≈ 9.73
+FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 3.24 with R_REFL=0.23737 (real FlatSat)
 
 # CCD / pixel layout — keyed by binning factor (1 or 2)
 # Layout: row 0 of file = header (276 words, zero-padded to N_COLS_FRAME);
@@ -139,7 +139,7 @@ ADU_MAX          = 16383
 # Signal levels
 SCI_PEAK_ADU     = 5000
 CAL_PEAK_ADU     = 12000
-REL_638          = 0.344          # weak(638nm)/strong(640nm); real-image measurement
+REL_638          = 0.5087         # Real FlatSat H05 fit: ne_ratio (weak/strong amplitude ratio)
 
 # Dark model — doubling interval (shared by science and dark generators)
 T_DOUBLE_C       = 6.5
@@ -1501,6 +1501,16 @@ def main():
         "    v_rel_ms = v_wind_los_approach_ms",
         "               - v_sc_los_approach_ms",
         "               - v_earth_los_approach_ms",
+        "",
+        "--- FPI Instrument Model ---",
+        f"R_REFL (λ1=640.2 nm)  : {R_REFL:.5f}  (real FlatSat H05 fit)",
+        f"R_REFL_2 (λ2=638.3 nm): {R_REFL_2:.5f}  (real FlatSat H05 fit)",
+        f"ne_ratio (R2/R1)       : {REL_638:.4f}",
+        f"SIGMA0_PX (PSF width)  : {SIGMA0_PX:.4f} px",
+        f"FINESSE_F              : {FINESSE_F:.4f}  (= 4R/(1-R)^2 at λ1)",
+        f"ETALON_GAP_M           : {ETALON_GAP_M*1e3:.7f} mm",
+        f"PLATE_SCALE_RPX        : {PLATE_SCALE_RPX:.5e} rad/px",
+        f"Source                 : real FlatSat cal image, H05 fit, chi2/nu=1.614",
     ]
     _readme_stem = (f"GEN01_{t_start[:10].replace('-', '')}_{duration_days:05.1f}d_"
                     f"{windmap_tag}_seed{rng_seed:04d}")
