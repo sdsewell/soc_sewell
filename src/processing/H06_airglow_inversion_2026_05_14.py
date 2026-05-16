@@ -276,7 +276,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     # Compute lc_seed from calibration phase
     N_int_OI     = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
     eps_OI_exp   = (2.0 * cal.t_m / OI_WAVELENGTH_AIR_M) % 1.0
-    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp - 1.0)
+    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp)
     # Sanity: lc_seed_0wind ≈ OI_WAVELENGTH_AIR_M (within a few fm)
     # Shift by the a-priori LOS velocity
     lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
