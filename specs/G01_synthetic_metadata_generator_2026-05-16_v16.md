@@ -5,7 +5,7 @@
 **Previous spec:** `specs/G01_synthetic_metadata_generator_2026-05-14_v15.md` (v15)  
 **Script:** `src/processing/GEN01_synthesize_mission_dataset_2026_05_13.py`  
 **Date:** 2026-05-16  
-**Status:** Authoritative — v16  
+**Status:** Authoritative — v16 (implemented, C31–C33 passing)  
 
 **Depends on:**
 - All v15 dependencies (unchanged)
@@ -20,6 +20,7 @@
 |---------|------|---------|
 | 1–15 | see archive | — |
 | **16** | **2026-05-16** | **Add TLE ingestion mode (§11) and weekly ops planning workflow (§12). New `propagate_orbit_from_state()` NB01 entry point (§11.3). Legacy altitude-only mode preserved. New constants (§13). New checks C31–C33.** |
+| **16.1** | **2026-05-16** | **Implementation note: `propagate_orbit_from_state()` uses symplectic Euler (leapfrog) integrator — velocity updated before position. Better energy conservation than forward Euler; consistent with two-body orbit accuracy requirement. Spec path corrected to `specs/` (not `docs/specs/`). C16 and C30 pre-existing failures confirmed unrelated to v16 scope.** |
 
 ---
 
@@ -178,6 +179,13 @@ goal is to predict which geographic bins will be observed, not to produce
 a precise ephemeris.  The two-body approximation introduces < 1 km
 positional error per day, which is negligible relative to the 5°×5°
 coverage bin size (~550 km at the equator).
+
+**Integrator (as implemented):** Symplectic Euler (leapfrog) — velocity
+is updated first from the gravitational acceleration, then position is
+updated using the new velocity.  This is the standard choice for
+conservative two-body systems; it conserves orbital energy better than
+forward Euler and prevents secular drift in the semi-major axis over
+multi-day runs.
 
 If higher fidelity is needed in a future version, `propagate_orbit_from_state()`
 can be updated to call `sat.sgp4()` at each time step without changing the
