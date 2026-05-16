@@ -1,12 +1,12 @@
 """
-GEN01 v14 — Synthetic Metadata Generator.
+GEN01 v16 — Synthetic Metadata Generator.
 
-Spec:      specs/G01_synthetic_metadata_generator_2026-05-14.md
-Spec date: 2026-05-14
-Generated: 2026-05-13
+Spec:      specs/G01_synthetic_metadata_generator_2026-05-16_v16.md
+Spec date: 2026-05-16
+Generated: 2026-05-16
 Tool:      Claude Code
 CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
-Usage:     python src/processing/GEN01_synthesize_mission_dataset_2026_05_13.py
+Usage:     python src/processing/GEN01_synthesize_mission_dataset_2026_05_16.py
 
 v11 — constants corrected from Tolansky two-line Benoit result;
        science pixel generator now encodes Doppler shift and uses
