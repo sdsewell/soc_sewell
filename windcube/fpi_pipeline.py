@@ -568,9 +568,10 @@ def process_science_frame(
     master_cal : MasterCalibration
         Master calibration result for this orbit.
     v_los_prior_ms : float
-        A-priori LOS velocity from H07 geometry engine [m/s].
-        Must be computed BEFORE calling this function:
-            v_los_prior_ms = geom.V_sc_LOS + geom.v_earth_LOS
+        A-priori LOS velocity from H07 geometry engine [m/s], in Harding
+        recession-positive convention. Must be computed BEFORE calling this
+        function (V_sc_LOS is approach-positive so must be negated):
+            v_los_prior_ms = -(geom.V_sc_LOS + geom.v_earth_LOS)
     r_max_px : float
         Outer fringe radius [px]. Default 110.0.
     cx_seed, cy_seed : float or None

@@ -211,6 +211,17 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--n-cal",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Maximum number of cal frames to use when building the master "
+            "calibration in H06 mode. Default: 5 (one orbit cadence). "
+            "Use 0 for no limit (processes all cal frames in the folder)."
+        ),
+    )
+    parser.add_argument(
         "--sidecar",
         default=None,
         metavar="PATH",
@@ -523,7 +534,9 @@ def _run(args: argparse.Namespace, path: Path) -> None:
             )
         else:
             # Build per-folder master calibration from all available cal frames
-            print(f"H06 mode: found {len(cal_frames)} cal frame(s) in folder")
+            n_cal_limit = args.n_cal if args.n_cal > 0 else len(cal_frames)
+            print(f"H06 mode: found {len(cal_frames)} cal frame(s) in folder "
+                  f"(using first {n_cal_limit})")
             try:
                 from windcube.fpi_pipeline import (
                     process_cal_frame,
@@ -537,7 +550,7 @@ def _run(args: argparse.Namespace, path: Path) -> None:
                 master_dark_arr, n_dark = _build_master_dark_from_folder(
                     path, meta.lua_timestamp
                 )
-                for cal_path in cal_frames:
+                for cal_path in cal_frames[:n_cal_limit]:
                     try:
                         _, cal_pixels = _ingest(cal_path,
                                                 h_target_km_obs=args.h_target_km)
@@ -565,7 +578,9 @@ def _run(args: argparse.Namespace, path: Path) -> None:
                     )
 
                     # v_los_prior from geometry (already computed in Stage 3)
-                    v_los_prior = (geom.V_sc_LOS + geom.v_earth_LOS
+                    # H06 uses Harding recession-positive convention; V_sc_LOS
+                    # is approach-positive so must be negated.
+                    v_los_prior = (-(geom.V_sc_LOS + geom.v_earth_LOS)
                                    if geom is not None else 0.0)
 
                     # Dark-subtract science frame

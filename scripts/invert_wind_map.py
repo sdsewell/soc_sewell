@@ -404,7 +404,9 @@ def _process_one(
             log.warning("Geometry failed for %s: %s", bin_path.name, exc)
             return None, "geometry_error"
 
-        v_los_prior_ms = geom.V_sc_LOS + geom.v_earth_LOS
+        # H06 uses Harding recession-positive convention; V_sc_LOS is
+        # approach-positive so must be negated.
+        v_los_prior_ms = -(geom.V_sc_LOS + geom.v_earth_LOS)
 
         # ── Dark subtraction using per-orbit master dark ────────────────
         if orbit_group.master_dark is not None:
