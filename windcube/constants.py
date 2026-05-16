@@ -214,3 +214,9 @@ H07_BORESIGHT_BODY : list  = [-1.0, 0.0, 0.0]
 ORBIT_PERIOD_MIN           : float = 95.0    # approximate WindCube orbital period [min]
 PASSES_PER_DAY             : float = 15.2    # approximate science passes per day
 GROUND_TRACK_DELTA_LON_DEG : float = 23.75   # longitude spacing between successive passes [deg]
+
+# ---------------------------------------------------------------------------
+# TLE / SGP4 propagation (G01 v16)
+# ---------------------------------------------------------------------------
+R_EARTH_MEAN_KM  : float = 6371.0   # mean Earth radius for altitude display [km]
+SGP4_MAX_AGE_DAYS: float = 7.0      # warn if TLE epoch older than this before t_start

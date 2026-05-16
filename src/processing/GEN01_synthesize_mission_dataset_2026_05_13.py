@@ -14,6 +14,7 @@ v11 — constants corrected from Tolansky two-line Benoit result;
        read noise Gaussian draws removed throughout.
 """
 
+import datetime
 import os
 import struct
 import sys
@@ -47,7 +48,12 @@ import numpy as np
 import pandas as pd
 from astropy.time import Time
 
-from src.geometry.nb01_orbit_propagator_2026_04_16 import propagate_orbit
+from sgp4.api import Satrec, jday
+from src.geometry.nb01_orbit_propagator_2026_04_16 import (
+    propagate_orbit,
+    propagate_orbit_from_state,
+)
+from windcube.constants import R_EARTH_MEAN_KM, SGP4_MAX_AGE_DAYS
 from src.geometry.nb02a_boresight_2026_04_16 import compute_los_eci
 from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
 from src.geometry.nb02c_los_projection_2026_04_16 import compute_v_rel
@@ -1158,15 +1164,171 @@ def _run_coverage_diagnostic(
 
 
 # ---------------------------------------------------------------------------
+# TLE helpers (§15.1, §15.2 — v16)
+# ---------------------------------------------------------------------------
+
+def _parse_tle_epoch(line1: str) -> datetime.datetime:
+    """
+    Parse the epoch field from TLE line 1 (columns 19–32, 1-indexed).
+
+    TLE epoch format: YYDDD.DDDDDDDD
+      YY: 2-digit year (57–99 → 1957–1999; 00–56 → 2000–2056)
+      DDD.DDDDDDDD: day-of-year with fractional day
+    Returns a timezone-aware UTC datetime.
+    """
+    epoch_str = line1[18:32].strip()
+    yy = int(epoch_str[:2])
+    year = (1900 + yy) if yy >= 57 else (2000 + yy)
+    day_frac = float(epoch_str[2:])
+    day_int = int(day_frac)
+    frac = day_frac - day_int
+    jan1 = datetime.datetime(year, 1, 1, tzinfo=datetime.timezone.utc)
+    dt = jan1 + datetime.timedelta(days=day_int - 1) + datetime.timedelta(days=frac)
+    return dt
+
+
+def _load_tle_dialog() -> tuple:
+    """
+    Open a file-picker dialog to select a TLE file.
+
+    Returns (title_line, line1, line2) for the selected TLE set.
+    Raises RuntimeError if the file cannot be parsed or no TLE sets found.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    tle_file = filedialog.askopenfilename(
+        title="Select WindCube TLE file",
+        filetypes=[("TLE files", "*.tle *.txt"), ("All files", "*.*")],
+    )
+    root.destroy()
+    if not tle_file:
+        raise RuntimeError("No TLE file selected.")
+
+    with open(tle_file, "r", encoding="utf-8") as fh:
+        raw_lines = [ln.rstrip() for ln in fh.readlines()]
+
+    lines = [ln for ln in raw_lines if ln.strip()]
+
+    # Parse TLE sets: a valid set is line1 starting "1 " and line2 "2 "
+    tle_sets = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("1 ") and i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+            title = lines[i - 1] if i > 0 and not lines[i - 1].startswith(("1 ", "2 ")) else ""
+            tle_sets.append((title.strip(), lines[i], lines[i + 1]))
+            i += 2
+        else:
+            i += 1
+
+    if len(tle_sets) == 0:
+        raise RuntimeError("No valid TLE sets found in the selected file.")
+
+    tle_file_name = pathlib.Path(tle_file).name
+
+    if len(tle_sets) == 1:
+        return tle_sets[0] + (tle_file_name,)
+
+    # Multiple TLE sets: sort newest-first by epoch and let user choose
+    tle_sets_dated = []
+    for (title, l1, l2) in tle_sets:
+        try:
+            ep = _parse_tle_epoch(l1)
+        except Exception:
+            ep = datetime.datetime(1957, 1, 1, tzinfo=datetime.timezone.utc)
+        tle_sets_dated.append((ep, title, l1, l2))
+    tle_sets_dated.sort(key=lambda x: x[0], reverse=True)
+
+    print(f"\nFound {len(tle_sets_dated)} TLE sets in {tle_file_name}:")
+    for k, (ep, title, l1, _) in enumerate(tle_sets_dated, 1):
+        print(f"  [{k}] {ep.strftime('%Y-%m-%dT%H:%M:%SZ')}  {title}")
+
+    raw_sel = input("Select TLE [1 = most recent]: ").strip()
+    sel = int(raw_sel) if raw_sel else 1
+    if sel < 1 or sel > len(tle_sets_dated):
+        sel = 1
+    chosen = tle_sets_dated[sel - 1]
+    return (chosen[1], chosen[2], chosen[3], tle_file_name)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     print("=== G01 — WindCube Synthetic Metadata Generator ===\n")
 
-    t_start       = _prompt(
-        "Start epoch          [2027-01-01T00:00:00 UTC]  : ",
-        "2027-01-01T00:00:00", str)
+    # -----------------------------------------------------------------------
+    # TLE mode prompt (§11.2 — v16)
+    # -----------------------------------------------------------------------
+    use_tle_raw = input(
+        "Use a TLE file for orbit initialisation?  [y/N]: "
+    ).strip().lower()
+    use_tle = use_tle_raw in ("y", "yes")
+
+    # Variables set in the TLE path; None in legacy mode
+    pos0_eci_m    = None
+    vel0_eci_m_s  = None
+    tle_title     = ""
+    tle_file_name = ""
+    tle_epoch_dt  = None
+    inclination_deg_tle = None
+    bstar_tle     = None
+    mean_motion   = None
+
+    if use_tle:
+        result = _load_tle_dialog()
+        tle_title, line1, line2, tle_file_name = result
+        sat = Satrec.twoline2rv(line1, line2)
+        tle_epoch_dt = _parse_tle_epoch(line1)
+
+        jd_whole, jd_frac = jday(
+            tle_epoch_dt.year, tle_epoch_dt.month, tle_epoch_dt.day,
+            tle_epoch_dt.hour, tle_epoch_dt.minute,
+            tle_epoch_dt.second + tle_epoch_dt.microsecond / 1e6,
+        )
+        e, r_km, v_km_s = sat.sgp4(jd_whole, jd_frac)
+        if e != 0:
+            raise RuntimeError(f"SGP4 propagation error code {e} at TLE epoch.")
+
+        pos0_eci_m   = np.array(r_km) * 1000.0
+        vel0_eci_m_s = np.array(v_km_s) * 1000.0
+        t_start      = tle_epoch_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        altitude_km  = float(np.linalg.norm(r_km) - R_EARTH_MEAN_KM)
+        mean_motion  = sat.no_kozai * (1440.0 / (2 * np.pi))
+        T_ORBIT_S    = 86400.0 / mean_motion
+        inclination_deg_tle = float(np.degrees(sat.inclo))
+        bstar_tle    = float(sat.bstar)
+
+        # TLE age warning (§12.3)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        age_days = (now_utc - tle_epoch_dt).total_seconds() / 86400.0
+        if age_days > SGP4_MAX_AGE_DAYS:
+            print(f"\nWARNING: TLE epoch is {age_days:.1f} days before now.")
+            print("         Propagation accuracy degrades at >3 days for LEO.")
+            print("         Consider downloading a fresher TLE.")
+
+        # TLE summary table (§11.6)
+        print(f"\nTLE Summary:")
+        print(f"  File             : {tle_file_name}")
+        print(f"  Title            : {tle_title}")
+        print(f"  NORAD ID         : {sat.satnum}")
+        print(f"  TLE epoch        : {tle_epoch_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC")
+        print(f"  TLE age          : {age_days:.1f} days before now")
+        print(f"  Inclination      : {inclination_deg_tle:.4f}°")
+        print(f"  BSTAR drag       : {bstar_tle:.5e}")
+        print(f"  Mean motion      : {mean_motion:.8f} rev/day")
+        print(f"  T_orbit (TLE)    : {T_ORBIT_S:.1f} s  ({T_ORBIT_S / 60:.2f} min)")
+        print(f"  Altitude @ epoch : {altitude_km:.1f} km  (|r| - R_earth)")
+        print(f"  Start epoch      : {t_start} UTC  (set from TLE epoch)")
+    else:
+        t_start  = _prompt(
+            "Start epoch          [2027-01-01T00:00:00 UTC]  : ",
+            "2027-01-01T00:00:00", str)
+        altitude_km = _prompt(
+            "S/C altitude         [km,    default 510       ] : ",
+            510.0, float, 400.0, 700.0)
+
     duration_days = _prompt(
         "Duration             [days,  default   1       ] : ",
         1.0, float, 0.1, 365.0)
@@ -1209,9 +1371,6 @@ def main():
         0.0, float, -50.0, 50.0)
     cx_centre     = round(_cx_default + cx_offset, 2)
     cy_centre     = round(_cy_default + cy_offset, 2)
-    altitude_km   = _prompt(
-        "S/C altitude         [km,    default 510       ] : ",
-        510.0, float, 400.0, 700.0)
     h_target_km   = _prompt(
         "Tangent height       [km,    default 250       ] : ",
         250.0, float, 100.0, 400.0)
@@ -1328,8 +1487,12 @@ def main():
     actual_cadence = step * SCHED_DT_S
     duration_s     = duration_days * 86400.0
 
-    a_m       = WGS84_A_M + altitude_km * 1e3
-    T_ORBIT_S = 2 * np.pi * np.sqrt(a_m**3 / EARTH_GRAV_PARAM_M3_S2)
+    if use_tle:
+        # T_ORBIT_S already set from TLE mean motion in the TLE block above
+        pass
+    else:
+        a_m       = WGS84_A_M + altitude_km * 1e3
+        T_ORBIT_S = 2 * np.pi * np.sqrt(a_m**3 / EARTH_GRAV_PARAM_M3_S2)
 
     sched_rows_approx = int(duration_s / SCHED_DT_S) + 1
 
@@ -1365,12 +1528,23 @@ def main():
     # -----------------------------------------------------------------------
     print("\nBuilding NB01 orbit schedule ...", end=" ", flush=True)
 
-    df_sched = propagate_orbit(
-        t_start     = t_start,
-        duration_s  = duration_s,
-        dt_s        = SCHED_DT_S,
-        altitude_km = altitude_km,
-    )
+    if use_tle:
+        from astropy.time import Time as AstropyTime
+        t0_astropy = AstropyTime(t_start, format="isot", scale="utc")
+        df_sched = propagate_orbit_from_state(
+            pos0_m     = pos0_eci_m,
+            vel0_m_s   = vel0_eci_m_s,
+            t0         = t0_astropy,
+            duration_s = duration_s,
+            dt_s       = SCHED_DT_S,
+        )
+    else:
+        df_sched = propagate_orbit(
+            t_start     = t_start,
+            duration_s  = duration_s,
+            dt_s        = SCHED_DT_S,
+            altitude_km = altitude_km,
+        )
 
     t0 = pd.Timestamp(t_start, tz="UTC")
     df_sched["elapsed_s"]    = (df_sched["epoch"] - t0).dt.total_seconds()
@@ -1512,8 +1686,22 @@ def main():
         f"PLATE_SCALE_RPX        : {PLATE_SCALE_RPX:.5e} rad/px",
         f"Source                 : real FlatSat cal image, H05 fit, chi2/nu=1.614",
     ]
+    if use_tle:
+        _readme_lines += [
+            "",
+            "--- TLE Source ---",
+            f"TLE file           : {tle_file_name}",
+            f"NORAD ID           : {sat.satnum}",
+            f"TLE epoch          : {tle_epoch_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC",
+            f"Inclination        : {inclination_deg_tle:.4f}°",
+            f"BSTAR drag         : {bstar_tle:.5e}",
+            f"Mean motion        : {mean_motion:.8f} rev/day",
+            f"T_orbit (TLE)      : {T_ORBIT_S:.1f} s  ({T_ORBIT_S/60:.2f} min)",
+            f"Altitude at epoch  : {altitude_km:.1f} km  (derived: |r| - R_earth)",
+        ]
     _readme_stem = (f"GEN01_{t_start[:10].replace('-', '')}_{duration_days:05.1f}d_"
-                    f"{windmap_tag}_seed{rng_seed:04d}")
+                    f"{windmap_tag}_seed{rng_seed:04d}"
+                    + ("_tle" if use_tle else ""))
     _readme_path = pathlib.Path(output_dir) / f"{_readme_stem}.txt"
     _readme_path.write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
 
@@ -1749,7 +1937,8 @@ def main():
 
     t_start_compact = t_start[:10].replace("-", "")
     stem     = (f"GEN01_{t_start_compact}_{duration_days:05.1f}d_"
-                f"{windmap_tag}_seed{rng_seed:04d}")
+                f"{windmap_tag}_seed{rng_seed:04d}"
+                + ("_tle" if use_tle else ""))
     npy_path = out_path / f"{stem}.npy"
     csv_path = out_path / f"{stem}.csv"
 
@@ -2175,9 +2364,38 @@ def main():
         _reason = "coverage_map.py not found" if not _scripts_cmap.exists() else "CSV not found"
         c30 = _chk("C30 coverage_map.py smoke test", True, f"skipped — {_reason}")
 
+    # C31 — SGP4 propagation returned no error (TLE mode only)
+    if use_tle:
+        r_km_mag = float(np.linalg.norm(pos0_eci_m)) / 1000.0
+        v_km_s_mag = float(np.linalg.norm(vel0_eci_m_s)) / 1000.0
+        c31 = _chk(
+            "C31 SGP4 error code == 0; |r| in [6500,7500] km; |v| in [6.5,8.5] km/s",
+            6500.0 <= r_km_mag <= 7500.0 and 6.5 <= v_km_s_mag <= 8.5,
+            f"|r|={r_km_mag:.1f} km, |v|={v_km_s_mag:.3f} km/s",
+        )
+    else:
+        c31 = _chk("C31 SGP4 error check", True, "skipped (legacy mode)")
+
+    # C32 — README sidecar contains "TLE Source" (TLE mode only)
+    if use_tle:
+        _readme_txt = _readme_path.read_text(encoding="utf-8")
+        c32 = _chk("C32 README sidecar contains 'TLE Source'",
+                   "TLE Source" in _readme_txt,
+                   "string not found in README")
+    else:
+        c32 = _chk("C32 README TLE section", True, "skipped (legacy mode)")
+
+    # C33 — output CSV filename ends with _tle.csv (TLE mode only)
+    if use_tle:
+        c33 = _chk("C33 output CSV filename ends with _tle.csv",
+                   str(csv_path).endswith("_tle.csv"),
+                   f"filename: {csv_path.name}")
+    else:
+        c33 = _chk("C33 _tle suffix check", True, "skipped (legacy mode)")
+
     all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
                     c14, c15, c16, c17, c18, c19, c20, c21, c25, c26, c27, c28,
-                    c29, c30])
+                    c29, c30, c31, c32, c33])
     print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
 
     print("\nG01 complete.")

@@ -284,3 +284,74 @@ def propagate_orbit(
     })
     df.index = np.arange(len(df))
     return df
+
+
+def propagate_orbit_from_state(
+    pos0_m: np.ndarray,
+    vel0_m_s: np.ndarray,
+    t0: Time,
+    duration_s: float,
+    dt_s: float = 10.0,
+) -> pd.DataFrame:
+    """
+    Propagate a WindCube orbit from an initial ECI state vector.
+
+    Uses two-body Keplerian stepping (same integrator as propagate_orbit).
+    The TLE supplies the accurate initial state; thereafter the two-body
+    approximation accumulates < 1 km positional error per day for a ~500 km SSO.
+
+    Parameters
+    ----------
+    pos0_m      : Initial ECI position, metres  (3,)
+    vel0_m_s    : Initial ECI velocity, m/s     (3,)
+    t0          : Astropy Time object, start epoch (UTC)
+    duration_s  : Simulation duration, seconds
+    dt_s        : Step size, seconds (default 10.0)
+
+    Returns
+    -------
+    pd.DataFrame — same schema as propagate_orbit():
+        epoch, lat_deg, lon_deg, alt_km,
+        pos_eci_x, pos_eci_y, pos_eci_z,
+        vel_eci_x, vel_eci_y, vel_eci_z, speed_ms
+    """
+    n_steps = int(duration_s // dt_s) + 1
+    pos = pos0_m.copy().astype(float)
+    vel = vel0_m_s.copy().astype(float)
+
+    pos_list = []
+    vel_list = []
+    epoch_list = []
+
+    for i in range(n_steps):
+        t_epoch = t0 + i * dt_s * u.s
+        epoch_list.append(pd.Timestamp(t_epoch.unix, unit="s", tz="UTC"))
+        pos_list.append(pos.copy())
+        vel_list.append(vel.copy())
+
+        # Two-body Keplerian step (leapfrog / symplectic Euler)
+        r = np.linalg.norm(pos)
+        acc = -EARTH_GRAV_PARAM_M3_S2 / r**3 * pos
+        vel = vel + acc * dt_s
+        pos = pos + vel * dt_s
+
+    pos_arr = np.array(pos_list)   # (N, 3) metres
+    vel_arr = np.array(vel_list)   # (N, 3) m/s
+
+    lats_deg, lons_deg, alts_km = _eci_to_geodetic_batch(pos_arr, epoch_list)
+
+    df = pd.DataFrame({
+        "epoch":     epoch_list,
+        "pos_eci_x": pos_arr[:, 0],
+        "pos_eci_y": pos_arr[:, 1],
+        "pos_eci_z": pos_arr[:, 2],
+        "vel_eci_x": vel_arr[:, 0],
+        "vel_eci_y": vel_arr[:, 1],
+        "vel_eci_z": vel_arr[:, 2],
+        "lat_deg":   lats_deg,
+        "lon_deg":   lons_deg,
+        "alt_km":    alts_km,
+        "speed_ms":  np.linalg.norm(vel_arr, axis=1),
+    })
+    df.index = np.arange(len(df))
+    return df
