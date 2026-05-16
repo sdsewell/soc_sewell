@@ -50,3 +50,12 @@ assessment until the relevant modules are fixed or installed.
 - NB00 HWM14WindMap (spec v2026-05-16): uses `pyhwm2014` backend (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
   T3 quiet-time and T4 storm wind maps verified at 250 km (84c5250).
   lgpedersen/hwm14 not compatible (numpy.distutils removed in NumPy 2.x; different API).
+
+- pyhwm2014 in windcube env (2026-05-16): windcube uses Python 3.11 (MSVC); pyhwm2014 required >=3.12.
+  Resolved by building hwm14.cp311-win_amd64.pyd with f2py --backend meson + hwm14_env gfortran.
+  DLL resolution: libgfortran-5.dll already in windcube Library\bin; sitecustomize.py added to
+  windcube Lib\ to call os.add_dll_directory(Library\bin) at startup.
+  pyhwm2014 made importable via pyhwm2014_dev.pth in windcube site-packages.
+  T3 quiet-time equator: U=-80.9 m/s V=-32.1 m/s PASS.
+  T4 storm 60N: U=+111.5 m/s V=-62.2 m/s PASS.
+  GEN01 wind map options 4 (HWM14 quiet) and 5 (HWM14 storm) operational in windcube.
