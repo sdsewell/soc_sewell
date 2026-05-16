@@ -266,12 +266,20 @@ def _make_plots(
     geom,
     image,
     derived_mode: str,
-    v_rel,
     v_corrected,
     path: Path,
     save_plots: bool,
+    airglow_result=None,
 ) -> None:
-    """Produce 5-panel diagnostic figure (2 rows × 3 cols, bottom row spans all)."""
+    """Produce diagnostic figure.
+
+    Layout: 3×3 grid.
+      Row 0: world map | LOS velocity budget | direction cosines
+      Row 1-2 col 0-1: raw FPI image (spans 2 rows × 2 cols)
+      Row 1 col 2: H06 fringe profile + model overlay (Panel A)
+      Row 2 col 2: H06 scan chi2 curve (Panel B)
+    Panels A and B are shown only when airglow_result is not None.
+    """
     if not _HAS_MPL:
         print("WARNING: matplotlib not available — skipping plots.")
         return
@@ -284,12 +292,14 @@ def _make_plots(
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
 
-    fig = plt.figure(figsize=(16, 9))
-    gs = GridSpec(2, 3, figure=fig, hspace=0.40, wspace=0.35)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax4 = fig.add_subplot(gs[1, :])
+    fig = plt.figure(figsize=(18, 12))
+    gs = GridSpec(3, 3, figure=fig, hspace=0.45, wspace=0.35)
+    ax1 = fig.add_subplot(gs[0, 0])       # world map
+    ax2 = fig.add_subplot(gs[0, 1])       # LOS velocity budget
+    ax3 = fig.add_subplot(gs[0, 2])       # direction cosines
+    ax4 = fig.add_subplot(gs[1:, :2])     # raw image (spans rows 1-2, cols 0-1)
+    axA = fig.add_subplot(gs[1, 2])       # Panel A: fringe profile + model
+    axB = fig.add_subplot(gs[2, 2])       # Panel B: scan chi2 curve
 
     # ── Panel 1: World map ────────────────────────────────────────────────────
     sc_lat = float(np.degrees(meta.spacecraft_latitude))
@@ -355,8 +365,8 @@ def _make_plots(
     ax3.set_title(f"Direction Cosines  ({derived_mode})")
     ax3.set_ylabel("Cosine value")
 
-    # ── Panel 4: Raw FPI image (spans full bottom row) ────────────────────────
-    im = ax4.imshow(image, cmap="gray", vmin=0, vmax=16383, aspect="auto")
+    # ── Panel 4: Raw FPI image (spans rows 1-2, cols 0-1) ────────────────────
+    im = ax4.imshow(image, cmap="gray", vmin=0, vmax=16383, aspect="equal")
     ax4.set_title(
         f"Raw FPI Image  exp={meta.exp_time/100:.1f}s  T={meta.ccd_temp1:.1f}°C"
     )
@@ -364,6 +374,46 @@ def _make_plots(
     ax4.set_ylabel("Row (px)")
     cb = plt.colorbar(im, ax=ax4, fraction=0.02, pad=0.01)
     cb.set_label("ADU")
+
+    # ── Panel A: H06 fringe profile + best-fit model overlay ─────────────────
+    if airglow_result is not None and airglow_result.profile_r_grid is not None:
+        r_px  = airglow_result.profile_r_grid
+        p_adu = airglow_result.profile_adu
+        m_adu = airglow_result.profile_model
+        axA.plot(r_px, p_adu, color="steelblue", lw=0.9, alpha=0.85,
+                 label="Data (dark-sub)")
+        if m_adu is not None:
+            axA.plot(r_px, m_adu, color="darkorange", lw=1.4, ls="--",
+                     label="H06 model")
+        axA.set_xlabel("Radius (px)")
+        axA.set_ylabel("ADU")
+        chi2_str = f"{airglow_result.chi2_red:.2f}"
+        R_str    = f"{airglow_result.Y_line:.0f}"
+        axA.set_title(f"H06 Fringe Fit  χ²={chi2_str}  Y={R_str}")
+        axA.legend(fontsize=7, loc="upper right")
+        axA.grid(True, alpha=0.2)
+    else:
+        axA.set_visible(False)
+
+    # ── Panel B: H06 scan chi2 curve ─────────────────────────────────────────
+    if airglow_result is not None and airglow_result.scan_v_ms is not None:
+        v_scan  = airglow_result.scan_v_ms
+        c2_scan = airglow_result.scan_chi2
+        axB.plot(v_scan, c2_scan, color="steelblue", lw=0.9)
+        axB.axvline(airglow_result.v_rel_ms, color="red", lw=1.2,
+                    label=f"v_rel={airglow_result.v_rel_ms:+.0f} m/s")
+        if geom is not None:
+            v_prior_val = -(geom.V_sc_LOS + geom.v_earth_LOS)
+            axB.axvline(v_prior_val, color="green", lw=1.2, ls="--",
+                        label=f"v_prior={v_prior_val:+.0f} m/s")
+        ambig_str = str(airglow_result.scan_ambiguous)
+        axB.set_title(f"H06 Scan  scan_ambig={ambig_str}")
+        axB.set_xlabel("v (m/s, Harding conv.)")
+        axB.set_ylabel("χ²/ν")
+        axB.legend(fontsize=7, loc="upper right")
+        axB.grid(True, alpha=0.2)
+    else:
+        axB.set_visible(False)
 
     fig.suptitle(
         f"WindCube FPI Single-Frame Diagnostic — {meta.utc_timestamp}",
@@ -722,10 +772,10 @@ def _run(args: argparse.Namespace, path: Path) -> None:
             geom=geom,
             image=image,
             derived_mode=derived_mode,
-            v_rel=v_rel,
             v_corrected=v_corrected,
             path=path,
             save_plots=args.save_plots,
+            airglow_result=airglow_result,
         )
 
 

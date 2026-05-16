@@ -182,6 +182,13 @@ class AirglowResult:
     # ── STM budget ───────────────────────────────────────────────────────
     budget_ok:      bool    # True if sigma_v_ms <= 9.8 m/s (STM budget)
 
+    # ── Diagnostic arrays (optional) ─────────────────────────────────────────
+    scan_v_ms:      np.ndarray | None = None   # scan velocities [m/s], Harding conv.
+    scan_chi2:      np.ndarray | None = None   # chi2 at each scan point
+    profile_r_grid: np.ndarray | None = None   # bin-centre radii used in fit [px]
+    profile_adu:    np.ndarray | None = None   # dark-subtracted profile [ADU]
+    profile_model:  np.ndarray | None = None   # best-fit model at profile bins [ADU]
+
 
 def load_cal_result(path: pathlib.Path) -> _CalResult:
     """Load H05 calibration result .npy dict and return _CalResult shim."""
@@ -289,8 +296,8 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
              f"(v_prior={v_los_prior_ms:+.0f} m/s, "
              f"eps_OI_exp={eps_OI_exp:.6f})")
-    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}, "
-             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s")
+    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-630.0e-9)/630.0e-9:+.0f}, "
+             f"{SPEED_OF_LIGHT_MS*(lc_hi-630.0e-9)/630.0e-9:+.0f}] m/s")
 
     r_fine   = np.linspace(0.0, r_max, n_fine)
     n_good   = len(r_good)
@@ -329,9 +336,9 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 
     log.info(f"  Scan best: λ_c = {lambda_c_best*1e9:.6f} nm  "
              f"chi2 = {chi2_min:.3f}  "
-             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.1f} m/s")
+             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-630.0e-9)/630.0e-9:+.1f} m/s")
 
-    return lambda_c_best, chi2_min, scan_ambiguous
+    return lambda_c_best, chi2_min, scan_ambiguous, scan, chi2_arr
 def _run_lm(r_good, prof_good, sigma_good, r_max, cal,
             fsr_oi, lc_init, Y_init, B_init, n_fine=500):
     """LM fit over {λ_c, Y_line, B_sci} with soft-bound penalties.
@@ -708,7 +715,8 @@ def run_airglow_inversion(
     # Bug note: the module-level FSR_OI_M uses ETALON_GAP_M (~20.0006 mm),
     # which differs from cal.t_m (~20.107 mm) by ~0.5%, causing a 25 m/s
     # FSR error.  Always compute FSR from cal.t_m here.
-    fsr_oi = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * cal.t_m)
+    # Use Harding lambda_0 = 630.0 nm (not NIST air 630.0304 nm).
+    fsr_oi = (630.0e-9) ** 2 / (2.0 * cal.t_m)
 
     # ── Restrict to r <= r_max ────────────────────────────────────────────
     in_range    = r_grid <= r_max
@@ -723,11 +731,12 @@ def run_airglow_inversion(
         )
 
     # ── Stage 1: λ_c scan ────────────────────────────────────────────────
-    lc_best, _chi2_scan, scan_ambiguous = _lambda_c_scan(
+    lc_best, _chi2_scan, scan_ambiguous, _scan_lc, _chi2_scan_arr = _lambda_c_scan(
         r_good, prof_good, sigma_good, r_max, cal, fsr_oi,
         n_scan=n_scan, n_fine=n_fine,
         v_los_prior_ms=v_los_prior_ms,
     )
+    scan_v_ms_arr = SPEED_OF_LIGHT_MS * (_scan_lc - 630.0e-9) / 630.0e-9
 
     # ── Initial Y_line, B_sci from analytic solve at lc_best ─────────────
     r_fine    = np.linspace(0.0, r_max, n_fine)
@@ -783,6 +792,11 @@ def run_airglow_inversion(
         n_bins         = len(r_good),
         fsr_oi_m       = fsr_oi,
         budget_ok      = budget_ok,
+        scan_v_ms      = scan_v_ms_arr,
+        scan_chi2      = _chi2_scan_arr,
+        profile_r_grid = r_good,
+        profile_adu    = prof_good,
+        profile_model  = model_bins,
     )
 
 
