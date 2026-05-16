@@ -707,7 +707,7 @@ class HWM14WindMap(GridWindMap):
         ap: float = 4.0,
         year: int = 2027,
     ):
-        import hwm14 as _hwm14
+        from pyhwm2014 import hwm14 as _hwm14
 
         self.alt_km = float(alt_km)
         self.day_of_year = int(day_of_year)
@@ -718,7 +718,7 @@ class HWM14WindMap(GridWindMap):
 
         iyd = year * 1000 + day_of_year
         sec = ut_hours * 3600.0
-        ap_array = [ap] * 7
+        ap_vec = np.array([0.0, float(ap)], dtype=np.float32)
 
         vz_grid = np.empty((180, 360), dtype=np.float32)
         vm_grid = np.empty((180, 360), dtype=np.float32)
@@ -726,7 +726,7 @@ class HWM14WindMap(GridWindMap):
         for i, lat in enumerate(self.LAT_GRID):
             for j, lon in enumerate(self.LON_GRID):
                 result = _hwm14.hwm14(
-                    iyd, sec, alt_km, lat, lon, -1, f107a, f107, 0, ap_array
+                    iyd, sec, alt_km, lat, lon, -1.0, f107a, f107, ap_vec
                 )
                 vm_grid[i, j] = result[0]   # HWM14 first output = meridional (northward)
                 vz_grid[i, j] = result[1]   # HWM14 second output = zonal (eastward)

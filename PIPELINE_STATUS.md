@@ -4,7 +4,7 @@
 | S02  | —           | impl   | n/a      | 2026-04-06    |
 | S03  | —           | v4     | 10/10    | 2026-04-29    |
 | S04  | —           | impl   | n/a      | 2026-04-06    |
-| S05  | NB00        | impl   | n/a      | 2026-04-06    |
+| S05  | NB00        | FIXED  | n/a      | 2026-05-16    |
 | S06  | NB01        | impl   | n/a      | 2026-04-06    |
 | S07  | NB02        | impl   | n/a      | 2026-04-06    |
 | S07b | NB03        | impl   | 8/8      | 2026-04-12    |
@@ -44,3 +44,8 @@
 
 These failures pre-date the S07b session and are excluded from regression
 assessment until the relevant modules are fixed or installed.
+
+## Notes
+
+- NB00 HWM14WindMap: uses `pyhwm2014` (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
+  lgpedersen/hwm14 not compatible (numpy.distutils removed in NumPy 2.x; different API).
