@@ -9,7 +9,6 @@ No tkinter.  No plt.show().  Safe to import in headless environments.
 from __future__ import annotations
 
 import datetime
-import importlib.util
 import pathlib
 from dataclasses import dataclass
 
@@ -55,22 +54,16 @@ from src.processing.H05_calibration_inversion_2026_05_12 import (  # noqa: F401
     _model_components,
 )
 
-# ── Tolansky — importlib required because filename contains a hyphen ──────────
+# ── Tolansky ─────────────────────────────────────────────────────────────────
 
-_TOLANSKY_PATH = pathlib.Path(__file__).parent / "tolansky_2026-05-13.py"
-_spec_t = importlib.util.spec_from_file_location("tolansky_2line", _TOLANSKY_PATH)
-_mod_t = importlib.util.module_from_spec(_spec_t)
-# Must be registered before exec_module so @dataclass can resolve cls.__module__
-import sys as _sys
-_sys.modules.setdefault("tolansky_2line", _mod_t)
-_spec_t.loader.exec_module(_mod_t)
-
-run_tolansky_2line      = _mod_t.run_tolansky_2line       # noqa: F841
-TolanskyResult          = _mod_t.TolanskyResult            # noqa: F841
-plot_tolansky_result    = _mod_t.plot_tolansky_result      # noqa: F841
-to_m05_priors           = _mod_t.to_m05_priors             # noqa: F841
-load_and_split_families = _mod_t.load_and_split_families   # noqa: F841
-
+from src.fpi.tolansky import (  # noqa: F401
+    run_tolansky_2line,
+    run_tolansky,
+    TolanskyResult,
+    plot_tolansky_result,
+    to_m05_priors,
+    load_and_split_families,
+)
 
 # ── New dataclasses ───────────────────────────────────────────────────────────
 
