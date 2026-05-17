@@ -112,66 +112,204 @@ def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
     plt.pause(0.05)
 
 
-# ── Figure S0 — Master dark QA ────────────────────────────────────────────────
+# ── Figure S0a — Dark frame gallery ──────────────────────────────────────────
 
-def _figure_s0(
+def _figure_s0a(
     raw_stack: np.ndarray,
-    master_dark: np.ndarray,
-    dark_sigma: np.ndarray,
     dark_paths: list[pathlib.Path],
     save_path: pathlib.Path,
 ) -> None:
-    """2×3 panel dark quality-assurance figure."""
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
-    fig.suptitle("Stage 0 — Master Dark QA", fontsize=13, fontweight="bold")
-
-    # [0,0] Mean of raw darks
-    mean_raw = raw_stack.mean(axis=0)
-    im00 = axes[0, 0].imshow(mean_raw, cmap="gray", origin="lower")
-    axes[0, 0].set_title("Mean of raw darks")
-    plt.colorbar(im00, ax=axes[0, 0], label="ADU")
-
-    # [0,1] Master dark (median)
-    im01 = axes[0, 1].imshow(master_dark, cmap="gray", origin="lower")
-    axes[0, 1].set_title("Master dark (median)")
-    plt.colorbar(im01, ax=axes[0, 1], label="ADU")
-
-    # [0,2] dark_sigma map
-    im02 = axes[0, 2].imshow(dark_sigma, cmap="plasma", origin="lower")
-    axes[0, 2].set_title("Dark σ map")
-    plt.colorbar(im02, ax=axes[0, 2], label="ADU")
-
-    # [1,0] Row-mean profile
-    row_mean = master_dark.mean(axis=1)
-    axes[1, 0].plot(row_mean, np.arange(len(row_mean)), color="steelblue")
-    axes[1, 0].set_xlabel("Mean ADU")
-    axes[1, 0].set_ylabel("Row index")
-    axes[1, 0].set_title("Row-mean profile")
-    axes[1, 0].invert_yaxis()
-
-    # [1,1] Histogram of master dark ADU values
-    axes[1, 1].hist(master_dark.ravel(), bins=50, color="steelblue", edgecolor="none")
-    axes[1, 1].set_yscale("log")
-    axes[1, 1].set_xlabel("ADU")
-    axes[1, 1].set_ylabel("Count")
-    axes[1, 1].set_title("Master dark ADU distribution")
-
-    # [1,2] Summary text
-    txt = (
-        f"N frames  : {len(dark_paths)}\n"
-        f"Mean ADU  : {master_dark.mean():.1f}\n"
-        f"Max σ     : {dark_sigma.max():.2f} ADU\n"
-        f"Date      : {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-        "Files:\n" + "\n".join(f"  {p.name}" for p in dark_paths)
+    """
+    2 rows × N_darks columns: raw images (top) and log-scale histograms (bottom).
+    Shared colour scale and shared histogram x-range across all frames.
+    """
+    N = len(dark_paths)
+    fig, axes = plt.subplots(2, N, figsize=(3.2 * N, 6), squeeze=False)
+    fig.suptitle(
+        f"Stage 0 — Raw dark frames  |  N={N}",
+        fontsize=11, fontweight="bold",
     )
-    axes[1, 2].axis("off")
-    axes[1, 2].text(
-        0.05, 0.95, txt,
-        transform=axes[1, 2].transAxes,
-        va="top", ha="left", fontsize=8,
-        fontfamily="monospace",
+
+    # Shared scales
+    vlo = float(np.percentile(raw_stack, 1))
+    vhi = float(np.percentile(raw_stack, 99))
+    g_min = float(raw_stack.min())
+    g_max = float(raw_stack.max())
+
+    for i, (frame, path) in enumerate(zip(raw_stack, dark_paths)):
+        # Row 0: image
+        ax_im = axes[0, i]
+        im = ax_im.imshow(frame, cmap="gray", origin="lower",
+                          vmin=vlo, vmax=vhi, aspect="auto")
+        ax_im.set_title(path.name, fontsize=8)
+        ax_im.set_xlabel("x (px)", fontsize=8)
+        ax_im.set_ylabel("y (px)", fontsize=8)
+        ax_im.tick_params(labelsize=6)
+        if i == N - 1:
+            plt.colorbar(im, ax=ax_im, label="ADU", shrink=0.85)
+
+        # Row 1: histogram (log y, shared x range)
+        ax_h = axes[1, i]
+        ax_h.hist(frame.ravel(), bins=60, range=(g_min, g_max),
+                  color="steelblue", edgecolor="none", alpha=0.8)
+        ax_h.set_yscale("log")
+        ax_h.set_xlabel("ADU", fontsize=8)
+        ax_h.set_ylabel("Pixel count", fontsize=8)
+        ax_h.set_title(f"μ={frame.mean():.0f}  σ={frame.std():.1f}", fontsize=8)
+        ax_h.tick_params(labelsize=6)
+
+    fig.tight_layout()
+    _save_and_show(fig, save_path)
+
+
+# ── Figure S0b — Master dark ──────────────────────────────────────────────────
+
+def _figure_s0b(
+    master_dark: np.ndarray,
+    dark_sigma: np.ndarray,
+    dark_paths: list[pathlib.Path],
+    master_dark_path: pathlib.Path,
+    save_path: pathlib.Path,
+) -> None:
+    """
+    1×3: master dark image | histogram with median line | statistics table.
+    suptitle shows the full saved-file path.
+    """
+    H, W = master_dark.shape
+    median_val = float(np.median(master_dark))
+
+    fig = plt.figure(figsize=(13, 4))
+    fig.suptitle(
+        f"Stage 0 — Master dark\n{master_dark_path}",
+        fontsize=10, fontweight="bold",
     )
-    axes[1, 2].set_title("Summary")
+
+    gs = gridspec.GridSpec(1, 3, figure=fig, wspace=0.38)
+
+    # [0] Master dark image
+    ax_im = fig.add_subplot(gs[0, 0])
+    vlo = float(np.percentile(master_dark, 1))
+    vhi = float(np.percentile(master_dark, 99))
+    im = ax_im.imshow(master_dark, cmap="gray", origin="lower",
+                      vmin=vlo, vmax=vhi, aspect="auto")
+    ax_im.set_title("Master dark (median stack)", fontsize=9)
+    ax_im.set_xlabel("x (px)"); ax_im.set_ylabel("y (px)")
+    plt.colorbar(im, ax=ax_im, label="ADU", shrink=0.85)
+
+    # [1] Histogram with median marker
+    ax_h = fig.add_subplot(gs[0, 1])
+    ax_h.hist(master_dark.ravel(), bins=60,
+              color="steelblue", edgecolor="none", alpha=0.8)
+    ax_h.set_yscale("log")
+    ax_h.axvline(median_val, color="red", linewidth=1.4, linestyle="--",
+                 label=f"median = {median_val:.1f} ADU")
+    ax_h.set_xlabel("ADU")
+    ax_h.set_ylabel("Pixel count")
+    ax_h.set_title("Histogram", fontsize=9)
+    ax_h.legend(fontsize=8)
+
+    # [2] Statistics table
+    ax_t = fig.add_subplot(gs[0, 2])
+    ax_t.axis("off")
+    rows = [
+        ["N frames stacked", str(len(dark_paths))],
+        ["Mean ADU",         f"{master_dark.mean():.2f}"],
+        ["Median ADU",       f"{median_val:.2f}"],
+        ["Std ADU",          f"{master_dark.std():.2f}"],
+        ["Min ADU",          f"{master_dark.min():.0f}"],
+        ["Max ADU",          f"{master_dark.max():.0f}"],
+        ["Max sigma (px)",   f"{dark_sigma.max():.2f}"],
+        ["Shape",            f"{H} × {W} px"],
+    ]
+    tbl = ax_t.table(
+        cellText=rows,
+        colLabels=["Statistic", "Value"],
+        cellLoc="left",
+        loc="upper left",
+        edges="open",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    ax_t.set_title("Summary statistics", fontsize=9)
+
+    fig.tight_layout()
+    _save_and_show(fig, save_path)
+
+
+# ── Figure S1 — Cal frame gallery (combined) ─────────────────────────────────
+
+def _figure_s1_cal_gallery(
+    raw_frames: list[np.ndarray],
+    ds_frames: list[np.ndarray],
+    centres: list,
+    cal_paths: list[pathlib.Path],
+    master_dark_path: pathlib.Path,
+    save_path: pathlib.Path,
+) -> None:
+    """
+    3 rows × N_cals columns:
+      Row 0 — raw cal frames (shared vmin/vmax)
+      Row 1 — dark-subtracted frames (shared vmin/vmax) + yellow '+' at centre
+      Row 2 — histograms of dark-subtracted frames (log y, shared x range)
+    """
+    N = len(cal_paths)
+    fig, axes = plt.subplots(3, N, figsize=(3.2 * N, 9), squeeze=False)
+    fig.suptitle(
+        f"Stage 1 — Cal frames ({N} frames)  |  master dark: {master_dark_path.name}",
+        fontsize=11, fontweight="bold",
+    )
+
+    raw_stack = np.stack(raw_frames)
+    ds_stack  = np.stack(ds_frames)
+
+    # Shared image scales
+    raw_vlo = float(np.percentile(raw_stack, 1))
+    raw_vhi = float(np.percentile(raw_stack, 99))
+    ds_vlo  = float(np.percentile(ds_stack, 1))
+    ds_vhi  = float(np.percentile(ds_stack, 99))
+
+    # Shared histogram x range
+    ds_min = float(ds_stack.min())
+    ds_max = float(ds_stack.max())
+
+    for i, (raw, ds, ctr, path) in enumerate(
+        zip(raw_frames, ds_frames, centres, cal_paths)
+    ):
+        # Row 0: raw cal
+        ax0 = axes[0, i]
+        ax0.imshow(raw, cmap="gray", origin="lower",
+                   vmin=raw_vlo, vmax=raw_vhi, aspect="auto")
+        ax0.set_title(path.name, fontsize=8)
+        ax0.set_xlabel("x (px)", fontsize=8)
+        ax0.set_ylabel("y (px)", fontsize=8)
+        ax0.tick_params(labelsize=6)
+
+        # Row 1: dark-subtracted + centre marker
+        ax1 = axes[1, i]
+        ax1.imshow(ds, cmap="gray", origin="lower",
+                   vmin=ds_vlo, vmax=ds_vhi, aspect="auto")
+        ax1.plot(ctr.cx, ctr.cy, "+", color="yellow",
+                 markersize=10, markeredgewidth=1.5)
+        ax1.set_title(
+            f"Dark-subtracted\ncx={ctr.cx:.1f}  cy={ctr.cy:.1f}",
+            fontsize=7,
+        )
+        ax1.set_xlabel("x (px)", fontsize=8)
+        ax1.set_ylabel("y (px)", fontsize=8)
+        ax1.tick_params(labelsize=6)
+
+        # Row 2: histogram of dark-subtracted (log y, shared x)
+        ax2 = axes[2, i]
+        ax2.hist(ds.ravel(), bins=60, range=(ds_min, ds_max),
+                 color="darkorange", edgecolor="none", alpha=0.8)
+        ax2.set_yscale("log")
+        ax2.axvline(0.0, color="red", linewidth=1.0, linestyle="--",
+                    label="zero")
+        ax2.set_xlabel("ADU", fontsize=8)
+        ax2.set_ylabel("Pixel count", fontsize=8)
+        ax2.tick_params(labelsize=6)
+        if i == 0:
+            ax2.legend(fontsize=7)
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -732,10 +870,10 @@ def main() -> None:
     print(f"  Saved: {dark_npy}")
 
     def _s0():
-        _figure_s0(
-            raw_stack, master_dark, dark_sigma, dark_paths,
-            cal_dir / "fig_S0_master_dark.png",
-        )
+        _figure_s0a(raw_stack, dark_paths,
+                    cal_dir / "S0a_dark_gallery.png")
+        _figure_s0b(master_dark, dark_sigma, dark_paths, dark_npy,
+                    cal_dir / "S0b_master_dark.png")
     run_with_error_handling(0, _s0)
 
     # ── Stage 1: Cal dark subtraction and centre finding ──────────────────────
@@ -744,19 +882,32 @@ def main() -> None:
     cal_paths = select_files("Select neon cal .bin frames")
     print(f"  {len(cal_paths)} cal frame(s) selected.")
 
-    centres: list[cal.CentreResult] = []
-    ds_frames: list[np.ndarray] = []
+    # Phase 1a: load + dark subtract all frames (fast — no scipy optimisation yet)
     raw_frames: list[np.ndarray] = []
-
+    ds_frames:  list[np.ndarray] = []
     for path in cal_paths:
-        print(f"  Processing: {path.name}")
+        raw = cal.load_bin_frame(path)
+        ds  = cal.dark_subtract(raw, master_dark)
+        raw_frames.append(raw)
+        ds_frames.append(ds)
+        print(f"  Dark-subtracted: {path.name}")
 
-        def _s1(path=path):
-            raw = cal.load_bin_frame(path)
-            ds  = cal.dark_subtract(raw, master_dark)
+    # Phase 1b: centre finding per frame (slower — Nelder-Mead)
+    _FALLBACK_CTR = cal.CentreResult(
+        cx=138.0, cy=130.0,
+        sigma_cx=1.0, sigma_cy=1.0,
+        two_sigma_cx=2.0, two_sigma_cy=2.0,
+        cost_at_min=0.0,
+        grid_cx=138.0, grid_cy=130.0, grid_cost=0.0,
+    )
+    centres: list[cal.CentreResult] = []
+
+    for raw, ds, path in zip(raw_frames, ds_frames, cal_paths):
+        stem = path.stem
+        print(f"  Finding centre: {path.name}")
+
+        def _s1_centre(raw=raw, ds=ds, path=path, stem=stem):
             ctr = cal.find_centre(ds)
-
-            stem = path.stem
             np.savez(
                 path.parent / f"{stem}_center.npz",
                 cx=np.array(ctr.cx),
@@ -766,28 +917,20 @@ def main() -> None:
             )
             print(f"    cx={ctr.cx:.3f}  cy={ctr.cy:.3f}  "
                   f"σ_cx={ctr.sigma_cx:.3f}  σ_cy={ctr.sigma_cy:.3f}")
+            _figure_s1(raw, ds, ctr, stem,
+                       path.parent / f"{stem}_S1_centre.png")
+            return ctr
 
-            _figure_s1(
-                raw, ds, ctr, stem,
-                path.parent / f"{stem}_fig_S1.png",
-            )
-            return raw, ds, ctr
+        result = run_with_error_handling(1, _s1_centre)
+        centres.append(result if result is not None else _FALLBACK_CTR)
 
-        result = run_with_error_handling(1, _s1)
-        if result is None:
-            raw_frames.append(np.zeros((260, 276)))
-            ds_frames.append(np.zeros((260, 276)))
-            centres.append(cal.CentreResult(
-                cx=138.0, cy=130.0,
-                sigma_cx=1.0, sigma_cy=1.0,
-                two_sigma_cx=2.0, two_sigma_cy=2.0,
-                cost_at_min=0.0,
-                grid_cx=138.0, grid_cy=130.0, grid_cost=0.0,
-            ))
-        else:
-            raw_frames.append(result[0])
-            ds_frames.append(result[1])
-            centres.append(result[2])
+    # Combined gallery — all cals / dark-subtracted / histograms in one figure
+    def _s1_gallery():
+        _figure_s1_cal_gallery(
+            raw_frames, ds_frames, centres, cal_paths, dark_npy,
+            cal_dir / "S1_cal_gallery.png",
+        )
+    run_with_error_handling(1, _s1_gallery)
 
     # ── Stage 2: Annular integration ─────────────────────────────────────────
     stage_banner(2, "Annular integration → radial profile")
