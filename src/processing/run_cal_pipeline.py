@@ -20,6 +20,7 @@ Output
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
 import sys
 import traceback
@@ -27,7 +28,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
@@ -106,11 +107,12 @@ def run_with_error_handling(stage_n: int, fn):
 
 
 def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
-    """Save figure as PNG then display it; block until window closed."""
+    """Save PNG then open in Windows photo viewer; press Enter to continue."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
-    print(f"  Saved: {path.name}  (close the figure window to continue)")
-    plt.show(block=True)
     plt.close(fig)
+    print(f"  Saved: {path}")
+    os.startfile(str(path))
+    input("  [Figure opened in photo viewer — press Enter to continue...]")
 
 
 # ── Figure S0a — Dark frame gallery ──────────────────────────────────────────
@@ -1037,11 +1039,12 @@ def main() -> None:
                   f"α={tol.alpha_mean:.8f} rad/px  "
                   f"ε_a={tol.eps_a:.6f}")
 
-            cal.plot_tolansky_result(
-                tol,
-                save_path=path.parent / f"{stem}_fig_S4.png",
-            )
-            plt.show(block=True)
+            tol_fig_path = path.parent / f"{stem}_fig_S4.png"
+            cal.plot_tolansky_result(tol, save_path=tol_fig_path)
+            plt.close("all")
+            print(f"  Saved: {tol_fig_path}")
+            os.startfile(str(tol_fig_path))
+            input("  [Figure opened in photo viewer — press Enter to continue...]")
             return tol
 
         result = run_with_error_handling(4, _s4)
