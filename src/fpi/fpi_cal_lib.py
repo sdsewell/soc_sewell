@@ -148,7 +148,6 @@ def load_bin_frame(
 
 def make_master_dark(
     paths: list[pathlib.Path],
-    shape: tuple[int, int] = (260, 276),
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Median-stack N dark frames.
@@ -158,7 +157,7 @@ def make_master_dark(
     master_dark : float64 (H, W) — median per pixel
     dark_sigma  : float64 (H, W) — std per pixel
     """
-    frames = np.stack([load_bin_frame(p, shape) for p in paths])
+    frames = np.stack([load_bin_frame(p) for p in paths])
     return np.median(frames, axis=0), frames.std(axis=0)
 
 
@@ -194,7 +193,7 @@ def build_radial_profile(
     image: np.ndarray,
     cx: float,
     cy: float,
-    n_bins: int = 150,
+    n_bins: int = 1500,  # 8 px²/bin — required for clean Gaussian fits (~43 bins/FWHM)
     r_max_px: float = 110.0,
 ) -> FringeProfile:
     """
@@ -217,7 +216,7 @@ def fit_peaks(
     fp: FringeProfile,
     distance: int = 5,
     prominence: float = 100.0,
-    fit_half_window: int = 6,
+    fit_half_window: int = 56,  # ±452 px² at 1500 bins — covers ±3σ without bleeding
 ) -> list[PeakFitR2]:
     """
     Detect peaks in radial profile and Gaussian-fit each in r² domain.
