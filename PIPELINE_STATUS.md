@@ -33,7 +33,7 @@
 | G01  | GEN01 mission-dataset-syn | PASS v16 | smoke+HWM14 e2e | 2026-05-16 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
-| CAL01 | fpi_cal_lib + run_cal_pipeline | PARTIAL (S0-S1 figures fixed, S2-S6 not yet verified) | smoke 5/5 | 2026-05-16 |
+| CAL01 | fpi_cal_lib + run_cal_pipeline | PARTIAL (S0-S1 figures fixed + blocking; S2-S6 not yet verified) | smoke 5/5 | 2026-05-16 |
 
 ## Known pre-existing test failures (not introduced by current work)
 

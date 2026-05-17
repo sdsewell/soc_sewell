@@ -106,10 +106,9 @@ def run_with_error_handling(stage_n: int, fn):
 
 
 def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
-    """Save figure as PNG and display non-blocking."""
+    """Save figure as PNG, then block until the user closes the window."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.show(block=False)
-    plt.pause(0.05)
+    plt.show(block=True)
 
 
 # ── Figure S0a — Dark frame gallery ──────────────────────────────────────────
@@ -1040,8 +1039,7 @@ def main() -> None:
                 tol,
                 save_path=path.parent / f"{stem}_fig_S4.png",
             )
-            plt.show(block=False)
-            plt.pause(0.05)
+            plt.show(block=True)
             return tol
 
         result = run_with_error_handling(4, _s4)
