@@ -106,9 +106,11 @@ def run_with_error_handling(stage_n: int, fn):
 
 
 def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
-    """Save figure as PNG, then block until the user closes the window."""
+    """Save figure as PNG then display it; block until window closed."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path.name}  (close the figure window to continue)")
     plt.show(block=True)
+    plt.close(fig)
 
 
 # ── Figure S0a — Dark frame gallery ──────────────────────────────────────────
@@ -1130,8 +1132,6 @@ def main() -> None:
     print("  CALIBRATION PIPELINE COMPLETE")
     print(f"  Output: {cal_dir / 'orbit_cal_result.npy'}")
     print(f"{'='*60}\n")
-
-    plt.show(block=True)
 
 
 if __name__ == "__main__":
