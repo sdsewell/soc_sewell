@@ -323,11 +323,14 @@ def run_with_error_handling(stage_n: int, fn):
         return None
 
 
-def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
-    """Save figure as PNG then display it; blocks until the window is closed."""
+def _save_and_show(fig: plt.Figure, path: pathlib.Path, show: bool = True) -> None:
+    """Save figure as PNG; optionally display it."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
     print(f"  Saved: {path.name}")
-    plt.show(block=True)
+    if show:
+        plt.show(block=True)
+    else:
+        print(f"  [display suppressed — open {path.name} to view]")
     plt.close(fig)
 
 
@@ -395,8 +398,7 @@ def _figure_s0a(
 
         save_path = save_dir / f"S0a_{fpath.stem}.png"
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {save_path.name}")
-        plt.show(block=True)
+        print(f"  Saved: {save_path.name}  [display suppressed — open file to view]")
         plt.close(fig)
 
 
@@ -420,10 +422,31 @@ def _figure_s0b(
         fontsize=10, fontweight="bold",
     )
 
-    _plot_image(axes[0], fig, img_u16, "Master dark (median stack)")
-    _plot_hist(axes[1], img_u16, "Histogram")
+    _MAX14 = 2**14 - 1  # 16 383 — full 14-bit sensor range
+    im = axes[0].imshow(img_u16, cmap="gray", origin="lower",
+                        vmin=0, vmax=_MAX14, aspect="equal")
+    cb = fig.colorbar(im, ax=axes[0], fraction=0.046, pad=0.04)
+    cb.set_label("Counts  (ADU)", fontsize=8)
+    axes[0].set_title(
+        f"Master dark (median stack)\n"
+        f"{img_u16.shape[0]} rows × {img_u16.shape[1]} cols  |  "
+        f"ADU [{img_u16.min()}, {img_u16.max()}]  |  "
+        f"mean {img_u16.mean():.0f}  std {img_u16.std():.1f}",
+        fontsize=8.5,
+    )
+    axes[0].set_xlabel("Column  (pixel)", fontsize=8)
+    axes[0].set_ylabel("Row  (pixel)", fontsize=8)
+    axes[0].tick_params(labelsize=7)
+
+    axes[1].hist(img_u16.ravel(), bins=256, range=(0, _MAX14),
+                 color="steelblue", edgecolor="none")
+    axes[1].set_xlim(0, _MAX14)
     axes[1].axvline(median_val, color="red", linewidth=1.4, linestyle="--",
                     label=f"median = {median_val:.1f} ADU")
+    axes[1].set_title("Histogram", fontsize=9)
+    axes[1].set_xlabel("ADU  (uint16 counts)", fontsize=8)
+    axes[1].set_ylabel("Number of pixels", fontsize=8)
+    axes[1].tick_params(labelsize=7)
     axes[1].legend(fontsize=7)
 
     axes[2].axis("off")
@@ -523,7 +546,7 @@ def _figure_s1_cal_gallery(
             ax2.legend(fontsize=7)
 
     fig.tight_layout()
-    _save_and_show(fig, save_path)
+    _save_and_show(fig, save_path, show=False)
 
 
 # ── Figure S1 — Centre-finder QA (per frame) ─────────────────────────────────
@@ -665,7 +688,7 @@ def _figure_s1(
     ax12.set_title("Fine variance vs cy")
     ax12.legend(fontsize=7)
 
-    _save_and_show(fig, save_path)
+    _save_and_show(fig, save_path, show=False)
 
 
 # ── Figure S2 — Radial profiles (combined) ───────────────────────────────────
@@ -677,7 +700,8 @@ def _figure_s2(
 ) -> None:
     """Combined figure: 1 column × N rows, one row per radial profile."""
     n = len(fps)
-    fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 6 * n),
+                             constrained_layout=True, squeeze=False)
     fig.suptitle("Stage 2 — Radial Profiles", fontsize=12, fontweight="bold")
 
     for row, (fp, stem) in enumerate(zip(fps, stems)):
@@ -705,7 +729,6 @@ def _figure_s2(
         )
         ax.legend(fontsize=8)
 
-    fig.tight_layout()
     _save_and_show(fig, save_path)
 
 
