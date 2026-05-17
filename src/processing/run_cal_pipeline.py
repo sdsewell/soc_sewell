@@ -668,47 +668,43 @@ def _figure_s1(
     _save_and_show(fig, save_path)
 
 
-# ── Figure S2 — Radial profile (per frame) ───────────────────────────────────
+# ── Figure S2 — Radial profiles (combined) ───────────────────────────────────
 
 def _figure_s2(
-    fp: "cal.FringeProfile",
-    stem: str,
+    fps: list,
+    stems: list[str],
     save_path: pathlib.Path,
 ) -> None:
-    """
-    Radial profile vs r² matching annular_reduction.py style:
-    - Data points with error bars
-    - ±2σ SEM shaded band
-    - Title shows n_bins, r_max, n_peaks placeholder
-    """
-    fig, ax = plt.subplots(figsize=(14, 5))
-    fig.suptitle(f"Stage 2 — Radial Profile: {stem}", fontsize=12, fontweight="bold")
+    """Combined figure: 1 column × N rows, one row per radial profile."""
+    n = len(fps)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
+    fig.suptitle("Stage 2 — Radial Profiles", fontsize=12, fontweight="bold")
 
-    good = ~fp.masked
-    r2   = fp.r2_grid[good]
-    prof = fp.profile[good]
-    sig  = fp.sigma_profile[good]
-    sig  = np.where(sig > 0, sig, np.nan)
+    for row, (fp, stem) in enumerate(zip(fps, stems)):
+        ax = axes[row, 0]
+        good = ~fp.masked
+        r2   = fp.r2_grid[good]
+        prof = fp.profile[good]
+        sig  = fp.sigma_profile[good]
+        sig  = np.where(sig > 0, sig, np.nan)
 
-    # ±2σ SEM shaded band
-    ax.fill_between(r2, prof - 2*sig, prof + 2*sig,
-                    alpha=0.25, color="steelblue", label="±2σ SEM")
-    # ±1σ SEM shaded band (darker)
-    ax.fill_between(r2, prof - sig, prof + sig,
-                    alpha=0.40, color="steelblue", label="±1σ SEM")
-    # Data line + markers
-    ax.plot(r2, prof, color="steelblue", linewidth=0.8,
-            marker="o", markersize=2, zorder=3, label="Mean ADU")
+        ax.fill_between(r2, prof - 2*sig, prof + 2*sig,
+                        alpha=0.25, color="steelblue", label="±2σ SEM")
+        ax.fill_between(r2, prof - sig, prof + sig,
+                        alpha=0.40, color="steelblue", label="±1σ SEM")
+        ax.plot(r2, prof, color="steelblue", linewidth=0.8,
+                marker="o", markersize=2, zorder=3, label="Mean ADU")
 
-    n_bins = int(good.sum())
-    ax.set_xlabel("r²  (pixel²)", fontsize=10)
-    ax.set_ylabel("Mean intensity  (ADU)", fontsize=10)
-    ax.set_title(
-        f"Radial profile vs r²  ({n_bins}/{len(fp.r2_grid)} bins)  |  "
-        f"r_max = {fp.r_max_px:.0f} px",
-        fontsize=9,
-    )
-    ax.legend(fontsize=8)
+        n_bins = int(good.sum())
+        ax.set_xlabel("r²  (pixel²)", fontsize=10)
+        ax.set_ylabel("Mean intensity  (ADU)", fontsize=10)
+        ax.set_title(
+            f"{stem}  —  radial profile vs r²  ({n_bins}/{len(fp.r2_grid)} bins)  |  "
+            f"r_max = {fp.r_max_px:.0f} px",
+            fontsize=9,
+        )
+        ax.legend(fontsize=8)
+
     fig.tight_layout()
     _save_and_show(fig, save_path)
 
@@ -1222,12 +1218,22 @@ def main() -> None:
             )
             print(f"    Bins: {fp.n_bins}  r_max: {fp.r_max_px:.1f} px  "
                   f"sparse: {fp.sparse_bins}")
-
-            _figure_s2(fp, stem, path.parent / f"{stem}_fig_S2.png")
             return fp
 
         result = run_with_error_handling(2, _s2)
         profiles.append(result)
+
+    # Combined S2 figure — all frames in one column-per-row layout
+    def _s2_combined():
+        valid = [
+            (fp, path.stem)
+            for fp, path in zip(profiles, cal_paths)
+            if fp is not None
+        ]
+        if valid:
+            fps_v, stems_v = zip(*valid)
+            _figure_s2(list(fps_v), list(stems_v), cal_dir / "S2_combined.png")
+    run_with_error_handling(2, _s2_combined)
 
     # ── Stage 3: Peak finding and Gaussian fits ───────────────────────────────
     stage_banner(3, "Peak finding and Gaussian fits")
