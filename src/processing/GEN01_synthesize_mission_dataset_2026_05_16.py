@@ -121,6 +121,7 @@ BINNING_CFG = {
         plate_scale   = PLATE_SCALE_RPX,          # 1.6071e-4 rad/px
         rows_meta     = 260,
         cols_meta     = 276,
+        n_bin         = 4,      # 2×2: 4 physical pixels per output pixel
     ),
     1: dict(
         nx_pix        = 512,
@@ -132,6 +133,7 @@ BINNING_CFG = {
         plate_scale   = PLATE_SCALE_RPX / 2.0,   # 8.036e-5 rad/px
         rows_meta     = 528,
         cols_meta     = 552,
+        n_bin         = 1,      # 1×1: 1 physical pixel per output pixel
     ),
 }
 
@@ -150,13 +152,13 @@ SCI_PEAK_ADU     = 5000
 CAL_PEAK_ADU     = 12000
 REL_638          = 0.5087         # Real FlatSat H05 fit: ne_ratio (weak/strong amplitude ratio)
 
-# Dark model — doubling interval (shared by science and dark generators)
-T_DOUBLE_C       = 6.5
-
-# CCD97 physical noise model (Teledyne e2v datasheet)
-GAIN_E_PER_ADU   = 1.0            # e-/ADU, OSH mode
-READ_NOISE_E     = 2.2            # e- rms, OSH 50 kHz CDS
-QDD_AT_20C       = 400.0          # e-/pix/s dark reference, CCD97 datasheet
+# CCD97 physical noise model — FM measured values (WIND-XCAM-RE-00035)
+GAIN_E_PER_DN    = 3.29           # e-/DN, PTC measurement, FM CCD 17195, signal_sample=7, 2x2
+READ_NOISE_E     = 4.61           # e- rms, back-clocked overscan, FM CCD 17195
+QDD_AT_20C       = 400.0          # e-/px/s dark reference at 20°C, CCD97 datasheet
+T_REF_K          = 293.15         # reference temperature for dark rate formula (K)
+BIAS_DN          = 275.0          # bias pedestal (DN), estimated from WIND-XCAM-RE-00035 Fig.6
+BIAS_SIGMA_DN    = 2.0            # pixel-to-pixel bias scatter (DN)
 
 
 # ---------------------------------------------------------------------------
@@ -545,11 +547,12 @@ def _generate_science_pixels(v_rel_ms: float, rng,
     I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
     signal = SCI_PEAK_ADU * I_airy
     # Physical noise: Poisson photon + temperature-dependent dark current
-    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp_c - 20.0) / 6.5)
-    dark_mean = max(dark_rate * exp_time_s, 0.0)
+    # Uses same e2v T^3 formula as _generate_dark_pixels (H00 spec)
+    n_bin_sci  = 4                    # science frames always 2x2 binned
+    dark_e_sci = max(_dark_rate_e_per_px_s(ccd_temp_c) * exp_time_s * n_bin_sci, 0.0)
     photon = rng.poisson(np.clip(signal, 0, None))
-    dark   = rng.poisson(np.full(signal.shape, dark_mean))
-    image  = np.round(photon + dark + OFFSET_ADU).astype(np.float32)
+    dark   = rng.poisson(np.full(signal.shape, dark_e_sci / GAIN_E_PER_DN))
+    image  = np.round(photon + dark + BIAS_DN).astype(np.float32)
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
 
 
@@ -573,18 +576,57 @@ def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float,
     photon = rng.poisson(np.clip(signal, 0, None))
     # Cal frames: photon-noise limited per H02; no dark term needed
     # (120s exposure would add ~6 ADU/px at -20°C; omitted for simplicity)
-    image  = np.round(photon + OFFSET_ADU).astype(np.float32)
+    image  = np.round(photon + BIAS_DN).astype(np.float32)
     return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _dark_rate_e_per_px_s(t_ccd_c: float) -> float:
+    """
+    CCD97 dark current temperature dependence (e2v datasheet Fig. 3).
+    Q_d / Q_do = f(T) / f(T_ref),  f(T) = T^3 * exp(-9080 / T)
+    Returns e-/px/s for a single physical pixel at t_ccd_c (°C).
+    Source: H00_dark_frame_synthesis spec, WIND-XCAM-RE-00035.
+    """
+    T     = t_ccd_c + 273.15
+    f     = lambda t: t ** 3 * np.exp(-9080.0 / t)
+    return QDD_AT_20C * f(T) / f(T_REF_K)
 
 
 def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
-                           nx: int, ny: int) -> np.ndarray:
-    """Generate dark frame based on CCD temperature and exposure time."""
-    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp1_c - 20.0) / T_DOUBLE_C)
-    mean_dark = max(dark_rate * exp_time_s, 0.0)
-    dark_arr  = rng.poisson(mean_dark, size=(ny, nx)).astype(float)
-    image     = np.round(dark_arr + OFFSET_ADU).astype(np.float32)
-    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+                           nx: int, ny: int, n_bin: int = 4) -> np.ndarray:
+    """
+    Generate dark frame pixel array using the H00_dark_frame_synthesis model.
+
+    Parameters
+    ----------
+    ccd_temp1_c : CCD focal plane temperature (°C), from ImageMetadata.ccd_temp1
+    exp_time_s  : exposure time (s), from ImageMetadata
+    rng         : numpy random Generator
+    nx, ny      : pixel array dimensions (cols, rows) — image region only, no header
+    n_bin       : physical pixels per output pixel (4 for 2×2, 1 for 1×1)
+
+    Returns
+    -------
+    uint16 array shape (ny, nx), values in [0, 16383]
+
+    Physics (H00 spec §2, WIND-XCAM-RE-00035):
+      gain        = 3.29 e-/DN  (PTC, FM CCD 17195)
+      read noise  = 4.61 e- rms (back-clocked overscan, FM CCD 17195)
+      dark rate   = e2v T³·exp(-9080/T) formula (not doubling-time approximation)
+      bias        = 275 DN (estimated from Fig. 6 back-clocked image)
+    """
+    # Dark current: rate per physical pixel × n_bin physical pixels × exposure time
+    dark_e_mean = max(_dark_rate_e_per_px_s(ccd_temp1_c) * exp_time_s * n_bin, 0.0)
+
+    # Draw dark electrons (Poisson), read noise (Gaussian), bias (Gaussian)
+    dark_e  = rng.poisson(dark_e_mean, size=(ny, nx)).astype(float)
+    read_e  = rng.normal(0.0, READ_NOISE_E, size=(ny, nx))
+    bias_dn = rng.normal(BIAS_DN, BIAS_SIGMA_DN, size=(ny, nx))
+
+    # Convert electrons to DN and add bias
+    signal_dn = (dark_e + read_e) / GAIN_E_PER_DN
+    frame_dn  = np.round(signal_dn + bias_dn).astype(np.float32)
+    return np.clip(frame_dn, 0, ADU_MAX).astype(np.uint16)
 
 
 def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
@@ -600,7 +642,8 @@ def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
     elif frame_type == "cal":
         return _generate_cal_pixels(rng, nx, ny, plate_scale, cx, cy)
     elif frame_type == "dark":
-        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny)
+        n_bin = binning_cfg.get("n_bin", 4)
+        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny, n_bin)
     else:
         raise ValueError(f"Unknown frame_type: {frame_type!r}")
 
