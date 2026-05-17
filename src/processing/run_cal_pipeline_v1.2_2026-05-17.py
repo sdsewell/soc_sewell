@@ -830,14 +830,27 @@ def _figure_s3b(
 ) -> None:
     """
     5×4 panel of individual peak Gaussian fits in r² domain.
-    Window is tight around each peak — half the inter-peak spacing.
-    Fit window shaded in green; initial guess shown in gold, LM fit in family colour.
+
+    For each peak, shows:
+      - Full data with error bars in the display window
+      - Green shading = the actual fit window used by fpi_cal_lib.fit_peaks()
+      - Gold dashed = initial guess (centred on raw peak, width from fit result)
+      - Coloured solid = LM fit curve, drawn with the fit's own background B
+      - Subplot annotation: A, μ, σ, B, χ² from the fit
+
+    Display window extends from the raw peak position to ±40% of the
+    same-family FSR — wide enough to show both flanks clearly.
+    Fit window (green) extends ±fit_half_window bins from the raw peak.
+
+    Parameters are owned by fpi_cal_lib.py because they are physics constraints
+    (FSR, peak width, bin sampling) not display preferences.  run_cal_pipeline
+    is a UI wrapper that should display what the library computed, not re-derive it.
     """
     n_peaks = len(peaks)
     ncols   = 4
     nrows   = max(1, (n_peaks + ncols - 1) // ncols)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(9 * ncols, 3.5 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(9 * ncols, 4.2 * nrows))
     fig.suptitle(f"Stage 3b — Individual Peak Fits: {stem}",
                  fontsize=11, fontweight="bold")
     axes_flat = np.array(axes).ravel()
@@ -847,16 +860,22 @@ def _figure_s3b(
     sig_all  = fp.sigma_profile
     good_all = ~fp.masked
 
-    # Estimate half inter-peak spacing once from median FSR
+    # ── Derive actual fit window half-width from bin spacing ─────────────────
+    # This mirrors fpi_cal_lib.fit_peaks(fit_half_window=56) exactly.
+    r2_good      = r2_all[good_all]
+    r2_bin_size  = float(np.median(np.diff(r2_good))) if len(r2_good) > 1 else 8.0
+    FIT_HW_BINS  = 56              # must match fpi_cal_lib.fit_peaks() default
+    fit_half_r2  = FIT_HW_BINS * r2_bin_size   # px² either side of peak
+
+    # ── Half same-family FSR — governs display window ─────────────────────────
     r2_peaks = np.array([p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))
                          else p.r2_raw_px2 for p in peaks])
-    same_fam_diffs = np.diff(r2_peaks[::2])          # every-other = same family
+    same_fam_diffs = np.diff(r2_peaks[::2])
     half_fsr = float(np.median(same_fam_diffs)) / 2.0 if len(same_fam_diffs) else 300.0
+    disp_hw  = half_fsr * 0.48          # display window: ±48% of half-FSR
 
-    # Bin spacing in r² — used to reconstruct the fit window (default fit_half_window=6)
-    r2_good = r2_all[good_all]
-    r2_bin_size = float(np.median(np.diff(r2_good))) if len(r2_good) > 1 else 1.0
-    fit_half_r2 = 6 * r2_bin_size  # matches fit_peaks(fit_half_window=6)
+    def _gauss(x, A, mu, sig, B):
+        return A * np.exp(-0.5 * ((x - mu) / sig) ** 2) + B
 
     for i, p in enumerate(peaks):
         ax = axes_flat[i]
@@ -864,70 +883,101 @@ def _figure_s3b(
         lam_str   = f"{_LAM_A_NM:.1f}" if line_id == 0.0 else f"{_LAM_B_NM:.1f}"
         fit_color = "royalblue" if line_id == 0.0 else "darkorange"
 
-        # Tight window: ±half_fsr/2 around the peak centre
-        peak_r2  = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2)) \
-                   else p.r2_raw_px2
-        r2_lo    = peak_r2 - half_fsr * 0.55
-        r2_hi    = peak_r2 + half_fsr * 0.55
+        peak_r2 = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))                   else p.r2_raw_px2
+
+        # ── Display window (wide — shows full peak shape) ─────────────────
+        r2_lo    = peak_r2 - disp_hw
+        r2_hi    = peak_r2 + disp_hw
         mask_win = (r2_all >= r2_lo) & (r2_all <= r2_hi) & good_all
         r2_win   = r2_all[mask_win]
         pr_win   = prof_all[mask_win]
         sg_win   = sig_all[mask_win]
         valid    = np.isfinite(sg_win) & (sg_win > 0)
 
-        bg_col = "#d4edda" if p.fit_ok else "#f8d7da"
-        ax.set_facecolor(bg_col)
+        # ── Background: flank minima inside the fit window ───────────────
+        # Reconstruct same B0 logic as fpi_cal_lib pass-2 refit
+        fit_mask = (r2_all >= p.r2_raw_px2 - fit_half_r2) &                    (r2_all <= p.r2_raw_px2 + fit_half_r2) & good_all
+        fit_idx  = np.where(fit_mask)[0]
+        if len(fit_idx) >= 4:
+            fw = prof_all[fit_idx]
+            q  = max(1, len(fw) // 4)
+            B_draw = float(min(np.min(fw[:q]), np.min(fw[-q:])))
+        else:
+            B_draw = float(np.percentile(pr_win, 10)) if len(pr_win) else 0.0
 
-        # Fit window shading (drawn first so it sits behind data)
-        fit_lo = p.r2_raw_px2 - fit_half_r2
-        fit_hi = p.r2_raw_px2 + fit_half_r2
-        ax.axvspan(fit_lo, fit_hi, alpha=0.20, color="limegreen", zorder=0,
-                   label="Fit window" if i == 0 else None)
+        # Panel background colour
+        ax.set_facecolor("#d4edda" if p.fit_ok else "#f8d7da")
 
+        # ── Green fit window shading ──────────────────────────────────────
+        ax.axvspan(p.r2_raw_px2 - fit_half_r2,
+                   p.r2_raw_px2 + fit_half_r2,
+                   alpha=0.22, color="limegreen", zorder=0,
+                   label="Fit window")
+
+        # ── Data with error bars ──────────────────────────────────────────
         if valid.any():
             ax.errorbar(r2_win[valid], pr_win[valid], yerr=sg_win[valid],
                         fmt=".", markersize=4, color="black", ecolor="gray",
                         linewidth=0.5, zorder=2, label="Data")
 
-        bg = float(np.percentile(pr_win, 15)) if len(pr_win) else 0.0
-        r2_fine = np.linspace(r2_lo, r2_hi, 120)
+        r2_fine = np.linspace(r2_lo, r2_hi, 200)
 
-        # Initial guess — use the amplitude from the fit result (better than raw)
-        amp_guess = p.amplitude_adu
-        w_guess   = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2)) \
-                    else half_fsr / 4.0
-        guess = amp_guess * np.exp(
-            -0.5 * ((r2_fine - p.r2_raw_px2) / max(w_guess, 1.0)) ** 2
-        )
-        ax.plot(r2_fine, guess + bg, "--", color="gold",
-                linewidth=0.9, label="Guess", zorder=3)
+        # ── Initial guess (centred on fitted position, width from fit) ────
+        w_guess = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2))                   else fit_half_r2 / 3.0
+        A_guess = p.amplitude_adu if p.fit_ok else float(
+            np.max(pr_win) - B_draw if len(pr_win) else 100)
+        guess_curve = _gauss(r2_fine, A_guess, p.r2_raw_px2, w_guess, B_draw)
+        ax.plot(r2_fine, guess_curve, "--", color="gold",
+                linewidth=1.0, label="Guess", zorder=3)
 
-        # LM fit curve
+        # ── LM fit curve (uses B_draw reconstructed from fit window) ─────
         if p.fit_ok and np.isfinite(p.r2_fit_px2) and np.isfinite(p.width_r2_px2):
-            fit_curve = p.amplitude_adu * np.exp(
-                -0.5 * ((r2_fine - p.r2_fit_px2) / p.width_r2_px2) ** 2
-            ) + bg
-            ax.plot(r2_fine, fit_curve, color=fit_color, linewidth=1.2,
+            fit_curve = _gauss(r2_fine,
+                               p.amplitude_adu, p.r2_fit_px2,
+                               p.width_r2_px2,  B_draw)
+            ax.plot(r2_fine, fit_curve, color=fit_color, linewidth=1.5,
                     label="Fit", zorder=4)
 
-        chi2_str = f"{p.reduced_chi2:.2f}" if np.isfinite(p.reduced_chi2) else "—"
-        r2f_str  = f"{p.r2_fit_px2:.1f}" if np.isfinite(p.r2_fit_px2) else "—"
-        sr2_str  = f"{p.sigma_r2_fit_px2:.2f}" if np.isfinite(p.sigma_r2_fit_px2) else "—"
+        # ── Annotate fit parameters ───────────────────────────────────────
+        r2f  = p.r2_fit_px2        if np.isfinite(p.r2_fit_px2)        else float("nan")
+        sr2  = p.sigma_r2_fit_px2  if np.isfinite(p.sigma_r2_fit_px2)  else float("nan")
+        wid  = p.width_r2_px2      if np.isfinite(p.width_r2_px2)      else float("nan")
+        amp  = p.amplitude_adu
+        chi2 = p.reduced_chi2      if np.isfinite(p.reduced_chi2)      else float("nan")
+
         ax.set_title(
-            f"Peak {i}  λ={lam_str} nm\n"
-            f"r²={r2f_str} ± {sr2_str}  χ²={chi2_str}",
+            f"Peak {i}  λ={lam_str} nm
+"
+            f"r²={r2f:.1f} ± {sr2:.2f}  χ²={chi2:.2f}",
             fontsize=7,
         )
+        # Parameter box in lower right
+        param_txt = (
+            f"A = {amp:.0f} ADU
+"
+            f"μ = {r2f:.1f} px²
+"
+            f"σ = {wid:.1f} px²
+"
+            f"B = {B_draw:.0f} ADU"
+        )
+        ax.text(0.97, 0.04, param_txt,
+                transform=ax.transAxes, fontsize=5.5,
+                verticalalignment="bottom", horizontalalignment="right",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          alpha=0.75, edgecolor="gray"))
+
         ax.set_xlabel("r²  (px²)", fontsize=6)
-        ax.set_ylabel("ADU", fontsize=6)
+        ax.set_ylabel("ADU",       fontsize=6)
         ax.tick_params(labelsize=5)
-        ax.legend(fontsize=5)
+        ax.legend(fontsize=5, loc="upper left")
 
     for j in range(n_peaks, len(axes_flat)):
         axes_flat[j].set_visible(False)
 
     fig.tight_layout()
     _save_and_show(fig, save_path, show=show)
+
 
 
 # ── Table S3 — Peak fit summary ───────────────────────────────────────────────
