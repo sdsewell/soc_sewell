@@ -826,17 +826,18 @@ def _figure_s3b(
     peak_arr: np.ndarray,
     stem: str,
     save_path: pathlib.Path,
+    show: bool = True,
 ) -> None:
     """
     5×4 panel of individual peak Gaussian fits in r² domain.
     Window is tight around each peak — half the inter-peak spacing.
-    Initial guess shown in gold, LM fit in family colour.
+    Fit window shaded in green; initial guess shown in gold, LM fit in family colour.
     """
     n_peaks = len(peaks)
     ncols   = 4
     nrows   = max(1, (n_peaks + ncols - 1) // ncols)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(9 * ncols, 3.5 * nrows))
     fig.suptitle(f"Stage 3b — Individual Peak Fits: {stem}",
                  fontsize=11, fontweight="bold")
     axes_flat = np.array(axes).ravel()
@@ -852,6 +853,11 @@ def _figure_s3b(
     same_fam_diffs = np.diff(r2_peaks[::2])          # every-other = same family
     half_fsr = float(np.median(same_fam_diffs)) / 2.0 if len(same_fam_diffs) else 300.0
 
+    # Bin spacing in r² — used to reconstruct the fit window (default fit_half_window=6)
+    r2_good = r2_all[good_all]
+    r2_bin_size = float(np.median(np.diff(r2_good))) if len(r2_good) > 1 else 1.0
+    fit_half_r2 = 6 * r2_bin_size  # matches fit_peaks(fit_half_window=6)
+
     for i, p in enumerate(peaks):
         ax = axes_flat[i]
         line_id   = peak_arr[i, 9]
@@ -859,7 +865,8 @@ def _figure_s3b(
         fit_color = "royalblue" if line_id == 0.0 else "darkorange"
 
         # Tight window: ±half_fsr/2 around the peak centre
-        peak_r2  = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))                    else p.r2_raw_px2
+        peak_r2  = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2)) \
+                   else p.r2_raw_px2
         r2_lo    = peak_r2 - half_fsr * 0.55
         r2_hi    = peak_r2 + half_fsr * 0.55
         mask_win = (r2_all >= r2_lo) & (r2_all <= r2_hi) & good_all
@@ -871,6 +878,12 @@ def _figure_s3b(
         bg_col = "#d4edda" if p.fit_ok else "#f8d7da"
         ax.set_facecolor(bg_col)
 
+        # Fit window shading (drawn first so it sits behind data)
+        fit_lo = p.r2_raw_px2 - fit_half_r2
+        fit_hi = p.r2_raw_px2 + fit_half_r2
+        ax.axvspan(fit_lo, fit_hi, alpha=0.20, color="limegreen", zorder=0,
+                   label="Fit window" if i == 0 else None)
+
         if valid.any():
             ax.errorbar(r2_win[valid], pr_win[valid], yerr=sg_win[valid],
                         fmt=".", markersize=4, color="black", ecolor="gray",
@@ -881,7 +894,8 @@ def _figure_s3b(
 
         # Initial guess — use the amplitude from the fit result (better than raw)
         amp_guess = p.amplitude_adu
-        w_guess   = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2))                     else half_fsr / 4.0
+        w_guess   = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2)) \
+                    else half_fsr / 4.0
         guess = amp_guess * np.exp(
             -0.5 * ((r2_fine - p.r2_raw_px2) / max(w_guess, 1.0)) ** 2
         )
@@ -913,7 +927,7 @@ def _figure_s3b(
         axes_flat[j].set_visible(False)
 
     fig.tight_layout()
-    _save_and_show(fig, save_path)
+    _save_and_show(fig, save_path, show=show)
 
 
 # ── Table S3 — Peak fit summary ───────────────────────────────────────────────
@@ -1263,6 +1277,7 @@ def main() -> None:
 
     peak_arrays: list[np.ndarray] = []
     peaks_list:  list             = []
+    s3b_shown   = [False]  # show only the first S3b figure
 
     for fp, path in zip(profiles, cal_paths):
         if fp is None:
@@ -1272,7 +1287,7 @@ def main() -> None:
         stem = path.stem
         print(f"  Fitting peaks: {path.name}")
 
-        def _s3(fp=fp, path=path, stem=stem):
+        def _s3(fp=fp, path=path, stem=stem, s3b_shown=s3b_shown):
             peaks    = cal.fit_peaks(fp)
             peak_arr = cal.peaks_to_array(peaks)
 
@@ -1280,8 +1295,11 @@ def main() -> None:
             print(f"    {len(peaks)} peaks detected.")
             _print_table_s3(peaks, peak_arr)
 
+            show_s3b = not s3b_shown[0]
             _figure_s3b(fp, peaks, peak_arr, stem,
-                        path.parent / f"{stem}_fig_S3b.png")
+                        path.parent / f"{stem}_fig_S3b.png",
+                        show=show_s3b)
+            s3b_shown[0] = True
             return peaks, peak_arr
 
         result = run_with_error_handling(3, _s3)
