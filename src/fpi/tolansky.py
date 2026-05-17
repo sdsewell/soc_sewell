@@ -1,5 +1,5 @@
 """
-Module:      tolansky_2026-05-13.py
+Module:      tolansky.py
 Spec:        docs/specs/S13_tolansky_2026-05-13.md
 References:  Vaughan (1989) The Fabry-Perot Interferometer, §3.5.2
                Equations (3.83)-(3.97) -- rectangular array / Benoit method
