@@ -675,24 +675,40 @@ def _figure_s2(
     stem: str,
     save_path: pathlib.Path,
 ) -> None:
-    """Single panel: I vs r²."""
-    fig, ax = plt.subplots(figsize=(10, 5))
+    """
+    Radial profile vs r² matching annular_reduction.py style:
+    - Data points with error bars
+    - ±2σ SEM shaded band
+    - Title shows n_bins, r_max, n_peaks placeholder
+    """
+    fig, ax = plt.subplots(figsize=(14, 5))
     fig.suptitle(f"Stage 2 — Radial Profile: {stem}", fontsize=12, fontweight="bold")
 
     good = ~fp.masked
-    sig = np.where(fp.sigma_profile[good] > 0, fp.sigma_profile[good], np.nan)
+    r2   = fp.r2_grid[good]
+    prof = fp.profile[good]
+    sig  = fp.sigma_profile[good]
+    sig  = np.where(sig > 0, sig, np.nan)
 
-    ax.errorbar(
-        fp.r2_grid[good], fp.profile[good], yerr=sig,
-        fmt="none", ecolor="lightgray", linewidth=0.5, zorder=1,
+    # ±2σ SEM shaded band
+    ax.fill_between(r2, prof - 2*sig, prof + 2*sig,
+                    alpha=0.25, color="steelblue", label="±2σ SEM")
+    # ±1σ SEM shaded band (darker)
+    ax.fill_between(r2, prof - sig, prof + sig,
+                    alpha=0.40, color="steelblue", label="±1σ SEM")
+    # Data line + markers
+    ax.plot(r2, prof, color="steelblue", linewidth=0.8,
+            marker="o", markersize=2, zorder=3, label="Mean ADU")
+
+    n_bins = int(good.sum())
+    ax.set_xlabel("r²  (pixel²)", fontsize=10)
+    ax.set_ylabel("Mean intensity  (ADU)", fontsize=10)
+    ax.set_title(
+        f"Radial profile vs r²  ({n_bins}/{len(fp.r2_grid)} bins)  |  "
+        f"r_max = {fp.r_max_px:.0f} px",
+        fontsize=9,
     )
-    ax.plot(fp.r2_grid[good], fp.profile[good],
-            color="steelblue", linewidth=0.8,
-            marker="o", markersize=3, zorder=2)
-    ax.set_xlabel("r² (px²)")
-    ax.set_ylabel("Intensity (ADU)")
-    ax.set_title("I vs r² (fringes equally spaced)")
-
+    ax.legend(fontsize=8)
     fig.tight_layout()
     _save_and_show(fig, save_path)
 
@@ -706,7 +722,13 @@ def _figure_s3a(
     stems: list[str],
     save_path: pathlib.Path,
 ) -> None:
-    """Combined figure: 1 column × N rows, one row per radial image."""
+    """
+    One row per cal frame. Matches annular_reduction.py style:
+    - ±2σ SEM shaded band behind profile
+    - Red vertical lines at each peak centroid
+    - Gaussian fit overlaid at each peak in family colour
+    - Title shows peak count and status
+    """
     n = len(fps)
     fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
     fig.suptitle("Stage 3a — Peak Detection", fontsize=12, fontweight="bold")
@@ -716,42 +738,62 @@ def _figure_s3a(
     ):
         ax = axes[row, 0]
         good = ~fp.masked
-        r2 = fp.r2_grid[good]
+        r2   = fp.r2_grid[good]
         prof = fp.profile[good]
+        sig  = fp.sigma_profile[good]
+        sig  = np.where(sig > 0, sig, np.nan)
 
+        bg_level = float(np.percentile(prof, 10))
+
+        # Shaded SEM bands
+        ax.fill_between(r2, prof - 2*sig, prof + 2*sig,
+                        alpha=0.20, color="steelblue")
+        ax.fill_between(r2, prof - sig, prof + sig,
+                        alpha=0.35, color="steelblue")
+        # Profile line
         ax.plot(r2, prof, color="steelblue", linewidth=0.8,
-                marker="o", markersize=3, label="Profile")
+                marker="o", markersize=2, zorder=3, label="Profile")
 
+        seen_labels: set = set()
         for i, p in enumerate(peaks):
-            line_id = peak_arr[i, 9]
-            color = "royalblue" if line_id == 0.0 else "darkorange"
-            label_a = f"{_LAM_A_NM:.1f} nm" if line_id == 0.0 else None
-            label_b = f"{_LAM_B_NM:.1f} nm" if line_id == 1.0 else None
-            ax.axvline(
-                p.r2_raw_px2, color=color, linewidth=0.7, linestyle="--",
-                alpha=0.7, label=label_a or label_b,
-            )
-            if p.fit_ok and np.isfinite(p.r2_fit_px2):
+            line_id  = peak_arr[i, 9]
+            color    = "royalblue" if line_id == 0.0 else "darkorange"
+            lam_str  = f"{_LAM_A_NM:.1f} nm" if line_id == 0.0 else f"{_LAM_B_NM:.1f} nm"
+
+            # Red vertical centroid line
+            ax.axvline(p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))
+                       else p.r2_raw_px2,
+                       color="red", linewidth=0.8, linestyle="-", alpha=0.6)
+
+            # Dashed family colour line at raw position
+            lbl = lam_str if lam_str not in seen_labels else None
+            ax.axvline(p.r2_raw_px2, color=color, linewidth=0.6,
+                       linestyle="--", alpha=0.5, label=lbl)
+            if lbl:
+                seen_labels.add(lam_str)
+
+            # Gaussian fit overlay
+            if p.fit_ok and np.isfinite(p.r2_fit_px2) and np.isfinite(p.width_r2_px2):
                 r2_span = np.linspace(
                     p.r2_fit_px2 - 3 * p.width_r2_px2,
                     p.r2_fit_px2 + 3 * p.width_r2_px2,
-                    60,
+                    80,
                 )
                 gauss = p.amplitude_adu * np.exp(
                     -0.5 * ((r2_span - p.r2_fit_px2) / p.width_r2_px2) ** 2
                 )
-                bg = float(np.percentile(prof, 10))
-                ax.plot(r2_span, gauss + bg, color=color, linewidth=1.0, alpha=0.8)
+                ax.plot(r2_span, gauss + bg_level, color=color,
+                        linewidth=1.2, alpha=0.85, zorder=4)
 
-        handles, labels = ax.get_legend_handles_labels()
-        seen: dict[str, object] = {}
-        for h, lbl in zip(handles, labels):
-            if lbl not in seen:
-                seen[lbl] = h
-        ax.legend(list(seen.values()), list(seen.keys()), fontsize=8)
-        ax.set_xlabel("r² (px²)")
-        ax.set_ylabel("Intensity (ADU)")
-        ax.set_title(f"{stem} — radial profile with detected peaks")
+        n_ok   = sum(1 for p in peaks if p.fit_ok)
+        ax.set_xlabel("r²  (px²)", fontsize=9)
+        ax.set_ylabel("Intensity  (ADU)", fontsize=9)
+        ax.set_title(
+            f"{stem} — radial profile with detected peaks  |  "
+            f"{n_ok}/{len(peaks)} fits OK",
+            fontsize=9,
+        )
+        ax.legend(fontsize=8)
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -766,80 +808,89 @@ def _figure_s3b(
     stem: str,
     save_path: pathlib.Path,
 ) -> None:
-    """5×4 panel of individual peak Gaussian fits in r² domain."""
+    """
+    5×4 panel of individual peak Gaussian fits in r² domain.
+    Window is tight around each peak — half the inter-peak spacing.
+    Initial guess shown in gold, LM fit in family colour.
+    """
     n_peaks = len(peaks)
-    ncols = 4
-    nrows = max(1, (n_peaks + ncols - 1) // ncols)
+    ncols   = 4
+    nrows   = max(1, (n_peaks + ncols - 1) // ncols)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows))
-    fig.suptitle(f"Stage 3b — Individual Peak Fits: {stem}", fontsize=12, fontweight="bold")
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows))
+    fig.suptitle(f"Stage 3b — Individual Peak Fits: {stem}",
+                 fontsize=11, fontweight="bold")
     axes_flat = np.array(axes).ravel()
 
-    good = ~fp.masked
     r2_all   = fp.r2_grid
     prof_all = fp.profile
     sig_all  = fp.sigma_profile
+    good_all = ~fp.masked
+
+    # Estimate half inter-peak spacing once from median FSR
+    r2_peaks = np.array([p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))
+                         else p.r2_raw_px2 for p in peaks])
+    same_fam_diffs = np.diff(r2_peaks[::2])          # every-other = same family
+    half_fsr = float(np.median(same_fam_diffs)) / 2.0 if len(same_fam_diffs) else 300.0
 
     for i, p in enumerate(peaks):
         ax = axes_flat[i]
-        line_id = peak_arr[i, 9]
-        lam_str = f"{_LAM_A_NM:.1f}" if line_id == 0.0 else f"{_LAM_B_NM:.1f}"
+        line_id   = peak_arr[i, 9]
+        lam_str   = f"{_LAM_A_NM:.1f}" if line_id == 0.0 else f"{_LAM_B_NM:.1f}"
         fit_color = "royalblue" if line_id == 0.0 else "darkorange"
 
-        # Extract window around this peak
-        hw = 10
-        lo = max(0, p.peak_idx - hw)
-        hi = min(len(r2_all) - 1, p.peak_idx + hw)
-        r2_win   = r2_all[lo:hi + 1]
-        pr_win   = prof_all[lo:hi + 1]
-        sg_win   = sig_all[lo:hi + 1]
-        valid    = np.isfinite(sg_win) & (sg_win > 0) & good[lo:hi + 1]
+        # Tight window: ±half_fsr/2 around the peak centre
+        peak_r2  = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))                    else p.r2_raw_px2
+        r2_lo    = peak_r2 - half_fsr * 0.55
+        r2_hi    = peak_r2 + half_fsr * 0.55
+        mask_win = (r2_all >= r2_lo) & (r2_all <= r2_hi) & good_all
+        r2_win   = r2_all[mask_win]
+        pr_win   = prof_all[mask_win]
+        sg_win   = sig_all[mask_win]
+        valid    = np.isfinite(sg_win) & (sg_win > 0)
 
         bg_col = "#d4edda" if p.fit_ok else "#f8d7da"
         ax.set_facecolor(bg_col)
 
-        ax.errorbar(
-            r2_win[valid], pr_win[valid],
-            yerr=sg_win[valid],
-            fmt=".", markersize=3, color="black", ecolor="gray",
-            linewidth=0.5, zorder=2,
+        if valid.any():
+            ax.errorbar(r2_win[valid], pr_win[valid], yerr=sg_win[valid],
+                        fmt=".", markersize=4, color="black", ecolor="gray",
+                        linewidth=0.5, zorder=2, label="Data")
+
+        bg = float(np.percentile(pr_win, 15)) if len(pr_win) else 0.0
+        r2_fine = np.linspace(r2_lo, r2_hi, 120)
+
+        # Initial guess — use the amplitude from the fit result (better than raw)
+        amp_guess = p.amplitude_adu
+        w_guess   = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2))                     else half_fsr / 4.0
+        guess = amp_guess * np.exp(
+            -0.5 * ((r2_fine - p.r2_raw_px2) / max(w_guess, 1.0)) ** 2
         )
+        ax.plot(r2_fine, guess + bg, "--", color="gold",
+                linewidth=0.9, label="Guess", zorder=3)
 
-        # Initial guess (gold dashed)
-        if np.isfinite(p.r2_raw_px2):
-            r2_fine = np.linspace(r2_win[0], r2_win[-1], 100)
-            guess_width = (r2_win[-1] - r2_win[0]) / 6.0
-            guess = p.amplitude_adu * np.exp(
-                -0.5 * ((r2_fine - p.r2_raw_px2) / max(guess_width, 1.0)) ** 2
-            )
-            bg = float(np.percentile(pr_win, 20))
-            ax.plot(r2_fine, guess + bg, "--", color="gold",
-                    linewidth=0.8, label="Guess", zorder=3)
-
-        # LM fit (red)
+        # LM fit curve
         if p.fit_ok and np.isfinite(p.r2_fit_px2) and np.isfinite(p.width_r2_px2):
-            r2_fine = np.linspace(r2_win[0], r2_win[-1], 100)
-            bg = float(np.percentile(pr_win, 20))
             fit_curve = p.amplitude_adu * np.exp(
                 -0.5 * ((r2_fine - p.r2_fit_px2) / p.width_r2_px2) ** 2
             ) + bg
-            ax.plot(r2_fine, fit_curve, color="red", linewidth=1.0,
+            ax.plot(r2_fine, fit_curve, color=fit_color, linewidth=1.2,
                     label="Fit", zorder=4)
 
         chi2_str = f"{p.reduced_chi2:.2f}" if np.isfinite(p.reduced_chi2) else "—"
         r2f_str  = f"{p.r2_fit_px2:.1f}" if np.isfinite(p.r2_fit_px2) else "—"
         sr2_str  = f"{p.sigma_r2_fit_px2:.2f}" if np.isfinite(p.sigma_r2_fit_px2) else "—"
         ax.set_title(
-            f"Peak {i}  λ={lam_str} nm\n"
-            f"r²={r2f_str}±{sr2_str}  χ²={chi2_str}",
-            fontsize=6.5,
+            f"Peak {i}  λ={lam_str} nm
+"
+            f"r²={r2f_str} ± {sr2_str}  χ²={chi2_str}",
+            fontsize=7,
         )
-        ax.set_xlabel("r² (px²)", fontsize=6)
+        ax.set_xlabel("r²  (px²)", fontsize=6)
         ax.set_ylabel("ADU", fontsize=6)
         ax.tick_params(labelsize=5)
         ax.legend(fontsize=5)
 
-    # Hide unused axes
     for j in range(n_peaks, len(axes_flat)):
         axes_flat[j].set_visible(False)
 
@@ -850,22 +901,30 @@ def _figure_s3b(
 # ── Table S3 — Peak fit summary ───────────────────────────────────────────────
 
 def _print_table_s3(peaks: list, peak_arr: np.ndarray) -> None:
-    """Print per-peak Gaussian fit summary to stdout."""
-    hdr = (f"{'#':>3}  {'λ (nm)':>8}  {'r²_fit (px²)':>14}  "
-           f"{'σ_r²':>8}  {'Amp (ADU)':>10}  {'width':>8}  {'χ²_red':>8}  status")
-    print("\n" + hdr)
+    """Print per-peak Gaussian fit summary matching the annular_reduction.py table."""
+    col_w = [5, 12, 16, 16, 14, 12, 12, 10, 10, 8]
+    hdr = (f"{'Peak':>5}  {'λ (nm)':>8}  {'r²_raw (px²)':>13}  "
+           f"{'r²_fit (px²)':>13}  {'+/-sig r² (px²)':>15}  "
+           f"{'r_der (px)':>11}  {'+/-sig_r (px)':>13}  "
+           f"{'Amp (ADU)':>10}  {'Width σr²':>10}  {'χ²_red':>7}")
+    print("
+" + hdr)
     print("-" * len(hdr))
     for i, p in enumerate(peaks):
         line_id = peak_arr[i, 9]
-        lam = _LAM_A_NM if line_id == 0.0 else _LAM_B_NM
-        r2f = f"{p.r2_fit_px2:.2f}" if np.isfinite(p.r2_fit_px2) else "NaN"
-        sr2 = f"{p.sigma_r2_fit_px2:.3f}" if np.isfinite(p.sigma_r2_fit_px2) else "NaN"
-        wid = f"{p.width_r2_px2:.2f}" if np.isfinite(p.width_r2_px2) else "NaN"
-        chi = f"{p.reduced_chi2:.3f}" if np.isfinite(p.reduced_chi2) else "NaN"
-        status = "OK" if p.fit_ok else "FAIL"
+        lam     = _LAM_A_NM if line_id == 0.0 else _LAM_B_NM
+        r2f     = p.r2_fit_px2        if np.isfinite(p.r2_fit_px2)        else float("nan")
+        sr2     = p.sigma_r2_fit_px2  if np.isfinite(p.sigma_r2_fit_px2)  else float("nan")
+        r_der   = np.sqrt(r2f)        if np.isfinite(r2f) and r2f >= 0   else float("nan")
+        sig_r   = sr2 / (2 * r_der)   if (np.isfinite(sr2) and np.isfinite(r_der)
+                                          and r_der > 0) else float("nan")
+        wid     = p.width_r2_px2      if np.isfinite(p.width_r2_px2)      else float("nan")
+        chi     = p.reduced_chi2      if np.isfinite(p.reduced_chi2)      else float("nan")
         print(
-            f"{i:>3}  {lam:>8.4f}  {r2f:>14}  "
-            f"{sr2:>8}  {p.amplitude_adu:>10.1f}  {wid:>8}  {chi:>8}  {status}"
+            f"{i+1:>5}  {lam:>8.4f}  {p.r2_raw_px2:>13.2f}  "
+            f"{r2f:>13.3f}  {sr2:>15.3f}  "
+            f"{r_der:>11.3f}  {sig_r:>13.3f}  "
+            f"{p.amplitude_adu:>10.1f}  {wid:>10.2f}  {chi:>7.3f}"
         )
 
 
