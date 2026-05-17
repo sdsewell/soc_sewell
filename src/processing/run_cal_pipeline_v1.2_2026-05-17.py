@@ -38,7 +38,12 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import src.fpi.fpi_cal_lib as cal
+import importlib.util as _ilu
+_cal_path = _REPO_ROOT / "src" / "fpi" / "fpi_cal_lib_v1.2_2026-05-17.py"
+_spec = _ilu.spec_from_file_location("fpi_cal_lib", _cal_path)
+cal = _ilu.module_from_spec(_spec)
+sys.modules["fpi_cal_lib"] = cal  # must be registered before exec so dataclasses resolves __module__
+_spec.loader.exec_module(cal)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -271,12 +276,22 @@ def _make_root() -> tk.Tk:
     return root
 
 
-def select_files(title: str) -> list[pathlib.Path]:
+_DEFAULT_DATA_DIR = r"C:\Users\sewell\Documents\GitHub\data_synthetic"
+
+
+def select_files(
+    title: str,
+    initialdir: str = _DEFAULT_DATA_DIR,
+    filetypes: list | None = None,
+) -> list[pathlib.Path]:
     """Open a multi-file dialog and return selected paths."""
+    if filetypes is None:
+        filetypes = [("Binary frames", "*.bin"), ("All files", "*.*")]
     root = _make_root()
     paths = filedialog.askopenfilenames(
         title=title,
-        filetypes=[("Binary frames", "*.bin"), ("All files", "*.*")],
+        initialdir=initialdir,
+        filetypes=filetypes,
     )
     root.destroy()
     if not paths:
@@ -946,19 +961,15 @@ def _figure_s3b(
         chi2 = p.reduced_chi2      if np.isfinite(p.reduced_chi2)      else float("nan")
 
         ax.set_title(
-            f"Peak {i}  λ={lam_str} nm
-"
+            f"Peak {i}  λ={lam_str} nm\n"
             f"r²={r2f:.1f} ± {sr2:.2f}  χ²={chi2:.2f}",
             fontsize=7,
         )
         # Parameter box in lower right
         param_txt = (
-            f"A = {amp:.0f} ADU
-"
-            f"μ = {r2f:.1f} px²
-"
-            f"σ = {wid:.1f} px²
-"
+            f"A = {amp:.0f} ADU\n"
+            f"μ = {r2f:.1f} px²\n"
+            f"σ = {wid:.1f} px²\n"
             f"B = {B_draw:.0f} ADU"
         )
         ax.text(0.97, 0.04, param_txt,
@@ -1204,7 +1215,10 @@ def main() -> None:
     # ── Stage 0: Master dark frame ────────────────────────────────────────────
     stage_banner(0, "Master dark frame")
 
-    dark_paths = select_files("Select dark .bin frames")
+    dark_paths = select_files(
+        "Select dark .bin frames",
+        filetypes=[("Dark frames (*_bin*)", "*_bin*"), ("All files", "*.*")],
+    )
     print(f"  {len(dark_paths)} dark frame(s) selected.")
 
     raw_stack = np.stack([_load_bin_frame(p) for p in dark_paths])
@@ -1224,7 +1238,10 @@ def main() -> None:
     # ── Stage 1: Cal dark subtraction and centre finding ──────────────────────
     stage_banner(1, "Cal dark subtraction and centre finding")
 
-    cal_paths = select_files("Select neon cal .bin frames")
+    cal_paths = select_files(
+        "Select neon cal .bin frames",
+        filetypes=[("Cal frames (*_cal*)", "*_cal*"), ("All files", "*.*")],
+    )
     print(f"  {len(cal_paths)} cal frame(s) selected.")
 
     # Phase 1a: load + dark subtract all frames (fast — no scipy optimisation yet)
@@ -1390,6 +1407,7 @@ def main() -> None:
     print(f"  Using n_pairs = {n_pairs}")
 
     tol_results: list = []
+    _s4_first = [True]  # show the first Tolansky figure interactively; save the rest
 
     for peak_arr, path in zip(peak_arrays, cal_paths):
         if peak_arr is None:
@@ -1413,12 +1431,12 @@ def main() -> None:
                   f"ε_a={tol.eps_a:.6f}")
 
             tol_fig_path = path.parent / f"{stem}_fig_S4.png"
-            cal.plot_tolansky_result(tol, save_path=tol_fig_path)
-            plt.close("all")
-            print(f"  Saved: {tol_fig_path}")
+            fig = cal.plot_tolansky_result(tol, save_path=tol_fig_path)
             print(f"  Saved: {tol_fig_path.name}")
-            plt.show(block=True)
-            plt.close("all")
+            if _s4_first[0]:
+                plt.show(block=True)
+                _s4_first[0] = False
+            plt.close(fig)
             return tol
 
         result = run_with_error_handling(4, _s4)
