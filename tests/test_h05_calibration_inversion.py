@@ -5,6 +5,7 @@ Tests:   T1–T8
 Run with: pytest tests/test_h05_calibration_inversion.py -v
 """
 
+import types
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,6 @@ from src.fpi.m05_calibration_inversion_2026_05_05 import (
     FitFlags,
     fit_calibration_fringe,
 )
-from src.two_d_one_d_reduction.tolansky import TwoLineResult
 from windcube.constants import NE_WAVELENGTH_1_AIR_M
 
 
@@ -27,9 +27,9 @@ from windcube.constants import NE_WAVELENGTH_1_AIR_M
 # Module-level fixtures (shared across tests to avoid repeated expensive fits)
 # ---------------------------------------------------------------------------
 
-def _build_tolansky_stub(params: InstrumentParams) -> TwoLineResult:
-    """Build a TwoLineResult stub with exact values from InstrumentParams."""
-    tol = TwoLineResult.__new__(TwoLineResult)
+def _build_tolansky_stub(params: InstrumentParams) -> types.SimpleNamespace:
+    """Build a Tolansky stub with exact values from InstrumentParams."""
+    tol = types.SimpleNamespace()
     tol.d_m          = float(params.t)
     tol.alpha_rad_px = float(params.alpha)
     tol.eps1         = float((2.0 * params.t / NE_WAVELENGTH_1_AIR_M) % 1.0)
@@ -80,7 +80,7 @@ def test_fitconfig_resolves_tolansky():
     When a TwoLineResult is passed, t_init and alpha_init must come from
     Tolansky, and bounds must be tightened relative to INSTRUMENT_DEFAULTS.
     """
-    tol = TwoLineResult.__new__(TwoLineResult)
+    tol = types.SimpleNamespace()
     tol.d_m          = 20.008e-3
     tol.alpha_rad_px = 1.607e-4
     tol.eps1         = 0.34

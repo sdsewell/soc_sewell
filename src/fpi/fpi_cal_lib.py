@@ -13,15 +13,18 @@ All UX lives in run_cal_pipeline.py only.
 from __future__ import annotations
 
 import datetime
+import logging
 import pathlib
 import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import curve_fit, minimize
+from scipy.optimize import curve_fit, least_squares, minimize
 from scipy.signal import find_peaks
 
 from windcube.constants import (
@@ -1834,3 +1837,1734 @@ def _print_peak_table_r2(peak_fits_r2: list[PeakFitR2]) -> None:
                 f"{pf.profile_raw:>9.1f}  {'---':>16}"
             )
     print(sep)
+
+
+
+# =========================================================================
+# Section D — Tolansky two-line analysis
+# (copied from src/fpi/tolansky.py)
+# =========================================================================
+
+
+class InsufficientRingsError(ValueError):
+    """Raised when the peak table has too few valid rings for analysis."""
+
+
+# ---------------------------------------------------------------------------
+# Task 1 -- result dataclass  (spec §5)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TolanskyResult:
+    """
+    Output of the Tolansky two-line analysis (S13a).
+    All two_sigma_ fields are exactly 2 x sigma_ (S04 convention).
+    Focal length f is not reported; alpha is the sole plate-scale parameter.
+    """
+    # --- Family assignment provenance ---
+    n_peaks_total:     int
+    n_nan_dropped:     int
+    n_rings_a:         int
+    n_rings_b:         int
+    amp_threshold:     float
+    Y_B_obs:           float
+
+    # --- Line a  (lam_a = 640.2248 nm) ---
+    Delta_a:           float        # [Eq. 3.85]
+    sigma_Delta_a:     float
+    two_sigma_Delta_a: float
+    eps_a:             float        # [Eq. 3.86]
+    sigma_eps_a:       float
+    two_sigma_eps_a:   float
+    chi2_dof_a:        float
+    delta_a:           np.ndarray   # successive r^2-differences (px^2)
+    r2_a:              np.ndarray   # r^2 values used in fit (for plotting)
+    sigma_r2_a:        np.ndarray   # 1sigma uncertainty on r^2, line a
+
+    # --- Line b  (lam_b = 638.2991 nm) ---
+    Delta_b:           float        # [Eq. 3.87]
+    sigma_Delta_b:     float
+    two_sigma_Delta_b: float
+    eps_b:             float        # [Eq. 3.88]
+    sigma_eps_b:       float
+    two_sigma_eps_b:   float
+    chi2_dof_b:        float
+    delta_b:           np.ndarray
+    r2_b:              np.ndarray
+    sigma_r2_b:        np.ndarray   # 1sigma uncertainty on r^2, line b
+
+    # --- Consistency check ---
+    Delta_ratio_obs:      float
+    Delta_ratio_expected: float
+    Delta_ratio_residual: float     # |obs - expected| / expected
+
+    # --- Integer disambiguation ---
+    N_Delta: int                    # N_Delta = na - nb  [Eq. 3.96 / Benoit]
+
+    # --- Plate spacing recovery  [Eq. 3.97] ---
+    d_m:           float
+    sigma_d_m:     float
+    two_sigma_d_m: float
+
+    # --- Plate scale alpha (primary geometric output) ---
+    alpha_a:           float        # alpha from line a  (rad/px)  [from 3.85]
+    alpha_b:           float        # alpha from line b  (rad/px)  cross-check
+    alpha_mean:        float        # mean of alpha_a and alpha_b  (rad/px)
+    sigma_alpha:       float
+    two_sigma_alpha:   float
+    alpha_consistency: float        # |alpha_a - alpha_b| / alpha_a
+
+    # --- Wavelengths (provenance) ---
+    lam_a_nm: float                 # 640.2248
+    lam_b_nm: float                 # 638.2991
+
+    # --- Source file (provenance) ---
+    source_path: str = ""           # path to the _peak_fits_r2.npy used
+
+
+# ---------------------------------------------------------------------------
+# Task 2 -- input loading and family assignment
+# ---------------------------------------------------------------------------
+
+def load_and_split_families(path_or_array, n_pairs: int | None = None):
+    """
+    Load _peak_fits_r2.npy and split into the two neon-line families.
+
+    Accepts 9-column (legacy amplitude-threshold) and 10-column (guided,
+    line_id in col 9) layouts from annular_reduction_2026-05-13.py.
+
+    Parameters
+    ----------
+    path_or_array : str, Path, or (N, 9|10) ndarray
+    n_pairs : int or None
+        Keep only the innermost n_pairs rings from each family.  None = all.
+
+    Returns
+    -------
+    p_a, r2_a, sigma_r2_a  -- line a (640.2248 nm)
+    p_b, r2_b, sigma_r2_b  -- line b (638.2991 nm)
+    amp_threshold, Y_B_obs, n_nan_dropped, n_peaks_total
+    """
+    if isinstance(path_or_array, (str, pathlib.Path)):
+        peaks = np.load(str(path_or_array))
+    else:
+        peaks = np.asarray(path_or_array, dtype=float)
+
+    if peaks.ndim != 2 or peaks.shape[1] not in (9, 10):
+        raise ValueError(
+            f"Expected shape (N, 9) or (N, 10), got {peaks.shape}.  "
+            "File must be _peak_fits_r2.npy from annular_reduction.py."
+        )
+
+    has_line_id   = (peaks.shape[1] == 10)
+    n_peaks_total = peaks.shape[0]
+
+    valid         = np.isfinite(peaks[:, 2])
+    n_nan_dropped = int((~valid).sum())
+    peaks_ok      = peaks[valid]
+
+    if peaks_ok.shape[0] < 4:
+        raise InsufficientRingsError(
+            f"Only {peaks_ok.shape[0]} valid fitted peaks; "
+            "need >= 4 (>=2 per family)."
+        )
+
+    amps          = peaks_ok[:, 6]
+    amp_threshold = float(np.median(amps))
+
+    if has_line_id:
+        line_id = peaks_ok[:, 9]
+        unknown = ~np.isin(line_id, [0.0, 1.0])
+        if unknown.any():
+            warnings.warn(
+                f"{unknown.sum()} peak(s) with line_id not in {{0.0, 1.0}} "
+                "excluded from family split.",
+                RuntimeWarning, stacklevel=2,
+            )
+        mask_a = (line_id == 0.0)
+        mask_b = (line_id == 1.0)
+    else:
+        mask_a = amps > amp_threshold
+        mask_b = amps <= amp_threshold
+
+    peaks_a = peaks_ok[mask_a]
+    peaks_b = peaks_ok[mask_b]
+
+    if n_pairs is not None:
+        n_pairs = int(n_pairs)
+        peaks_a = peaks_a[:n_pairs]
+        peaks_b = peaks_b[:n_pairs]
+
+    if peaks_a.shape[0] < 2 or peaks_b.shape[0] < 2:
+        raise InsufficientRingsError(
+            "Family split produced < 2 rings in one family "
+            f"({'line_id' if has_line_id else 'amplitude threshold'}).  "
+            "Check peak detection parameters."
+        )
+
+    Y_B_obs = float(np.median(amps[mask_b]) / np.median(amps[mask_a]))
+    if Y_B_obs < 0.15 or Y_B_obs > 0.60:
+        warnings.warn(
+            f"Y_B_obs = {Y_B_obs:.3f} outside expected range [0.15, 0.60].  "
+            "Check exposure, dark subtraction, or family assignment.",
+            RuntimeWarning, stacklevel=3,
+        )
+
+    p_a        = np.arange(1, peaks_a.shape[0] + 1, dtype=float)
+    p_b        = np.arange(1, peaks_b.shape[0] + 1, dtype=float)
+    r2_a       = peaks_a[:, 2]
+    sigma_r2_a = peaks_a[:, 3]
+    r2_b       = peaks_b[:, 2]
+    sigma_r2_b = peaks_b[:, 3]
+
+    return (p_a, r2_a, sigma_r2_a,
+            p_b, r2_b, sigma_r2_b,
+            amp_threshold, Y_B_obs, n_nan_dropped, n_peaks_total)
+
+
+# ---------------------------------------------------------------------------
+# Task 3 -- WLS helper  (spec §4 Step 4, equations given verbatim)
+# ---------------------------------------------------------------------------
+
+def _wls(p, r2, sigma_r2):
+    """Weighted least-squares fit r^2 = S*p + b (spec §4 Step 4)."""
+    w        = 1.0 / sigma_r2 ** 2
+    sum_w    = np.sum(w)
+    sum_wp   = np.sum(w * p)
+    sum_wp2  = np.sum(w * p ** 2)
+    sum_wr2  = np.sum(w * r2)
+    sum_wpr2 = np.sum(w * p * r2)
+    Lambda   = sum_w * sum_wp2 - sum_wp ** 2
+    S        = (sum_w * sum_wpr2 - sum_wp * sum_wr2) / Lambda
+    b        = (sum_wp2 * sum_wr2 - sum_wp * sum_wpr2) / Lambda
+    var_S    = sum_w  / Lambda
+    var_b    = sum_wp2 / Lambda
+    eps      = 1.0 + b / S
+    sig_eps  = np.sqrt((np.sqrt(var_b) / S) ** 2
+                       + (b * np.sqrt(var_S) / S ** 2) ** 2)
+    chi2_dof = np.sum(w * (r2 - S * p - b) ** 2) / max(len(p) - 2, 1)
+    return dict(
+        Delta=S,           sigma_Delta=np.sqrt(var_S),
+        eps=eps % 1.0,     sigma_eps=sig_eps,
+        chi2_dof=chi2_dof,
+        intercept=b,       sigma_intercept=np.sqrt(var_b),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 4 -- Benoit d recovery  (Vaughan Eq. 3.97)
+# ---------------------------------------------------------------------------
+
+def benoit_d(eps_a, sigma_eps_a, eps_b, sigma_eps_b,
+             lam_a_m, lam_b_m, d_prior_m, n_air=1.0):
+    """
+    Recover etalon plate spacing d from the two fractional orders.
+
+    d = (N_Delta + eps_a - eps_b) * lam_a * lam_b / (2*n_air*(lam_b - lam_a))
+
+    N_Delta is resolved from d_prior_m and fixes only the FSR-period ambiguity.
+
+    Returns (d_m, sigma_d_m, N_Delta).
+    """
+    N_Delta = int(round(2.0 * d_prior_m * (1.0 / lam_a_m - 1.0 / lam_b_m)))
+
+    d = ((N_Delta + eps_a - eps_b)
+         * lam_a_m * lam_b_m
+         / (2.0 * n_air * (lam_b_m - lam_a_m)))
+    d = abs(d)
+
+    factor  = lam_a_m * lam_b_m / (2.0 * n_air * abs(lam_b_m - lam_a_m))
+    sigma_d = factor * np.sqrt(sigma_eps_a ** 2 + sigma_eps_b ** 2)
+
+    return d, sigma_d, N_Delta
+
+
+# ---------------------------------------------------------------------------
+# Task 5 -- alpha recovery  (from Vaughan Eq. 3.85)
+# ---------------------------------------------------------------------------
+
+def recover_alpha(Delta_a, sigma_Delta_a, Delta_b, sigma_Delta_b,
+                  d_m, sigma_d_m, lam_a_m, lam_b_m, n_air=1.0):
+    """
+    Recover angular pixel scale alpha (rad/px).
+
+    alpha = sqrt(lam * n_air / (d * Delta))   [from Vaughan Eq. 3.85]
+
+    Returns (alpha_a, alpha_b, alpha_mean, sigma_alpha, alpha_consistency).
+    No focal length is computed or returned.
+    """
+    alpha_a = np.sqrt(lam_a_m * n_air / (d_m * Delta_a))
+    alpha_b = np.sqrt(lam_b_m * n_air / (d_m * Delta_b))
+    alpha_mean = 0.5 * (alpha_a + alpha_b)
+
+    sig_alpha = 0.5 * alpha_a * np.sqrt(
+        (sigma_Delta_a / Delta_a) ** 2 + (sigma_d_m / d_m) ** 2
+    )
+    alpha_consistency = abs(alpha_a - alpha_b) / alpha_a
+
+    return alpha_a, alpha_b, alpha_mean, sig_alpha, alpha_consistency
+
+
+# ---------------------------------------------------------------------------
+# Task 6 -- top-level run_tolansky_2line()
+# ---------------------------------------------------------------------------
+
+def run_tolansky_2line(
+    peaks_input,
+    lam_a_m:   float = 640.2248e-9,
+    lam_b_m:   float = 638.2991e-9,
+    d_prior_m: float = 20.008e-3,
+    n_air:     float = 1.0,
+    n_pairs:   int | None = None,
+) -> TolanskyResult:
+    """
+    Run the full S13a two-line Tolansky analysis on a neon calibration image.
+
+    Parameters
+    ----------
+    peaks_input : ndarray or path
+        (N, 9) or (N, 10) float64 array from annular_reduction.py, or path to
+        the ``{stem}_peak_fits_r2.npy`` file it writes.
+    lam_a_m : float
+        Brighter-line wavelength [m].  Default: 640.2248 nm.
+    lam_b_m : float
+        Dimmer-line wavelength [m].    Default: 638.2991 nm.
+    d_prior_m : float
+        Prior plate spacing [m]; used only to resolve N_Delta.
+        Default: 20.008 mm (ICOS build report).
+    n_air : float
+        Refractive index of etalon gap.  Default: 1.0.
+    n_pairs : int or None
+        Number of ring pairs (one per neon line) to use in the WLS fit.
+        Keeps the innermost n_pairs rings from each family.  None uses all.
+
+    Returns
+    -------
+    TolanskyResult
+    """
+    source_path = (str(peaks_input)
+                   if isinstance(peaks_input, (str, pathlib.Path)) else "")
+
+    (p_a, r2_a, sigma_r2_a,
+     p_b, r2_b, sigma_r2_b,
+     amp_threshold, Y_B_obs,
+     n_nan_dropped, n_peaks_total) = load_and_split_families(peaks_input,
+                                                              n_pairs=n_pairs)
+
+    fit_a = _wls(p_a, r2_a, sigma_r2_a)
+    fit_b = _wls(p_b, r2_b, sigma_r2_b)
+
+    Delta_a      = fit_a["Delta"]
+    sigma_Delta_a = fit_a["sigma_Delta"]
+    eps_a        = fit_a["eps"]
+    sigma_eps_a  = fit_a["sigma_eps"]
+    chi2_dof_a   = fit_a["chi2_dof"]
+
+    Delta_b      = fit_b["Delta"]
+    sigma_Delta_b = fit_b["sigma_Delta"]
+    eps_b        = fit_b["eps"]
+    sigma_eps_b  = fit_b["sigma_eps"]
+    chi2_dof_b   = fit_b["chi2_dof"]
+
+    delta_a = np.diff(r2_a)
+    delta_b = np.diff(r2_b)
+
+
+    Delta_ratio_obs      = Delta_a / Delta_b
+    Delta_ratio_expected = lam_a_m / lam_b_m
+    Delta_ratio_residual = (abs(Delta_ratio_obs - Delta_ratio_expected)
+                            / Delta_ratio_expected)
+    if Delta_ratio_residual > 0.002:
+        warnings.warn(
+            f"Delta_a/Delta_b = {Delta_ratio_obs:.6f} deviates from "
+            f"lam_a/lam_b = {Delta_ratio_expected:.6f} by "
+            f"{Delta_ratio_residual*1e6:.0f} ppm (>200 ppm).  "
+            "Check family assignment.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    d_m, sigma_d_m, N_Delta = benoit_d(
+        eps_a, sigma_eps_a, eps_b, sigma_eps_b,
+        lam_a_m, lam_b_m, d_prior_m, n_air,
+    )
+
+    (alpha_a, alpha_b, alpha_mean,
+     sigma_alpha, alpha_consistency) = recover_alpha(
+        Delta_a, sigma_Delta_a, Delta_b, sigma_Delta_b,
+        d_m, sigma_d_m, lam_a_m, lam_b_m, n_air,
+    )
+
+    if alpha_consistency > 0.001:
+        warnings.warn(
+            f"|alpha_a - alpha_b| / alpha_a = "
+            f"{alpha_consistency*1e6:.0f} ppm (>1000 ppm).  "
+            "Check family assignment or ring quality.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return TolanskyResult(
+        n_peaks_total=n_peaks_total,
+        n_nan_dropped=n_nan_dropped,
+        n_rings_a=len(p_a),
+        n_rings_b=len(p_b),
+        amp_threshold=amp_threshold,
+        Y_B_obs=Y_B_obs,
+
+        Delta_a=Delta_a,
+        sigma_Delta_a=sigma_Delta_a,
+        two_sigma_Delta_a=2.0 * sigma_Delta_a,
+        eps_a=eps_a,
+        sigma_eps_a=sigma_eps_a,
+        two_sigma_eps_a=2.0 * sigma_eps_a,
+        chi2_dof_a=chi2_dof_a,
+        delta_a=delta_a,
+        r2_a=r2_a.copy(),
+        sigma_r2_a=sigma_r2_a.copy(),
+
+        Delta_b=Delta_b,
+        sigma_Delta_b=sigma_Delta_b,
+        two_sigma_Delta_b=2.0 * sigma_Delta_b,
+        eps_b=eps_b,
+        sigma_eps_b=sigma_eps_b,
+        two_sigma_eps_b=2.0 * sigma_eps_b,
+        chi2_dof_b=chi2_dof_b,
+        delta_b=delta_b,
+        r2_b=r2_b.copy(),
+        sigma_r2_b=sigma_r2_b.copy(),
+
+        Delta_ratio_obs=Delta_ratio_obs,
+        Delta_ratio_expected=Delta_ratio_expected,
+        Delta_ratio_residual=Delta_ratio_residual,
+
+        N_Delta=N_Delta,
+
+        d_m=d_m,
+        sigma_d_m=sigma_d_m,
+        two_sigma_d_m=2.0 * sigma_d_m,
+
+        alpha_a=alpha_a,
+        alpha_b=alpha_b,
+        alpha_mean=alpha_mean,
+        sigma_alpha=sigma_alpha,
+        two_sigma_alpha=2.0 * sigma_alpha,
+        alpha_consistency=alpha_consistency,
+
+        lam_a_nm=lam_a_m * 1e9,
+        lam_b_nm=lam_b_m * 1e9,
+        source_path=source_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 7 -- rectangular array table  (spec §6)
+# ---------------------------------------------------------------------------
+
+def print_rectangular_array(result: TolanskyResult) -> None:
+    """Print the Vaughan (1989) Table 3.1 analog and Benoit summary."""
+    r = result
+    sep = "=" * 68
+
+    print(f"\n{sep}")
+    print("=== TOLANSKY RECTANGULAR ARRAY  (Vaughan 1989, Table 3.1 analog) ===")
+    print(sep)
+
+    yb_status = "PASS" if 0.15 <= r.Y_B_obs <= 0.60 else "WARN"
+    print(f"\nFamily assignment:  amp_threshold = {r.amp_threshold:.1f} ADU"
+          f"   Y_B_obs = {r.Y_B_obs:.3f}  [{yb_status}]")
+    print(f"  640.2248 nm (line a):  N rings = {r.n_rings_a:2d}")
+    print(f"  638.2991 nm (line b):  N rings = {r.n_rings_b:2d}")
+
+    for lbl, r2_arr, delta_arr, Delta, sDelta, eps, seps, chi2 in [
+        ("a", r.r2_a, r.delta_a,
+         r.Delta_a, r.sigma_Delta_a, r.eps_a, r.sigma_eps_a, r.chi2_dof_a),
+        ("b", r.r2_b, r.delta_b,
+         r.Delta_b, r.sigma_Delta_b, r.eps_b, r.sigma_eps_b, r.chi2_dof_b),
+    ]:
+        lam_str = "640.2248" if lbl == "a" else "638.2991"
+        sub     = "a" if lbl == "a" else "b"
+        print(f"\nComponent {lbl}  (lam_{sub} = {lam_str} nm)")
+
+        n = len(r2_arr)
+        p_strs  = "".join(f"  {i+1:>10}" for i in range(n))
+        r2_strs = "".join(f"  {v:>10.2f}" for v in r2_arr)
+        print(f"  p   :{p_strs}")
+        print(f"  r^2 :{r2_strs}  (px^2)")
+
+        if len(delta_arr) > 0:
+            d_strs = "".join(
+                f"  d{i+1}{i+2}={delta_arr[i]:.1f}"
+                for i in range(len(delta_arr))
+            )
+            print(f"        {d_strs}")
+
+        print(f"  Delta_{sub} (WLS slope) = {Delta:.2f} +/- {sDelta:.2f} px^2"
+              f"   chi2_dof = {chi2:.2f}")
+        print(f"  eps_{sub}               = {eps:.4f}   +/- {seps:.4f}")
+
+    ratio_ppm = r.Delta_ratio_residual * 1e6
+    ratio_ok  = "PASS" if ratio_ppm < 200 else "WARN"
+    print(f"\nRatio  Delta_a/Delta_b observed = {r.Delta_ratio_obs:.6f}"
+          f"   expected (lam_a/lam_b) = {r.Delta_ratio_expected:.6f}")
+    print(f"        residual = {ratio_ppm:.1f} ppm"
+          f"   [{ratio_ok} if < 200 ppm]")
+
+    print(f"\n{sep}")
+    print("=== BENOIT RECOVERY  (Vaughan Eqs. 3.94-3.97) ===")
+    print(f"  N_Delta = na - nb = {r.N_Delta}"
+          f"   [from d_prior = 20.008 mm, Eq. 3.96]")
+    d_mm   = r.d_m * 1e3
+    sd_mm  = r.sigma_d_m * 1e3
+    sd2_mm = r.two_sigma_d_m * 1e3
+    print(f"  d   = {d_mm:.6f} +/- {sd_mm:.4f} mm   (2sigma = {sd2_mm:.4f} mm)")
+
+    print(f"\n{sep}")
+    print("=== PLATE SCALE ===")
+    alpha_ok = "PASS" if r.alpha_consistency < 0.001 else "WARN"
+    print(f"  alpha_a  = {r.alpha_a:.4e} +/- {r.sigma_alpha:.4e} rad/px"
+          f"   [from Delta_a, d, lam_a]")
+    print(f"  alpha_b  = {r.alpha_b:.4e} rad/px"
+          f"   [from Delta_b, d, lam_b; cross-check]")
+    print(f"  alpha_mean = {r.alpha_mean:.4e} +/- {r.sigma_alpha:.4e} rad/px"
+          f"   (2sigma = {r.two_sigma_alpha:.4e})")
+    print(f"  |alpha_a - alpha_b| / alpha_a = {r.alpha_consistency*1e6:.1f} ppm"
+          f"   [{alpha_ok} if < 1000 ppm]")
+    print(sep)
+
+
+# ---------------------------------------------------------------------------
+# Task 8 -- M05 priors handoff  (spec §7)
+# ---------------------------------------------------------------------------
+
+def to_m05_priors(result: TolanskyResult) -> dict:
+    """Convert TolanskyResult to the prior dict expected by M05 FitConfig."""
+    d_mm     = result.d_m * 1e3
+    sig_d_mm = result.sigma_d_m * 1e3
+    return {
+        "t_init_mm":    d_mm,
+        "t_bounds_mm":  (d_mm - 3 * sig_d_mm, d_mm + 3 * sig_d_mm),
+        "alpha_init":   result.alpha_mean,
+        "alpha_bounds": (result.alpha_mean * 0.875,
+                         result.alpha_mean * 1.125),
+        "epsilon_cal_a": result.eps_a,
+        "epsilon_cal_b": result.eps_b,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 9 -- diagnostic figure
+# ---------------------------------------------------------------------------
+
+def plot_tolansky_result(
+    result: TolanskyResult,
+    save_path=None,
+):
+    """
+    Four-panel diagnostic figure for the S13a two-line Tolansky analysis.
+
+    A) Joint Tolansky plot -- r^2 vs p for both neon families with individual
+       WLS fit lines.  Confirms linearity and correct slope ratio.
+
+    B) WLS fit residuals for both families.  Random scatter with no trend
+       confirms good ring detection and correct family assignment.
+
+    C) Successive Delta(r^2) for both families with dashed mean-slope references.
+       CV < 2 % confirms etalon parallelism.
+
+    D) Summary text -- recovered d, alpha, eps_a, eps_b, N_Delta, chi2/nu.
+
+    Parameters
+    ----------
+    result   : TolanskyResult from run_tolansky_2line()
+    save_path: optional file path; if given the figure is saved at dpi=150.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+
+    r = result
+    u2 = "px²"
+
+    BLUE   = "tab:blue"
+    ORANGE = "tab:orange"
+    GREEN  = "tab:green"
+    RED    = "tab:red"
+    GRAY   = "gray"
+    BLACK  = "black"
+
+    fig = plt.figure(figsize=(14, 10), facecolor="white")
+    gs  = gridspec.GridSpec(2, 2, figure=fig,
+                            hspace=0.44, wspace=0.37,
+                            left=0.09, right=0.97,
+                            top=0.91, bottom=0.08)
+    ax_tol = fig.add_subplot(gs[0, 0])
+    ax_res = fig.add_subplot(gs[1, 0])
+    ax_dr2 = fig.add_subplot(gs[0, 1])
+    ax_txt = fig.add_subplot(gs[1, 1])
+
+    for ax in [ax_tol, ax_res, ax_dr2, ax_txt]:
+        ax.set_facecolor("white")
+        ax.tick_params(colors=BLACK, which="both", direction="in")
+        for sp in ax.spines.values():
+            sp.set_edgecolor(BLACK)
+        ax.xaxis.label.set_color(BLACK)
+        ax.yaxis.label.set_color(BLACK)
+        ax.title.set_color(BLACK)
+
+    p_a = np.arange(1, r.n_rings_a + 1, dtype=float)
+    p_b = np.arange(1, r.n_rings_b + 1, dtype=float)
+    int_a = r.Delta_a * (r.eps_a - 1.0)
+    int_b = r.Delta_b * (r.eps_b - 1.0)
+    p_all  = np.concatenate([p_a, p_b])
+    p_fine = np.linspace(0.0, p_all.max() + 0.3, 300)
+    fit_a  = r.Delta_a * p_fine + int_a
+    fit_b  = r.Delta_b * p_fine + int_b
+
+    data_max = max(r.r2_a.max(), r.r2_b.max()) * 1.05
+    y_min_tol = -0.05 * data_max   # small negative margin
+    ratio_ppm = r.Delta_ratio_residual * 1e6
+
+    # -- A: Joint Tolansky plot ------------------------------------------------
+    ax_tol.axhline(0, color=GRAY, lw=0.7, ls=":", zorder=0)
+    ax_tol.errorbar(p_a, r.r2_a, yerr=r.sigma_r2_a,
+                    fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3,
+                    label=f"λ_a = {r.lam_a_nm:.4f} nm (air)  (n={r.n_rings_a})")
+    ax_tol.errorbar(p_b, r.r2_b, yerr=r.sigma_r2_b,
+                    fmt="s", color=ORANGE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3,
+                    label=f"λ_b = {r.lam_b_nm:.4f} nm (air)  (n={r.n_rings_b})")
+    ax_tol.plot(p_fine, fit_a, color=BLUE,   lw=1.8, ls="-",  zorder=2,
+                label=f"Fit a:  Δ_a = {r.Delta_a:.4g}")
+    ax_tol.plot(p_fine, fit_b, color=ORANGE, lw=1.8, ls="--", zorder=2,
+                label=f"Fit b:  Δ_b = {r.Delta_b:.4g}")
+    ax_tol.set_xlim(-0.2, p_all.max() + 0.5)
+    ax_tol.set_ylim(y_min_tol, data_max)
+    ax_tol.set_xticks(range(0, int(p_all.max()) + 1))
+    ax_tol.set_xlabel("Fringe index  $p$", fontsize=11)
+    ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
+    ax_tol.set_title("A — Tolansky Plot  (both neon lines)",
+                      fontsize=11, fontweight="bold", pad=7)
+    _tol_leg = ax_tol.legend(fontsize=8, facecolor="white", labelcolor=BLACK,
+                             edgecolor=BLACK, framealpha=0.9, ncol=2, loc="upper left")
+    _wls_ann = (
+        f"WLS fit results\n"
+        f"  Δ_a={r.Delta_a:.5g}±{r.sigma_Delta_a:.3g} px²/fr"
+        f"  ε_a={r.eps_a:.5f}±{r.sigma_eps_a:.2g}"
+        f"  χ²/ν={r.chi2_dof_a:.3f}\n"
+        f"  Δ_b={r.Delta_b:.5g}±{r.sigma_Delta_b:.3g} px²/fr"
+        f"  ε_b={r.eps_b:.5f}±{r.sigma_eps_b:.2g}"
+        f"  χ²/ν={r.chi2_dof_b:.3f}\n"
+        f"  Δ_a/Δ_b={r.Delta_ratio_obs:.6f}"
+        f"  λ_a/λ_b={r.Delta_ratio_expected:.6f}"
+        f"  Δ={ratio_ppm:.0f} ppm"
+        f"  {'[PASS]' if ratio_ppm < 200 else '[WARN]'}"
+    )
+
+    # -- B: Residuals ----------------------------------------------------------
+    resid_a = r.r2_a - (r.Delta_a * p_a + int_a)
+    resid_b = r.r2_b - (r.Delta_b * p_b + int_b)
+    ax_res.axhline(0, color=GRAY, lw=1.0, ls="--", zorder=1)
+    ax_res.errorbar(p_a, resid_a, yerr=r.sigma_r2_a,
+                    fmt="o", color=BLUE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3, label="Line a")
+    ax_res.errorbar(p_b, resid_b, yerr=r.sigma_r2_b,
+                    fmt="s", color=ORANGE, ecolor=GRAY, capsize=4, ms=6,
+                    lw=1.4, zorder=3, label="Line b")
+    ax_res.set_xlabel("Fringe index  $p$", fontsize=11)
+    ax_res.set_ylabel(f"Residual  [{u2}]", fontsize=11)
+    ax_res.set_title("B — WLS Residuals",
+                      fontsize=11, fontweight="bold", pad=7)
+    ax_res.legend(fontsize=9, facecolor="white", labelcolor=BLACK,
+                  edgecolor=BLACK, framealpha=0.9)
+
+    # -- C: Successive Delta(r^2) ----------------------------------------------
+    p_mid_a = 0.5 * (p_a[:-1] + p_a[1:])
+    p_mid_b = 0.5 * (p_b[:-1] + p_b[1:])
+    sdelta_a = np.sqrt(r.sigma_r2_a[1:] ** 2 + r.sigma_r2_a[:-1] ** 2)
+    sdelta_b = np.sqrt(r.sigma_r2_b[1:] ** 2 + r.sigma_r2_b[:-1] ** 2)
+
+    cv_a = (r.delta_a.std() / abs(r.delta_a.mean()) * 100
+            if r.delta_a.mean() != 0 and len(r.delta_a) > 1 else np.nan)
+    cv_b = (r.delta_b.std() / abs(r.delta_b.mean()) * 100
+            if r.delta_b.mean() != 0 and len(r.delta_b) > 1 else np.nan)
+
+    ax_dr2.axhline(r.Delta_a, color=BLUE,   lw=1.2, ls="--",
+                   label=f"Δ_a = {r.Delta_a:.4g} (WLS slope)")
+    ax_dr2.axhline(r.Delta_b, color=ORANGE, lw=1.2, ls=":",
+                   label=f"Δ_b = {r.Delta_b:.4g} (WLS slope)")
+    if len(r.delta_a) > 0:
+        ax_dr2.errorbar(p_mid_a, r.delta_a, yerr=sdelta_a,
+                        fmt="o", color=BLUE, ecolor=GRAY,
+                        capsize=4, ms=6, lw=1.4, zorder=3)
+    if len(r.delta_b) > 0:
+        ax_dr2.errorbar(p_mid_b, r.delta_b, yerr=sdelta_b,
+                        fmt="s", color=ORANGE, ecolor=GRAY,
+                        capsize=4, ms=6, lw=1.4, zorder=3)
+    ax_dr2.set_xlabel("Fringe index  $p$  (midpoint)", fontsize=11)
+    ax_dr2.set_ylabel(f"$\\Delta(r^2)$  [{u2}]", fontsize=11)
+    ax_dr2.set_title("C — Successive  $\\Delta(r^2)$",
+                      fontsize=11, fontweight="bold", pad=7)
+    ax_dr2.legend(fontsize=8.5, facecolor="white", labelcolor=BLACK,
+                  edgecolor=BLACK, framealpha=0.9)
+    cv_col = GREEN if max(cv_a, cv_b) < 2 else ("goldenrod" if max(cv_a, cv_b) < 5 else RED)
+    ax_dr2.text(0.97, 0.07,
+                f"CV_a = {cv_a:.1f}%   CV_b = {cv_b:.1f}%",
+                transform=ax_dr2.transAxes,
+                ha="right", va="bottom", fontsize=8.5, color=cv_col)
+
+    # -- D: Summary ------------------------------------------------------------
+    ax_txt.axis("off")
+
+    d_mm      = r.d_m * 1e3
+    sig_d_mm  = r.sigma_d_m * 1e3
+    sig2_d_mm = r.two_sigma_d_m * 1e3
+    ratio_col = GREEN if ratio_ppm < 200 else RED
+    yb_col    = GREEN if 0.15 <= r.Y_B_obs <= 0.60 else RED
+    chi_col_a = GREEN if r.chi2_dof_a < 2 else "goldenrod"
+    chi_col_b = GREEN if r.chi2_dof_b < 2 else "goldenrod"
+
+    lines_txt = [
+        (f"  N rings: {r.n_peaks_total} total"
+         f"  ({r.n_rings_a} line a + {r.n_rings_b} line b)"
+         f"   NaN dropped: {r.n_nan_dropped}",                         GRAY,    8.5,  "normal", "normal", 0.00),
+        (f"  Y_B_obs = {r.Y_B_obs:.3f}"
+         f"   {'[PASS]' if 0.15<=r.Y_B_obs<=0.60 else '[WARN]'}"
+         f"   amp_threshold = {r.amp_threshold:.0f} ADU",              yb_col,  8.5,  "normal", "normal", 0.00),
+        ("── Benoit recovery ───────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
+        ("  d = (N_Δ + ε_a−ε_b)·λ_a·λ_b / [2·n·(λ_b−λ_a)]",          GRAY,    8.0,  "normal", "italic", 0.00),
+        (f"  N_Δ = {r.N_Delta}"
+         f"   ε_a − ε_b = {r.eps_a - r.eps_b:+.6f}",                 BLACK,   8.5,  "normal", "normal", 0.00),
+        (f"  d  = {d_mm:.5f} ± {sig_d_mm:.4f} mm"
+         f"   (2σ: ±{sig2_d_mm:.4f} mm)",                             GREEN,   9.5,  "bold",   "normal", 0.00),
+        ("── Plate scale ───────────────────────────────────────────",  GRAY,    8.0,  "normal", "normal", 0.01),
+        ("  α_a = √(λ_a·n_air / (d·Δ_a))",                             GRAY,    8.0,  "normal", "italic", 0.00),
+        (f"  α_a = {r.alpha_a:.6e} rad/px"
+         f"   α_b = {r.alpha_b:.6e} rad/px",                          BLACK,   8.5,  "normal", "normal", 0.00),
+        (f"  α   = {r.alpha_mean:.6e} ± {r.sigma_alpha:.2e} rad/px"
+         f"   (2σ: ±{r.two_sigma_alpha:.2e})",                        "purple", 9.5, "bold",   "normal", 0.00),
+        (f"  consistency: {r.alpha_consistency*1e6:.1f} ppm"
+         f"   {'[PASS]' if r.alpha_consistency<0.001 else '[WARN]'}",
+         GREEN if r.alpha_consistency < 0.001 else RED, 8.5, "normal", "normal", 0.00),
+    ]
+
+    y = 0.98
+    for text, color, size, weight, style, gap in lines_txt:
+        y -= gap
+        ax_txt.text(0.02, y, text, transform=ax_txt.transAxes,
+                    ha="left", va="top", fontsize=size,
+                    color=color, fontweight=weight, fontstyle=style,
+                    fontfamily="monospace")
+        y -= size * 0.010 + 0.005
+
+    # Place WLS annotation flush below the legend bottom edge
+    fig.canvas.draw()
+    _renderer = fig.canvas.get_renderer()
+    _leg_bb   = _tol_leg.get_window_extent(_renderer)
+    _leg_y0   = ax_tol.transAxes.inverted().transform((0, _leg_bb.y0))[1]
+    ax_tol.text(0.02, _leg_y0 - 0.04, _wls_ann,
+                transform=ax_tol.transAxes,
+                ha="left", va="top", fontsize=7.5,
+                color=BLACK, fontfamily="monospace",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          edgecolor=GRAY, alpha=0.85))
+
+    src_name = (pathlib.Path(r.source_path).name
+                if r.source_path else "source file not recorded")
+    fig.suptitle(
+        "Tolansky Two-Line Analysis  "
+        f"(λ_a = {r.lam_a_nm:.4f} nm,  λ_b = {r.lam_b_nm:.4f} nm)",
+        color=BLACK, fontsize=13, fontweight="bold", y=0.99,
+    )
+    fig.text(0.5, 0.965, src_name,
+             ha="center", va="top", fontsize=9,
+             color=GRAY, fontfamily="monospace")
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+        print(f"  Figure saved -> {save_path}")
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility alias
+# run_tolansky() was the public name in tolansky_2line_2026-05-05.py.
+# Existing callers (tests, tolansky-2line.py wrapper) continue to work.
+# ---------------------------------------------------------------------------
+run_tolansky = run_tolansky_2line  # noqa: F811
+
+
+# =========================================================================
+# Section E — H05 staged calibration inversion
+# (copied from src/processing/H05_calibration_inversion_2026_05_12.py)
+# =========================================================================
+
+
+log = logging.getLogger("H05")
+
+
+# ---------------------------------------------------------------------------
+# Parameter ordering (12 positions in p_all vector)
+# ---------------------------------------------------------------------------
+_NAMES = ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2',
+          'sigma0', 'sigma1', 'sigma2', 'B', 'ne_ratio']
+_IDX   = {n: i for i, n in enumerate(_NAMES)}
+
+# sigma1, sigma2 fixed at 0 throughout — see §2 (PSF investigation)
+_FIXED_PSF = {'sigma1', 'sigma2'}
+
+_STAGE_FREE = {
+    1: ['I0', 'I1', 'I2', 'B'],
+    2: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'B'],
+    3: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'sigma0', 'B'],
+    4: [n for n in _NAMES if n not in _FIXED_PSF],   # 10 free
+}
+
+# ---------------------------------------------------------------------------
+# Forward model
+# ---------------------------------------------------------------------------
+
+def _neon_model(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
+                sigma0, sigma1, sigma2, B, ne_ratio, _N_fine=500):
+    """Two-line neon: S(r) = Ã(r;λ₁,R1) + ne_ratio·Ã(r;λ₂,R2) + B"""
+    r_fine = np.linspace(0.0, r_max, _N_fine)
+    A1 = airy_modified(r_fine, NE_WAVELENGTH_1_AIR_M,
+                       t, R1, alpha, 1.0, r_max,
+                       I0, I1, I2, sigma0, sigma1, sigma2)
+    A2 = airy_modified(r_fine, NE_WAVELENGTH_2_AIR_M,
+                       t, R2, alpha, 1.0, r_max,
+                       I0, I1, I2, sigma0, sigma1, sigma2)
+    return np.interp(r_arr, r_fine, A1 + ne_ratio * A2 + B)
+
+
+def _model_components(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
+                      sigma0, sigma1, sigma2, B, ne_ratio, n_fine=2000):
+    """Return (composite, lam1+B, ne_ratio*lam2+B) for plotting."""
+    r_fine = np.linspace(0.0, r_max, n_fine)
+    A1 = airy_modified(r_fine, NE_WAVELENGTH_1_AIR_M,
+                       t, R1, alpha, 1.0, r_max,
+                       I0, I1, I2, sigma0, sigma1, sigma2)
+    A2 = airy_modified(r_fine, NE_WAVELENGTH_2_AIR_M,
+                       t, R2, alpha, 1.0, r_max,
+                       I0, I1, I2, sigma0, sigma1, sigma2)
+    comp = np.interp(r_arr, r_fine, A1 + ne_ratio * A2 + B)
+    lam1 = np.interp(r_arr, r_fine, A1 + B)
+    lam2 = np.interp(r_arr, r_fine, ne_ratio * A2 + B)
+    return comp, lam1, lam2
+
+
+# ---------------------------------------------------------------------------
+# Finite-difference Jacobian for covariance
+# ---------------------------------------------------------------------------
+
+def _fd_jacobian(residual_fn, p0, rel_step=1e-5):
+    """
+    Forward finite-difference Jacobian at p0.  No bounds required.
+    step = max(rel_step * |p0[j]|, 1e-10) per parameter.
+    Returns J shape (n_residuals, n_params).
+    """
+    r0  = residual_fn(p0)
+    n_r, n_p = len(r0), len(p0)
+    J   = np.zeros((n_r, n_p))
+    for j in range(n_p):
+        h      = max(rel_step * abs(p0[j]), 1e-10)
+        p_fwd  = p0.copy(); p_fwd[j] += h
+        J[:, j] = (residual_fn(p_fwd) - r0) / h
+    return J
+
+
+# ---------------------------------------------------------------------------
+# LM stage runner
+# ---------------------------------------------------------------------------
+
+def _run_stage(r_good, prof_good, sig_good, r_max,
+               p_all, free_names, bounds_dict, config):
+    """
+    Run one LM stage (soft-bound penalties) then compute FD covariance.
+    Returns (p_updated, cov, stderrs, chi2_red, lm_result).
+    stderrs indexed by position in free_names.
+    """
+    free_idx  = np.array([_IDX[n] for n in free_names])
+    p_fixed   = p_all.copy()
+    p0        = p_fixed[free_idx]
+    n_good    = len(r_good)
+    n_free    = len(free_names)
+
+    lo_arr    = np.array([bounds_dict[n][1] for n in free_names])
+    hi_arr    = np.array([bounds_dict[n][2] for n in free_names])
+    range_arr = hi_arr - lo_arr + 1e-30
+    pen_sigma = range_arr * 0.01
+
+    def _residuals_pen(p_free):
+        p = p_fixed.copy(); p[free_idx] = p_free
+        t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p
+        model  = _neon_model(r_good, r_max, t, alpha, R1, R2,
+                             I0, I1, I2, s0, s1, s2, B, ne)
+        data_r = (prof_good - model) / sig_good
+        below  = np.maximum(0.0, lo_arr - p_free) / pen_sigma
+        above  = np.maximum(0.0, p_free - hi_arr) / pen_sigma
+        return np.append(data_r, below + above)
+
+    lm = least_squares(_residuals_pen, p0, method='lm',
+                       ftol=config['ftol'], xtol=config['xtol'],
+                       gtol=config['gtol'], max_nfev=config['max_nfev'])
+
+    p_updated = p_fixed.copy(); p_updated[free_idx] = lm.x
+
+    t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p_updated
+    model_f = _neon_model(r_good, r_max, t, alpha, R1, R2,
+                          I0, I1, I2, s0, s1, s2, B, ne)
+    data_r  = (prof_good - model_f) / sig_good
+    dof     = max(n_good - n_free, 1)
+    chi2    = float(np.sum(data_r ** 2)) / dof
+
+    def _residuals_data(p_free):
+        p = p_fixed.copy(); p[free_idx] = p_free
+        t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p
+        model = _neon_model(r_good, r_max, t, alpha, R1, R2,
+                            I0, I1, I2, s0, s1, s2, B, ne)
+        return (prof_good - model) / sig_good
+
+    try:
+        J        = _fd_jacobian(_residuals_data, lm.x)
+        _, s, VT = np.linalg.svd(J, full_matrices=False)
+        threshold = np.finfo(float).eps * max(J.shape) * s[0]
+        s_inv    = np.where(s > threshold, 1.0 / s, 0.0)
+        JTJ_inv  = (VT.T * s_inv**2) @ VT
+        cov      = chi2 * JTJ_inv
+        stderrs  = np.sqrt(np.maximum(np.diag(cov), 0.0))
+        if not np.all(np.isfinite(stderrs)):
+            raise np.linalg.LinAlgError("non-finite stderrs")
+    except (np.linalg.LinAlgError, ValueError) as exc:
+        log.warning(f"  Covariance failed: {exc}")
+        stderrs = np.full(n_free, np.inf)
+        cov     = np.full((n_free, n_free), np.inf)
+
+    return p_updated, cov, stderrs, chi2, lm
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _FringeProfile:
+    profile: np.ndarray; r_grid: np.ndarray
+    sigma_profile: np.ndarray; masked: np.ndarray; r_max_px: float
+
+
+@dataclass
+class FitResult:
+    """10-free-parameter calibration fit result (sigma1=sigma2=0 fixed)."""
+    t_m: float; alpha: float
+    R1: float;  R2: float
+    I0: float;  I1: float;  I2: float
+    sigma0: float; sigma1: float; sigma2: float
+    B: float;  ne_ratio: float
+
+    sigma_t_m: float;    sigma_alpha: float
+    sigma_R1: float;     sigma_R2: float
+    sigma_I0: float;     sigma_I1: float;  sigma_I2: float
+    sigma_sigma0: float; sigma_sigma1: float; sigma_sigma2: float
+    sigma_B: float;      sigma_ne_ratio: float
+
+    epsilon_cal: float;  sigma_epsilon_cal: float
+
+    chi2_reduced: float; chi2_by_stage: list
+    n_bins_used: int;    converged: bool
+
+
+# ---------------------------------------------------------------------------
+# Staged inversion
+# ---------------------------------------------------------------------------
+
+def run_staged_inversion(fp: _FringeProfile,
+                         t_eff: float, alpha_init: float, eps_a: float,
+                         R1_init: float = 0.53, R2_init: float = 0.53,
+                         sigma0_init: float = 0.5,
+                         ne_ratio_init: float = None,
+                         max_nfev: int = 100_000,
+                         ftol: float = 1e-14,
+                         xtol: float = 1e-14,
+                         gtol: float = 1e-14) -> FitResult:
+    """4-stage LM: sigma1=sigma2=0 fixed. FD covariance at Stage 4."""
+    good   = (~fp.masked & np.isfinite(fp.sigma_profile)
+              & (fp.sigma_profile > 0) & np.isfinite(fp.profile))
+    r_good = fp.r_grid[good]
+    p_good = fp.profile[good]
+    s_good = np.maximum(fp.sigma_profile[good].copy(), 1.0)
+    r_max  = float(fp.r_max_px)
+    n_good = int(good.sum())
+
+    if n_good < 30:
+        raise ValueError(f"Only {n_good} usable bins.")
+
+    I0_init = float(np.percentile(p_good, 75))
+    B_init  = float(np.percentile(p_good, 5)) * 0.8
+    if ne_ratio_init is None:
+        ne_ratio_init = float(NE_INTENSITY_2)
+
+    bounds = {
+        't_m':      (t_eff,         t_eff - 20e-6,     t_eff + 20e-6),
+        'alpha':    (alpha_init,    alpha_init*0.95,   alpha_init*1.05),
+        'R1':       (R1_init,       0.05,              0.95),
+        'R2':       (R2_init,       0.05,              0.95),
+        'I0':       (I0_init,       100.0,             15000.0),
+        'I1':       (0.0,           -0.5,              0.5),
+        'I2':       (0.0,           -0.5,              0.5),
+        'sigma0':   (sigma0_init,   0.01,              5.0),
+        'sigma1':   (0.0,           -2.0,              2.0),
+        'sigma2':   (0.0,           -2.0,              2.0),
+        'B':        (B_init,        10.0,              2000.0),
+        'ne_ratio': (ne_ratio_init, 0.01,              2.0),
+    }
+
+    cfg   = dict(max_nfev=max_nfev, ftol=ftol, xtol=xtol, gtol=gtol)
+    p_all = np.array([bounds[n][0] for n in _NAMES], dtype=float)
+    chi2_stages = []
+
+    log.info("Stage 1 — photometric baseline")
+    p_all, _, _, c1, _ = _run_stage(r_good, p_good, s_good, r_max, p_all,
+                                     _STAGE_FREE[1], bounds, cfg)
+    chi2_stages.append(c1); log.info(f"  χ²/ν = {c1:.3f}")
+
+    log.info("Stage 2 — geometry + reflectivities")
+    p_all, _, _, c2, _ = _run_stage(r_good, p_good, s_good, r_max, p_all,
+                                     _STAGE_FREE[2], bounds, cfg)
+    chi2_stages.append(c2)
+    log.info(f"  χ²/ν = {c2:.3f}  R1={p_all[_IDX['R1']]:.4f}  R2={p_all[_IDX['R2']]:.4f}")
+
+    log.info("Stage 3 — + sigma0  (sigma1=sigma2=0 fixed)")
+    p_all, _, _, c3, _ = _run_stage(r_good, p_good, s_good, r_max, p_all,
+                                     _STAGE_FREE[3], bounds, cfg)
+    chi2_stages.append(c3)
+    log.info(f"  χ²/ν = {c3:.3f}  sigma0={p_all[_IDX['sigma0']]:.4f} px")
+
+    log.info("Stage 4 — 10 free params; FD covariance")
+    p_all, cov4, se4, c4, res4 = _run_stage(r_good, p_good, s_good, r_max,
+                                              p_all, _STAGE_FREE[4], bounds, cfg)
+    chi2_stages.append(c4)
+    log.info(f"  χ²/ν = {c4:.3f}  R1={p_all[_IDX['R1']]:.4f}  "
+             f"R2={p_all[_IDX['R2']]:.4f}  ne={p_all[_IDX['ne_ratio']]:.4f}  "
+             f"sigma0={p_all[_IDX['sigma0']]:.4f}")
+
+    s4_names = _STAGE_FREE[4]
+    s4_lkp   = {n: i for i, n in enumerate(s4_names)}
+
+    def _se(name):
+        return float(se4[s4_lkp[name]]) if name in s4_lkp else float('nan')
+
+    log.info("  Stderrs:")
+    for name in s4_names:
+        log.info(f"    sigma_{name:12s} = {_se(name):.3e}")
+
+    converged = bool(res4.success or res4.cost < 1e-10)
+    t_f, alpha_f, R1_f, R2_f, I0_f, I1_f, I2_f, s0_f, s1_f, s2_f, B_f, ne_f = p_all
+    eps_cal       = (2.0 * t_f / NE_WAVELENGTH_1_AIR_M) % 1.0
+    sigma_eps_cal = (2.0 / NE_WAVELENGTH_1_AIR_M) * _se('t_m')
+
+    return FitResult(
+        t_m=float(t_f), alpha=float(alpha_f),
+        R1=float(R1_f), R2=float(R2_f),
+        I0=float(I0_f), I1=float(I1_f), I2=float(I2_f),
+        sigma0=float(s0_f), sigma1=0.0, sigma2=0.0,
+        B=float(B_f), ne_ratio=float(ne_f),
+
+        sigma_t_m=_se('t_m'),       sigma_alpha=_se('alpha'),
+        sigma_R1=_se('R1'),         sigma_R2=_se('R2'),
+        sigma_I0=_se('I0'),         sigma_I1=_se('I1'),    sigma_I2=_se('I2'),
+        sigma_sigma0=_se('sigma0'), sigma_sigma1=float('nan'),
+        sigma_sigma2=float('nan'),
+        sigma_B=_se('B'),           sigma_ne_ratio=_se('ne_ratio'),
+
+        epsilon_cal=float(eps_cal), sigma_epsilon_cal=float(sigma_eps_cal),
+
+        chi2_reduced=float(c4), chi2_by_stage=chi2_stages,
+        n_bins_used=n_good,     converged=converged,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Save calibration result
+# ---------------------------------------------------------------------------
+
+def save_cal_result(fit: FitResult, npy_path: pathlib.Path,
+                    t_tolansky_mm: float, eps_a: float,
+                    alpha_tolansky_init: float, r_max_px: float) -> pathlib.Path:
+    """
+    Save FitResult as a .npy dict alongside the input profile file.
+
+    The output file is named:  <input_stem>_cal_result.npy
+    Load it in H06 with:  np.load(path, allow_pickle=True).item()
+
+    Note on R_refl:
+      H06 uses a single R_refl for the OI 630.0 nm airglow line.
+      R1 (fitted at λ₁=640.2 nm) is used because 630 nm is closer to λ₁.
+      R2 and ΔR are saved for reference.
+
+    Returns the path of the saved file.
+    """
+    out_path = npy_path.parent / (npy_path.stem.replace('_profile_vs_r2', '')
+                                   .replace('_profile_vs_r', '') + '_cal_result.npy')
+
+    cal_dict = {
+        # ---- Fitted instrument parameters ----
+        # R_refl: use R1 for H06 (OI 630 nm closer to λ₁=640.2 nm than λ₂=638.3 nm)
+        't_m':         fit.t_m,
+        'alpha':       fit.alpha,
+        'R_refl':      fit.R1,      # ← R1 used as H06 reflectivity
+        'R1':          fit.R1,      # saved for reference
+        'R2':          fit.R2,      # saved for reference
+        'delta_R':     fit.R2 - fit.R1,
+        'I0':          fit.I0,
+        'I1':          fit.I1,
+        'I2':          fit.I2,
+        'sigma0':      fit.sigma0,
+        'sigma1':      0.0,         # fixed
+        'sigma2':      0.0,         # fixed
+        'B':           fit.B,
+        'ne_ratio':    fit.ne_ratio,
+        'epsilon_cal': fit.epsilon_cal,
+
+        # ---- 1σ uncertainties ----
+        'sigma_t_m':         fit.sigma_t_m,
+        'sigma_alpha':       fit.sigma_alpha,
+        'sigma_R_refl':      fit.sigma_R1,
+        'sigma_R1':          fit.sigma_R1,
+        'sigma_R2':          fit.sigma_R2,
+        'sigma_I0':          fit.sigma_I0,
+        'sigma_I1':          fit.sigma_I1,
+        'sigma_I2':          fit.sigma_I2,
+        'sigma_sigma0':      fit.sigma_sigma0,
+        'sigma_B':           fit.sigma_B,
+        'sigma_ne_ratio':    fit.sigma_ne_ratio,
+        'sigma_epsilon_cal': fit.sigma_epsilon_cal,
+
+        # ---- Fit quality ----
+        'chi2_reduced':  fit.chi2_reduced,
+        'chi2_by_stage': list(fit.chi2_by_stage),
+        'n_bins_used':   fit.n_bins_used,
+        'converged':     fit.converged,
+        'quality_flags': 0,   # 0 = GOOD; non-zero reserved for H06 degraded-cal flag
+
+        # ---- Provenance ----
+        'source_file':          str(npy_path),
+        't_tolansky_mm':        t_tolansky_mm,
+        'eps_a':                eps_a,
+        'alpha_tolansky_init':  alpha_tolansky_init,
+        'r_max_px':             r_max_px,
+        'date_utc':             datetime.datetime.utcnow().isoformat(),
+        'script':               'H05_calibration_inversion_2026_05_12.py',
+    }
+
+    np.save(out_path, cal_dict)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_profile(path, r_max_px):
+    arr = np.load(path)
+    sigma = None
+    if arr.ndim == 1:
+        log.warning("1D array — inferring r²")
+        r2, prof = np.linspace(0.0, r_max_px**2, len(arr)), arr.astype(float)
+    elif arr.ndim == 2 and arr.shape[0] == 3:
+        r2, prof = arr[0].astype(float), arr[1].astype(float)
+        sigma    = arr[2].astype(float)
+    elif arr.ndim == 2 and arr.shape[0] == 2:
+        r2, prof = arr[0].astype(float), arr[1].astype(float)
+    elif arr.ndim == 2 and arr.shape[1] == 2:
+        r2, prof = arr[:, 0].astype(float), arr[:, 1].astype(float)
+    else:
+        raise ValueError(f"Unexpected shape {arr.shape}")
+    return np.sqrt(np.maximum(r2, 0.0)), prof, sigma
+
+
+def _estimate_sigma(profile):
+    return np.maximum(np.sqrt(np.maximum(profile, 1.0)), 1.0)
+
+
+def _fmt_unc(value):
+    if np.isnan(value): return "fixed"
+    return f"±{value:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# Figure
+# ---------------------------------------------------------------------------
+
+def make_figure(r2_data, profile, sigma,
+                r_fine, model_fine, lam1_fine, lam2_fine,
+                fit: FitResult, source_name: str = "",
+                source_path: str = "") -> plt.Figure:
+
+    r2_fine       = r_fine ** 2
+    model_at_data = np.interp(r2_data, r2_fine, model_fine)
+    residual      = profile - model_at_data
+
+    fig = plt.figure(figsize=(14, 11.5))
+    gs  = gridspec.GridSpec(3, 1, height_ratios=[3, 1.5, 2.6],
+                            hspace=0.08, top=0.90, bottom=0.03,
+                            left=0.09, right=0.97)
+    ax_fit = fig.add_subplot(gs[0])
+    ax_res = fig.add_subplot(gs[1], sharex=ax_fit)
+    ax_tbl = fig.add_subplot(gs[2])
+    ax_tbl.axis("off")
+
+    ax_fit.errorbar(r2_data, profile, yerr=sigma, fmt="none",
+                    ecolor="darkorange", elinewidth=0.5, alpha=0.35, zorder=2)
+    ax_fit.plot(r2_data, profile, color="darkorange", lw=0.9, alpha=0.85,
+                zorder=3, label=f"Data  ({source_name})")
+    ax_fit.plot(r2_fine, model_fine, color="black", lw=1.5,
+                zorder=4, label="Best-fit composite  (Stage 4)")
+    ax_fit.plot(r2_fine, lam1_fine, color="steelblue", lw=0.8,
+                ls="--", alpha=0.65, label=f"λ₁ 640.2 nm  (R1={fit.R1:.3f})")
+    ax_fit.plot(r2_fine, lam2_fine, color="firebrick", lw=0.8,
+                ls="--", alpha=0.65,
+                label=f"λ₂ 638.3 nm ×{fit.ne_ratio:.3f}  (R2={fit.R2:.3f})")
+    ax_fit.set_ylabel("CCD signal  (ADU)", fontsize=11)
+    ax_fit.legend(fontsize=8.5, loc="upper right")
+    ax_fit.grid(True, alpha=0.2)
+    ax_fit.tick_params(labelbottom=False)
+
+    conv_str = "converged" if fit.converged else "NOT converged"
+    ax_fit.text(0.02, 0.97,
+        f"χ²/ν = {fit.chi2_reduced:.3f}   {conv_str}\n"
+        f"R1 = {fit.R1:.4f} {_fmt_unc(fit.sigma_R1)}   "
+        f"R2 = {fit.R2:.4f} {_fmt_unc(fit.sigma_R2)}   "
+        f"ΔR = {fit.R2-fit.R1:+.4f}\n"
+        f"ne_ratio = {fit.ne_ratio:.4f} {_fmt_unc(fit.sigma_ne_ratio)}   "
+        f"σ₀ = {fit.sigma0:.3f} {_fmt_unc(fit.sigma_sigma0)} px",
+        transform=ax_fit.transAxes, va="top", ha="left", fontsize=8.5,
+        fontfamily="monospace",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                  edgecolor="grey", alpha=0.88))
+
+    ax_res.axhline(0, color="black", lw=0.8, ls="--")
+    ax_res.fill_between(r2_data, -sigma, sigma,
+                        color="steelblue", alpha=0.22, label="±1σ")
+    ax_res.plot(r2_data, residual, color="steelblue", lw=0.8,
+                alpha=0.9, label="Residual (data − model)")
+    ax_res.set_xlabel(r"$r^2$  (pixels², 2×2 binned)", fontsize=11)
+    ax_res.set_ylabel("Residual  (ADU)", fontsize=10)
+    ax_res.legend(fontsize=8.5, loc="upper right")
+    ax_res.grid(True, alpha=0.2)
+    ax_res.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5, symmetric=True))
+
+    _alpha_exp     = int(np.floor(np.log10(abs(fit.alpha))))
+    _alpha_unc_str = f"±{fit.sigma_alpha / 10**_alpha_exp:.2g}e{_alpha_exp:+03d}"
+
+    rows = [
+        ("t",        f"{fit.t_m*1e3:.7f} mm",
+                     f"±{fit.sigma_t_m*1e9:.2g} nm" if not np.isnan(fit.sigma_t_m) else "fixed",
+                     "Etalon gap  [Tolansky-seeded, Group A]"),
+        ("α",        f"{fit.alpha:.5e} rad/px",
+                     _alpha_unc_str, "Plate scale  [Tolansky-seeded, Group A]"),
+        ("R1",       f"{fit.R1:.5f}", f"±{fit.sigma_R1:.2g}",
+                     "Reflectivity λ₁=640.2 nm  [Group B] → used as R_refl in H06"),
+        ("R2",       f"{fit.R2:.5f}", f"±{fit.sigma_R2:.2g}",
+                     "Reflectivity λ₂=638.3 nm  [Group B, reference only]"),
+        ("ΔR=R2−R1", f"{fit.R2-fit.R1:+.5f}", "—",
+                     "Wavelength-dependent finesse difference  (4.7σ significant)"),
+        ("I₀",       f"{fit.I0:.1f} ADU", f"±{fit.sigma_I0:.2g}",
+                     "Mean intensity  [Group B, shared]"),
+        ("I₁",       f"{fit.I1:.5f}", f"±{fit.sigma_I1:.2g}",
+                     "Linear vignetting  [Group B, shared]"),
+        ("I₂",       f"{fit.I2:.5f}", f"±{fit.sigma_I2:.2g}",
+                     "Quadratic vignetting  [Group B, shared]"),
+        ("σ₀",       f"{fit.sigma0:.4f} px", f"±{fit.sigma_sigma0:.2g}",
+                     "PSF base width  [Group B]  σ(r)=σ₀ (constant)"),
+        ("σ₁",       "0.0000 px", "fixed",
+                     "PSF sin variation  [fixed=0; F-test p=0.998]"),
+        ("σ₂",       "0.0000 px", "fixed",
+                     "PSF cos variation  [fixed=0; singular Hessian]"),
+        ("B",        f"{fit.B:.1f} ADU", f"±{fit.sigma_B:.2g}",
+                     "CCD bias pedestal  [Group B]"),
+        ("ne_ratio", f"{fit.ne_ratio:.4f}", f"±{fit.sigma_ne_ratio:.2g}",
+                     f"λ₂/λ₁ intensity ratio  [nominal={NE_INTENSITY_2:.2f}]"),
+        ("ε_cal",    f"{fit.epsilon_cal:.6f}", f"±{fit.sigma_epsilon_cal:.2g}",
+                     "Fractional order at centre  (zero-wind phase reference)"),
+    ]
+
+    tbl = ax_tbl.table(cellText=rows,
+        colLabels=["Param", "Fitted value", "1σ", "Description"],
+        cellLoc="left", loc="upper center",
+        colWidths=[0.10, 0.20, 0.13, 0.57])
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.0)
+    tbl.scale(1, 1.18)
+
+    for (row, col), cell in tbl.get_celld().items():
+        if row == 0:
+            cell.set_facecolor("#c8d8f0"); cell.set_text_props(fontweight="bold")
+        elif row % 2 == 0: cell.set_facecolor("#f0f4ff")
+        if row in (3, 4): cell.set_facecolor("#fff4c2")
+        if row in (10, 11): cell.set_facecolor("#eeeeee")
+        if row == 13: cell.set_facecolor("#f4fff4")
+
+    stage_str = "  ".join(f"S{i+1}: {v:.2f}" for i, v in enumerate(fit.chi2_by_stage))
+    ax_tbl.text(0.01, 0.01,
+        f"χ²/ν by stage:  {stage_str}    bins used: {fit.n_bins_used}   "
+        f"free params: 10  (σ₁=σ₂=0 fixed; F-test p=0.998)",
+        transform=ax_tbl.transAxes, va="bottom", ha="left",
+        fontsize=8.5, fontfamily="monospace", color="dimgrey")
+
+    fig.suptitle("WindCube FPI — Neon Calibration Fringe Inversion  "
+                 "(10-param: independent R1, R2; constant PSF / Harding 2014)",
+                 fontsize=12, fontweight="bold", y=0.980)
+    if source_path:
+        fig.text(0.5, 0.963, source_path, ha="center", va="top", fontsize=8,
+                 fontfamily="monospace", color="dimgrey")
+    fig.text(0.5, 0.948,
+        r"$S(r)=\tilde{A}(r;\lambda_1,t,\alpha,R_1)\circledast\mathcal{G}(\sigma_0)"
+        r"+n_\mathrm{ratio}\cdot\tilde{A}(r;\lambda_2,t,\alpha,R_2)"
+        r"\circledast\mathcal{G}(\sigma_0)+B$"
+        "\n"
+        r"$I(r)=I_0[1+I_1(r/r_\mathrm{max})+I_2(r/r_\mathrm{max})^2]$"
+        r"$\quad\sigma(r)=\sigma_0$  (constant blur)"
+        r"$\quad[\tilde{A}=\mathrm{Airy}\times I(r)]$",
+        ha="center", va="top", fontsize=8.5, color="#1a1a2e", linespacing=1.6)
+    return fig
+
+
+# =========================================================================
+# Section F — Pipeline-level functions
+# (copied from src/fpi/fpi_cal_lib_v1.2_2026-05-17.py)
+# =========================================================================
+
+
+@dataclass
+class TolanskySeedMean:
+    """Per-orbit mean of Tolansky seed quantities, averaged over N cal frames."""
+    n_frames_total:          int
+    n_frames_used:           int
+    n_frames_rejected:       int
+
+    d_m_mean:                float   # mean etalon gap (m)
+    sigma_d_m_mean:          float   # std / sqrt(N_used), m
+    two_sigma_d_m_mean:      float   # = 2 × sigma_d_m_mean
+
+    alpha_mean:              float   # mean plate scale (rad/px)
+    sigma_alpha_mean:        float
+    two_sigma_alpha_mean:    float
+
+    eps_a_mean:              float   # mean fractional order, 640.2 nm line
+    sigma_eps_a_mean:        float
+    two_sigma_eps_a_mean:    float
+
+    Delta_a_mean:            float   # mean r²-spacing (px²/fringe)
+    sigma_Delta_a_mean:      float
+    two_sigma_Delta_a_mean:  float
+
+    Y_B_obs_mean:            float   # mean amplitude ratio (638 / 640)
+
+
+@dataclass
+class OrbitCalResult:
+    """
+    Complete orbit instrument calibration — handoff object between layers.
+
+    Produced by run_cal_pipeline.py (calibration layer).
+    Consumed by run_airglow_inversion.py (science layer, SPEC-CAL02).
+    Saved as orbit_cal_result.npy (numpy dict, allow_pickle=True).
+    """
+    seeds:             TolanskySeedMean
+    fit:               FitResult          # H05 result — 10 free params
+    source_cal_files:  list[str]
+    source_dark_files: list[str]
+    date_utc:          str                # ISO-8601
+    pipeline_version:  str = "SPEC-CAL01 v1.1"
+
+
+# ── Thin wrapper functions ────────────────────────────────────────────────────
+
+def load_bin_frame(
+    path: pathlib.Path,
+    shape: tuple[int, int] | None = None,
+) -> np.ndarray:
+    """
+    Load a WindCube FPI binary frame → float64 image array (H, W).
+
+    Big-endian uint16 ('>u2'). Dimensions read from header words 0 and 1.
+    Header row 0 is stripped — only image pixel rows are returned.
+    Handles both 2×2 (259×276) and 1×1 (527×552) automatically.
+    The `shape` argument is ignored; kept for backward compatibility only.
+    """
+    with open(path, "rb") as f:
+        first_words = np.frombuffer(f.read(4), dtype=">u2")
+    n_rows_frame = int(first_words[0])
+    n_cols_frame = int(first_words[1])
+    expected = n_rows_frame * n_cols_frame * 2
+    actual   = pathlib.Path(path).stat().st_size
+    if actual != expected:
+        raise ValueError(
+            f"{pathlib.Path(path).name}: file size {actual} B, "
+            f"expected {expected} for {n_rows_frame}×{n_cols_frame} uint16."
+        )
+    raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
+    return raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame).astype(np.float64)
+
+
+def make_master_dark(
+    paths: list[pathlib.Path],
+    shape: tuple[int, int] = (260, 276),
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Median-stack N dark frames.
+
+    Returns
+    -------
+    master_dark : float64 (H, W) — median per pixel
+    dark_sigma  : float64 (H, W) — std per pixel
+    """
+    frames = np.stack([load_bin_frame(p, shape) for p in paths])
+    return np.median(frames, axis=0), frames.std(axis=0)
+
+
+def dark_subtract(
+    frame: np.ndarray,
+    master_dark: np.ndarray,
+) -> np.ndarray:
+    """Return frame.astype(float64) - master_dark (float64)."""
+    return frame.astype(np.float64) - master_dark
+
+
+def find_centre(
+    image: np.ndarray,
+    cx_seed: float | None = None,
+    cy_seed: float | None = None,
+    var_r_max_px: float | None = None,
+) -> CentreResult:
+    """
+    Two-pass azimuthal variance centre finder.
+
+    Seeds default to image centre if None.
+    Calls azimuthal_variance_centre() then estimate_centre_uncertainty().
+    Returns CentreResult with cx, cy, sigma_cx, sigma_cy,
+    two_sigma_cx, two_sigma_cy, cost_at_min, grid_cx, grid_cy, grid_cost.
+    """
+    kwargs: dict = {}
+    if var_r_max_px is not None:
+        kwargs["var_r_max_px"] = var_r_max_px
+    return _cf_find_centre(image, cx_seed=cx_seed, cy_seed=cy_seed, **kwargs)
+
+
+def build_radial_profile(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    n_bins: int = 1500,  # 8 px²/bin — required for clean Gaussian peak fits
+    r_max_px: float = 110.0,
+) -> FringeProfile:
+    """
+    Mulligan r²-binned annular reduction → 1-D radial profile.
+
+    Wraps annular_reduce(). Returns FringeProfile with fields:
+    r_grid, r2_grid, profile, sigma_profile, masked, cx, cy, r_max_px.
+    sigma_cx / sigma_cy default to 0.5 px (typical centre uncertainty).
+    """
+    return annular_reduce(
+        image, cx, cy,
+        sigma_cx=0.5,
+        sigma_cy=0.5,
+        n_bins=n_bins,
+        r_max_px=r_max_px,
+    )
+
+
+def fit_peaks(
+    fp: FringeProfile,
+    distance: int = 5,
+    prominence: float = 100.0,
+    fit_half_window: int = 56,
+    chi2_refit_threshold: float = 15.0,
+) -> list[PeakFitR2]:
+    """
+    Detect peaks in radial profile and Gaussian-fit each in r² domain.
+
+    Two-pass fitting strategy:
+      Pass 1 — standard _find_and_fit_peaks_r2() with n_bins=1500 sampling.
+      Pass 2 — re-fit any peak with chi2_red > chi2_refit_threshold using
+                improved initial guesses derived from the median sigma of the
+                well-fitted inner peaks and valley-minimum background estimation.
+                This robustly handles outer weak 638.3 nm peaks whose windows
+                contain bleed-through tails from the adjacent 640.2 nm peak.
+
+    Parameters
+    ----------
+    fit_half_window      : upper bound on adaptive half-window (bins).
+                           With n_bins=1500 use 56 (covers ±3σ without
+                           bleeding into the adjacent peak).
+    chi2_refit_threshold : peaks with chi2_red above this trigger pass 2.
+    """
+    from scipy.optimize import curve_fit as _curve_fit
+
+    def _gauss(x, A, mu, sig, B):
+        return A * np.exp(-0.5 * ((x - mu) / sig) ** 2) + B
+
+    # ── Pass 1: standard fit ──────────────────────────────────────────
+    peaks = _find_and_fit_peaks_r2(
+        fp.r_grid,
+        fp.r2_grid,
+        fp.profile,
+        fp.sigma_profile,
+        fp.masked,
+        distance=distance,
+        prominence=prominence,
+        fit_half_window=fit_half_window,
+    )
+
+    if len(peaks) < 2:
+        return peaks
+
+    # ── Derive robust sigma prior from well-fitted inner peaks ────────
+    good_sigma = [p.width_r2_px2 for p in peaks
+                  if p.fit_ok
+                  and np.isfinite(p.width_r2_px2)
+                  and np.isfinite(p.reduced_chi2)
+                  and p.reduced_chi2 < chi2_refit_threshold]
+
+    if len(good_sigma) < 3:
+        return peaks   # insufficient reference; return pass-1 as-is
+
+    median_sigma = float(np.median(good_sigma))
+    sigma_lo     = 0.4 * median_sigma
+    sigma_hi     = 2.5 * median_sigma
+
+    # ── Pass 2: re-fit poor peaks with improved guesses ───────────────
+    r2_grid  = fp.r2_grid
+    profile  = fp.profile
+    sig_prof = fp.sigma_profile
+    good_all = ~fp.masked
+    all_bin_indices = [p.peak_idx for p in peaks]
+    improved = list(peaks)
+
+    for i_pk, p in enumerate(peaks):
+        needs_refit = (
+            not p.fit_ok
+            or not np.isfinite(p.reduced_chi2)
+            or p.reduced_chi2 > chi2_refit_threshold
+        )
+        if not needs_refit:
+            continue
+
+        bin_idx = p.peak_idx
+
+        # Same adaptive window as _find_and_fit_peaks_r2
+        left_sep  = (bin_idx - all_bin_indices[i_pk - 1]) if i_pk > 0              else 9999
+        right_sep = (all_bin_indices[i_pk + 1] - bin_idx) if i_pk < len(peaks) - 1 else 9999
+        nearest      = min(left_sep, right_sep)
+        adaptive_hw  = max(2, (nearest - 1) // 2)
+        effective_hw = min(fit_half_window, adaptive_hw)
+
+        lo  = max(0, bin_idx - effective_hw)
+        hi  = min(len(r2_grid) - 1, bin_idx + effective_hw)
+        win = np.arange(lo, hi + 1)
+        use = good_all[win] & np.isfinite(sig_prof[win]) & (sig_prof[win] > 0)
+        win_use = win[use]
+
+        if win_use.size < 5:
+            continue
+
+        r2_w  = r2_grid[win_use]
+        p_w   = profile[win_use]
+        sem_w = sig_prof[win_use]
+        n     = len(p_w)
+        q     = max(1, n // 4)
+
+        # Background: minimum of the two flanks (avoids neighbour tail bias)
+        B0 = float(min(np.min(p_w[:q]), np.min(p_w[-q:])))
+
+        # Amplitude: peak value minus flank minimum
+        peak_val = float(profile[bin_idx])
+        A0 = max(peak_val - B0, 50.0)
+
+        # Centre: raw detected peak position
+        mu0  = float(r2_grid[bin_idx])
+        sig0 = median_sigma
+
+        p0 = [A0, mu0, sig0, B0]
+        bounds = (
+            [0.0,    float(r2_w[0]),  sigma_lo,  B0 - 0.3 * abs(B0)],
+            [np.inf, float(r2_w[-1]), sigma_hi,  B0 + 0.3 * abs(B0) + A0],
+        )
+
+        try:
+            popt, pcov = _curve_fit(
+                _gauss, r2_w, p_w,
+                p0=p0, sigma=sem_w, absolute_sigma=True,
+                bounds=bounds, maxfev=10000,
+            )
+            perr  = np.sqrt(np.diag(pcov))
+            n_dof = max(1, len(r2_w) - 4)
+            chi2  = float(np.sum(((p_w - _gauss(r2_w, *popt)) / sem_w) ** 2))
+            new_chi2 = chi2 / n_dof
+
+            # Accept only if it improves on pass-1 or pass-1 failed outright
+            if not p.fit_ok or (np.isfinite(new_chi2) and
+                                 new_chi2 < p.reduced_chi2 * 0.95):
+                improved[i_pk] = PeakFitR2(
+                    peak_idx         = bin_idx,
+                    r2_raw_px2       = p.r2_raw_px2,
+                    r_raw_px         = p.r_raw_px,
+                    profile_raw      = p.profile_raw,
+                    r2_fit_px2       = float(popt[1]),
+                    sigma_r2_fit_px2 = float(perr[1]),
+                    amplitude_adu    = float(popt[0]),
+                    width_r2_px2     = float(abs(popt[2])),
+                    fit_ok           = True,
+                    reduced_chi2     = new_chi2,
+                )
+        except (RuntimeError, ValueError):
+            pass  # keep pass-1 result
+
+    return improved
+
+
+def peaks_to_array(peaks: list[PeakFitR2]) -> np.ndarray:
+    """
+    Convert list[PeakFitR2] → float64 array (N, 10) for Tolansky input.
+
+    Columns:
+      0  peak_idx          (int, cast to float)
+      1  r2_raw_px2
+      2  r2_fit_px2        (NaN if fit failed)
+      3  sigma_r2_fit_px2  (NaN if fit failed)
+      4  r_raw_px
+      5  0.0               (reserved)
+      6  amplitude_adu
+      7  width_r2_px2      (NaN if fit failed)
+      8  reduced_chi2      (NaN if fit failed)
+      9  line_id           (0.0 = 640.2 nm, 1.0 = 638.3 nm; median-amp split)
+    """
+    # Family assignment: strict interleaving by peak index.
+    # Even-indexed peaks are always 640.2 nm (strong), odd-indexed are always
+    # 638.3 nm (weak).  This is the physical reality — the two neon lines
+    # produce strictly alternating rings in r².  A median-amplitude split
+    # fails at large r² where the lines partially overlap.
+    rows = []
+    for p in peaks:
+        line_id = 0.0 if (p.peak_idx % 2 == 0) else 1.0
+        rows.append([
+            float(p.peak_idx),
+            p.r2_raw_px2,
+            p.r2_fit_px2,
+            p.sigma_r2_fit_px2,
+            p.r_raw_px,
+            0.0,
+            p.amplitude_adu,
+            p.width_r2_px2,
+            p.reduced_chi2,
+            line_id,
+        ])
+    return np.array(rows, dtype=float)
+
+
+def run_tolansky(
+    peak_array: np.ndarray,
+    n_pairs: int | None = None,
+) -> "TolanskyResult":
+    """
+    Two-line Tolansky WLS analysis.
+
+    peak_array : (N, 10) float64 from peaks_to_array().
+    Wraps run_tolansky_2line().
+    Key outputs: Delta_a, eps_a, alpha_mean, d_m, Y_B_obs, chi2_dof_a, chi2_dof_b.
+    """
+    return run_tolansky_2line(peak_array, n_pairs=n_pairs)
+
+
+def average_tolansky_seeds(
+    results: list,
+    chi2_threshold: float = 5.0,
+) -> TolanskySeedMean:
+    """
+    Average Tolansky seeds over N cal frames.
+
+    Frames where chi2_dof_a > threshold OR chi2_dof_b > threshold are
+    excluded with a warning printed to stdout.
+    Raises ValueError if no frames pass the filter.
+
+    Computes mean and std/sqrt(N) for: d_m, alpha_mean, eps_a, Delta_a, Y_B_obs.
+    All two_sigma_ fields = exactly 2 × sigma_.
+    """
+    kept = []
+    for i, r in enumerate(results):
+        if r.chi2_dof_a > chi2_threshold or r.chi2_dof_b > chi2_threshold:
+            print(
+                f"  WARNING: frame {i} rejected "
+                f"(chi2_a={r.chi2_dof_a:.2f}, chi2_b={r.chi2_dof_b:.2f} "
+                f"> {chi2_threshold})"
+            )
+        else:
+            kept.append(r)
+
+    if not kept:
+        raise ValueError("No Tolansky frames passed chi2 filter.")
+
+    N = len(kept)
+
+    def _mean_sem(vals: list[float]) -> tuple[float, float]:
+        a = np.array(vals, dtype=float)
+        return float(a.mean()), float(a.std() / np.sqrt(N))
+
+    d_m,  sig_d  = _mean_sem([r.d_m       for r in kept])
+    al,   sig_al = _mean_sem([r.alpha_mean for r in kept])
+    ep,   sig_ep = _mean_sem([r.eps_a      for r in kept])
+    da,   sig_da = _mean_sem([r.Delta_a    for r in kept])
+    yb = float(np.mean([r.Y_B_obs for r in kept]))
+
+    return TolanskySeedMean(
+        n_frames_total=len(results),
+        n_frames_used=N,
+        n_frames_rejected=len(results) - N,
+        d_m_mean=d_m,
+        sigma_d_m_mean=sig_d,
+        two_sigma_d_m_mean=2.0 * sig_d,
+        alpha_mean=al,
+        sigma_alpha_mean=sig_al,
+        two_sigma_alpha_mean=2.0 * sig_al,
+        eps_a_mean=ep,
+        sigma_eps_a_mean=sig_ep,
+        two_sigma_eps_a_mean=2.0 * sig_ep,
+        Delta_a_mean=da,
+        sigma_Delta_a_mean=sig_da,
+        two_sigma_Delta_a_mean=2.0 * sig_da,
+        Y_B_obs_mean=yb,
+    )
+
+
+def run_h05(
+    fp: FringeProfile,
+    seeds: TolanskySeedMean,
+    R1_init: float = 0.53,
+    R2_init: float = 0.53,
+    sigma0_init: float = 0.55,
+) -> FitResult:
+    """
+    Full H05 staged Levenberg-Marquardt calibration fit.
+
+    Builds the init vector from TolanskySeedMean (see §4 Stage 6 mapping),
+    calls run_staged_inversion(), and returns FitResult.
+
+    This is the culmination of the instrument characterisation pipeline.
+    The returned FitResult is packed into OrbitCalResult by the wrapper
+    and constitutes the sole input to the science inversion layer.
+    """
+    return run_staged_inversion(
+        fp,
+        t_eff=seeds.d_m_mean,
+        alpha_init=seeds.alpha_mean,
+        eps_a=seeds.eps_a_mean,
+        ne_ratio_init=seeds.Y_B_obs_mean,
+        R1_init=R1_init,
+        R2_init=R2_init,
+        sigma0_init=sigma0_init,
+    )

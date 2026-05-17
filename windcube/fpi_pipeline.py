@@ -21,7 +21,6 @@ Does NOT duplicate any algorithm.
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import pathlib
 import sys
@@ -32,7 +31,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # sys.path setup — REPO_ROOT for windcube.* and src.fpi.*;
 #                  src/processing for flat-name imports of center_finder,
-#                  annular_reduction, H05, and H06 (no __init__.py there).
+#                  annular_reduction, and H06 (no __init__.py there).
 # ---------------------------------------------------------------------------
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SRC_PROC = REPO_ROOT / "src" / "processing"
@@ -43,26 +42,21 @@ if str(_SRC_PROC) not in sys.path:
     sys.path.insert(0, str(_SRC_PROC))
 
 # ---------------------------------------------------------------------------
-# Tolansky — importlib required because the filename contains a hyphen.
-# Registered in sys.modules under the key "tolansky_2026_05_13" so that
-# repeated imports are idempotent.
+# Re-exports — fpi_cal_lib (consolidated library: Tolansky, H05, airy model)
 # ---------------------------------------------------------------------------
-_tol_path = REPO_ROOT / "src" / "fpi" / "tolansky_2026-05-13.py"
-_tol_key  = "tolansky_2026_05_13"
-if _tol_key not in sys.modules:
-    _tol_spec = importlib.util.spec_from_file_location(_tol_key, str(_tol_path))
-    _tol_mod  = importlib.util.module_from_spec(_tol_spec)
-    sys.modules[_tol_key] = _tol_mod
-    _tol_spec.loader.exec_module(_tol_mod)
-else:
-    _tol_mod = sys.modules[_tol_key]
-
-run_tolansky_2line      = _tol_mod.run_tolansky_2line        # noqa: F401
-to_m05_priors           = _tol_mod.to_m05_priors             # noqa: F401
-TolanskyResult          = _tol_mod.TolanskyResult            # noqa: F401
-InsufficientRingsError  = _tol_mod.InsufficientRingsError    # noqa: F401
-print_rectangular_array = _tol_mod.print_rectangular_array   # noqa: F401
-plot_tolansky_result    = _tol_mod.plot_tolansky_result      # noqa: F401
+from src.fpi.fpi_cal_lib import (                               # noqa: F401, E402
+    run_tolansky_2line,
+    to_m05_priors,
+    TolanskyResult,
+    InsufficientRingsError,
+    print_rectangular_array,
+    plot_tolansky_result,
+    run_staged_inversion,
+    save_cal_result,
+    FitResult,
+    _FringeProfile as _H05FringeProfile,
+    phase_correct_gap,
+)
 
 # ---------------------------------------------------------------------------
 # Re-exports — centre finding
@@ -77,16 +71,6 @@ from center_finder import find_centre, CentreResult              # noqa: F401, E
 from annular_reduction import annular_reduce, FringeProfile      # noqa: F401, E402
 
 # ---------------------------------------------------------------------------
-# Re-exports — H05 calibration inversion (flat import via _SRC_PROC on path)
-# ---------------------------------------------------------------------------
-from H05_calibration_inversion_2026_05_12 import (              # noqa: F401, E402
-    run_staged_inversion,
-    save_cal_result,
-    FitResult,
-    _FringeProfile as _H05FringeProfile,
-)
-
-# ---------------------------------------------------------------------------
 # Re-exports — H06 airglow inversion (flat import via _SRC_PROC on path)
 # ---------------------------------------------------------------------------
 from H06_airglow_inversion_2026_05_14 import (                  # noqa: F401, E402
@@ -95,11 +79,6 @@ from H06_airglow_inversion_2026_05_14 import (                  # noqa: F401, E4
     load_cal_result,
     _CalResult as _H06CalResult,
 )
-
-# ---------------------------------------------------------------------------
-# Re-exports — forward model (phase correction for gap seed)
-# ---------------------------------------------------------------------------
-from src.fpi.airy_forward_model_2026_05_05 import phase_correct_gap  # noqa: F401, E402
 
 # ---------------------------------------------------------------------------
 # Constants

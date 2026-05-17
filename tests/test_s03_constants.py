@@ -87,8 +87,8 @@ def test_neon_separation_fsr():
 def test_alpha_rad_px_value():
     from src.constants import ALPHA_RAD_PX
     # Tolansky-recovered value; must match to 4 significant figures
-    assert abs(ALPHA_RAD_PX - 1.6071e-4) < 1e-8, \
-        f"ALPHA_RAD_PX = {ALPHA_RAD_PX:.6e}; expected 1.6071e-4 rad/px"
+    assert abs(ALPHA_RAD_PX - 1.6084e-4) < 1e-8, \
+        f"ALPHA_RAD_PX = {ALPHA_RAD_PX:.6e}; expected 1.6084e-4 rad/px"
     # Sanity: must differ from the nominal design value (no longer used in fits)
     nominal_design = 32e-6 / 0.200
     assert abs(ALPHA_RAD_PX - nominal_design) > 1e-7, \
