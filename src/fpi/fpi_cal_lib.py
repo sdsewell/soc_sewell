@@ -194,7 +194,7 @@ def build_radial_profile(
     image: np.ndarray,
     cx: float,
     cy: float,
-    n_bins: int = 150,
+    n_bins: int = 1500,  # 8 px²/bin — required for clean Gaussian peak fits
     r_max_px: float = 110.0,
 ) -> FringeProfile:
     """
