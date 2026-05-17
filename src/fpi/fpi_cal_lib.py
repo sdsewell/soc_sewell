@@ -148,6 +148,7 @@ def load_bin_frame(
 
 def make_master_dark(
     paths: list[pathlib.Path],
+    shape: tuple[int, int] = (260, 276),
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Median-stack N dark frames.
@@ -157,7 +158,7 @@ def make_master_dark(
     master_dark : float64 (H, W) — median per pixel
     dark_sigma  : float64 (H, W) — std per pixel
     """
-    frames = np.stack([load_bin_frame(p) for p in paths])
+    frames = np.stack([load_bin_frame(p, shape) for p in paths])
     return np.median(frames, axis=0), frames.std(axis=0)
 
 
@@ -193,7 +194,7 @@ def build_radial_profile(
     image: np.ndarray,
     cx: float,
     cy: float,
-    n_bins: int = 1500,  # 8 px²/bin — required for clean Gaussian fits (~43 bins/FWHM)
+    n_bins: int = 150,
     r_max_px: float = 110.0,
 ) -> FringeProfile:
     """
@@ -216,15 +217,34 @@ def fit_peaks(
     fp: FringeProfile,
     distance: int = 5,
     prominence: float = 100.0,
-    fit_half_window: int = 56,  # ±452 px² at 1500 bins — covers ±3σ without bleeding
+    fit_half_window: int = 56,
+    chi2_refit_threshold: float = 15.0,
 ) -> list[PeakFitR2]:
     """
     Detect peaks in radial profile and Gaussian-fit each in r² domain.
 
-    Wraps _find_and_fit_peaks_r2().
-    Expected: 20 peaks (10 strong 640.2 nm + 10 weak 638.3 nm pairs).
+    Two-pass fitting strategy:
+      Pass 1 — standard _find_and_fit_peaks_r2() with n_bins=1500 sampling.
+      Pass 2 — re-fit any peak with chi2_red > chi2_refit_threshold using
+                improved initial guesses derived from the median sigma of the
+                well-fitted inner peaks and valley-minimum background estimation.
+                This robustly handles outer weak 638.3 nm peaks whose windows
+                contain bleed-through tails from the adjacent 640.2 nm peak.
+
+    Parameters
+    ----------
+    fit_half_window      : upper bound on adaptive half-window (bins).
+                           With n_bins=1500 use 56 (covers ±3σ without
+                           bleeding into the adjacent peak).
+    chi2_refit_threshold : peaks with chi2_red above this trigger pass 2.
     """
-    return _find_and_fit_peaks_r2(
+    from scipy.optimize import curve_fit as _curve_fit
+
+    def _gauss(x, A, mu, sig, B):
+        return A * np.exp(-0.5 * ((x - mu) / sig) ** 2) + B
+
+    # ── Pass 1: standard fit ──────────────────────────────────────────
+    peaks = _find_and_fit_peaks_r2(
         fp.r_grid,
         fp.r2_grid,
         fp.profile,
@@ -234,6 +254,112 @@ def fit_peaks(
         prominence=prominence,
         fit_half_window=fit_half_window,
     )
+
+    if len(peaks) < 2:
+        return peaks
+
+    # ── Derive robust sigma prior from well-fitted inner peaks ────────
+    good_sigma = [p.width_r2_px2 for p in peaks
+                  if p.fit_ok
+                  and np.isfinite(p.width_r2_px2)
+                  and np.isfinite(p.reduced_chi2)
+                  and p.reduced_chi2 < chi2_refit_threshold]
+
+    if len(good_sigma) < 3:
+        return peaks   # insufficient reference; return pass-1 as-is
+
+    median_sigma = float(np.median(good_sigma))
+    sigma_lo     = 0.4 * median_sigma
+    sigma_hi     = 2.5 * median_sigma
+
+    # ── Pass 2: re-fit poor peaks with improved guesses ───────────────
+    r2_grid  = fp.r2_grid
+    profile  = fp.profile
+    sig_prof = fp.sigma_profile
+    good_all = ~fp.masked
+    all_bin_indices = [p.peak_idx for p in peaks]
+    improved = list(peaks)
+
+    for i_pk, p in enumerate(peaks):
+        needs_refit = (
+            not p.fit_ok
+            or not np.isfinite(p.reduced_chi2)
+            or p.reduced_chi2 > chi2_refit_threshold
+        )
+        if not needs_refit:
+            continue
+
+        bin_idx = p.peak_idx
+
+        # Same adaptive window as _find_and_fit_peaks_r2
+        left_sep  = (bin_idx - all_bin_indices[i_pk - 1]) if i_pk > 0              else 9999
+        right_sep = (all_bin_indices[i_pk + 1] - bin_idx) if i_pk < len(peaks) - 1 else 9999
+        nearest      = min(left_sep, right_sep)
+        adaptive_hw  = max(2, (nearest - 1) // 2)
+        effective_hw = min(fit_half_window, adaptive_hw)
+
+        lo  = max(0, bin_idx - effective_hw)
+        hi  = min(len(r2_grid) - 1, bin_idx + effective_hw)
+        win = np.arange(lo, hi + 1)
+        use = good_all[win] & np.isfinite(sig_prof[win]) & (sig_prof[win] > 0)
+        win_use = win[use]
+
+        if win_use.size < 5:
+            continue
+
+        r2_w  = r2_grid[win_use]
+        p_w   = profile[win_use]
+        sem_w = sig_prof[win_use]
+        n     = len(p_w)
+        q     = max(1, n // 4)
+
+        # Background: minimum of the two flanks (avoids neighbour tail bias)
+        B0 = float(min(np.min(p_w[:q]), np.min(p_w[-q:])))
+
+        # Amplitude: peak value minus flank minimum
+        peak_val = float(profile[bin_idx])
+        A0 = max(peak_val - B0, 50.0)
+
+        # Centre: raw detected peak position
+        mu0  = float(r2_grid[bin_idx])
+        sig0 = median_sigma
+
+        p0 = [A0, mu0, sig0, B0]
+        bounds = (
+            [0.0,    float(r2_w[0]),  sigma_lo,  B0 - 0.3 * abs(B0)],
+            [np.inf, float(r2_w[-1]), sigma_hi,  B0 + 0.3 * abs(B0) + A0],
+        )
+
+        try:
+            popt, pcov = _curve_fit(
+                _gauss, r2_w, p_w,
+                p0=p0, sigma=sem_w, absolute_sigma=True,
+                bounds=bounds, maxfev=10000,
+            )
+            perr  = np.sqrt(np.diag(pcov))
+            n_dof = max(1, len(r2_w) - 4)
+            chi2  = float(np.sum(((p_w - _gauss(r2_w, *popt)) / sem_w) ** 2))
+            new_chi2 = chi2 / n_dof
+
+            # Accept only if it improves on pass-1 or pass-1 failed outright
+            if not p.fit_ok or (np.isfinite(new_chi2) and
+                                 new_chi2 < p.reduced_chi2 * 0.95):
+                improved[i_pk] = PeakFitR2(
+                    peak_idx         = bin_idx,
+                    r2_raw_px2       = p.r2_raw_px2,
+                    r_raw_px         = p.r_raw_px,
+                    profile_raw      = p.profile_raw,
+                    r2_fit_px2       = float(popt[1]),
+                    sigma_r2_fit_px2 = float(perr[1]),
+                    amplitude_adu    = float(popt[0]),
+                    width_r2_px2     = float(abs(popt[2])),
+                    fit_ok           = True,
+                    reduced_chi2     = new_chi2,
+                )
+        except (RuntimeError, ValueError):
+            pass  # keep pass-1 result
+
+    return improved
 
 
 def peaks_to_array(peaks: list[PeakFitR2]) -> np.ndarray:
