@@ -641,7 +641,8 @@ def _figure_s1(
 
     # [1,1] Variance vs cx (fine NM scan ±5 px, ±1σ/2σ spans)
     ax11 = fig.add_subplot(gs[1, 1])
-    ax11.plot(fine_cx_scan, fine_cost_cx, color="steelblue", linewidth=1.0)
+    ax11.plot(fine_cx_scan, fine_cost_cx, color="steelblue", linewidth=1.0,
+              marker="o", markersize=3, markevery=5)
     ax11.axvline(ctr.cx, color="red", linewidth=1.2, label=f"cx={ctr.cx:.2f}")
     ax11.axvspan(ctr.cx - ctr.sigma_cx, ctr.cx + ctr.sigma_cx,
                  alpha=0.15, color="red", label=f"±1σ ({ctr.sigma_cx:.2f} px)")
@@ -653,7 +654,8 @@ def _figure_s1(
 
     # [1,2] Variance vs cy (fine NM scan ±5 px, ±1σ/2σ spans)
     ax12 = fig.add_subplot(gs[1, 2])
-    ax12.plot(fine_cy_scan, fine_cost_cy, color="darkorange", linewidth=1.0)
+    ax12.plot(fine_cy_scan, fine_cost_cy, color="darkorange", linewidth=1.0,
+              marker="o", markersize=3, markevery=5)
     ax12.axvline(ctr.cy, color="red", linewidth=1.2, label=f"cy={ctr.cy:.2f}")
     ax12.axvspan(ctr.cy - ctr.sigma_cy, ctr.cy + ctr.sigma_cy,
                  alpha=0.15, color="red", label=f"±1σ ({ctr.sigma_cy:.2f} px)")
@@ -673,34 +675,23 @@ def _figure_s2(
     stem: str,
     save_path: pathlib.Path,
 ) -> None:
-    """1×2: I vs r and I vs r²."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    """Single panel: I vs r²."""
+    fig, ax = plt.subplots(figsize=(10, 5))
     fig.suptitle(f"Stage 2 — Radial Profile: {stem}", fontsize=12, fontweight="bold")
 
     good = ~fp.masked
     sig = np.where(fp.sigma_profile[good] > 0, fp.sigma_profile[good], np.nan)
 
-    # [0] I vs r
-    axes[0].errorbar(
-        fp.r_grid[good], fp.profile[good], yerr=sig,
-        fmt="none", ecolor="lightgray", linewidth=0.5, zorder=1,
-    )
-    axes[0].plot(fp.r_grid[good], fp.profile[good], ".", markersize=2,
-                 color="steelblue", zorder=2)
-    axes[0].set_xlabel("r (px)")
-    axes[0].set_ylabel("Intensity (ADU)")
-    axes[0].set_title("I vs r")
-
-    # [1] I vs r²
-    axes[1].errorbar(
+    ax.errorbar(
         fp.r2_grid[good], fp.profile[good], yerr=sig,
         fmt="none", ecolor="lightgray", linewidth=0.5, zorder=1,
     )
-    axes[1].plot(fp.r2_grid[good], fp.profile[good], ".", markersize=2,
-                 color="steelblue", zorder=2)
-    axes[1].set_xlabel("r² (px²)")
-    axes[1].set_ylabel("Intensity (ADU)")
-    axes[1].set_title("I vs r² (fringes equally spaced)")
+    ax.plot(fp.r2_grid[good], fp.profile[good],
+            color="steelblue", linewidth=0.8,
+            marker="o", markersize=3, zorder=2)
+    ax.set_xlabel("r² (px²)")
+    ax.set_ylabel("Intensity (ADU)")
+    ax.set_title("I vs r² (fringes equally spaced)")
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -709,54 +700,58 @@ def _figure_s2(
 # ── Figure S3a — Profile with peaks marked (per frame) ───────────────────────
 
 def _figure_s3a(
-    fp: "cal.FringeProfile",
-    peaks: list,
-    peak_arr: np.ndarray,
-    stem: str,
+    fps: list,
+    peaks_list: list,
+    peak_arrs: list,
+    stems: list[str],
     save_path: pathlib.Path,
 ) -> None:
-    """Full profile with 20 peak markers and Gaussian overlays."""
-    good = ~fp.masked
-    r2 = fp.r2_grid[good]
-    prof = fp.profile[good]
+    """Combined figure: 1 column × N rows, one row per radial image."""
+    n = len(fps)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
+    fig.suptitle("Stage 3a — Peak Detection", fontsize=12, fontweight="bold")
 
-    fig, ax = plt.subplots(figsize=(14, 5))
-    fig.suptitle(f"Stage 3a — Peak Detection: {stem}", fontsize=12, fontweight="bold")
+    for row, (fp, peaks, peak_arr, stem) in enumerate(
+        zip(fps, peaks_list, peak_arrs, stems)
+    ):
+        ax = axes[row, 0]
+        good = ~fp.masked
+        r2 = fp.r2_grid[good]
+        prof = fp.profile[good]
 
-    ax.plot(r2, prof, color="steelblue", linewidth=0.8, label="Profile")
+        ax.plot(r2, prof, color="steelblue", linewidth=0.8,
+                marker="o", markersize=3, label="Profile")
 
-    for i, p in enumerate(peaks):
-        line_id = peak_arr[i, 9]
-        color = "royalblue" if line_id == 0.0 else "darkorange"
-        label_a = f"{_LAM_A_NM:.1f} nm" if line_id == 0.0 else None
-        label_b = f"{_LAM_B_NM:.1f} nm" if line_id == 1.0 else None
-        ax.axvline(
-            p.r2_raw_px2, color=color, linewidth=0.7, linestyle="--",
-            alpha=0.7, label=label_a or label_b,
-        )
-        # Simple Gaussian overlay if fit succeeded
-        if p.fit_ok and np.isfinite(p.r2_fit_px2):
-            r2_span = np.linspace(
-                p.r2_fit_px2 - 3 * p.width_r2_px2,
-                p.r2_fit_px2 + 3 * p.width_r2_px2,
-                60,
+        for i, p in enumerate(peaks):
+            line_id = peak_arr[i, 9]
+            color = "royalblue" if line_id == 0.0 else "darkorange"
+            label_a = f"{_LAM_A_NM:.1f} nm" if line_id == 0.0 else None
+            label_b = f"{_LAM_B_NM:.1f} nm" if line_id == 1.0 else None
+            ax.axvline(
+                p.r2_raw_px2, color=color, linewidth=0.7, linestyle="--",
+                alpha=0.7, label=label_a or label_b,
             )
-            gauss = p.amplitude_adu * np.exp(
-                -0.5 * ((r2_span - p.r2_fit_px2) / p.width_r2_px2) ** 2
-            )
-            bg = float(np.percentile(prof, 10))
-            ax.plot(r2_span, gauss + bg, color=color, linewidth=1.0, alpha=0.8)
+            if p.fit_ok and np.isfinite(p.r2_fit_px2):
+                r2_span = np.linspace(
+                    p.r2_fit_px2 - 3 * p.width_r2_px2,
+                    p.r2_fit_px2 + 3 * p.width_r2_px2,
+                    60,
+                )
+                gauss = p.amplitude_adu * np.exp(
+                    -0.5 * ((r2_span - p.r2_fit_px2) / p.width_r2_px2) ** 2
+                )
+                bg = float(np.percentile(prof, 10))
+                ax.plot(r2_span, gauss + bg, color=color, linewidth=1.0, alpha=0.8)
 
-    # Deduplicate legend entries
-    handles, labels = ax.get_legend_handles_labels()
-    seen: dict[str, object] = {}
-    for h, l in zip(handles, labels):
-        if l not in seen:
-            seen[l] = h
-    ax.legend(list(seen.values()), list(seen.keys()), fontsize=8)
-    ax.set_xlabel("r² (px²)")
-    ax.set_ylabel("Intensity (ADU)")
-    ax.set_title("Radial profile with detected peaks")
+        handles, labels = ax.get_legend_handles_labels()
+        seen: dict[str, object] = {}
+        for h, lbl in zip(handles, labels):
+            if lbl not in seen:
+                seen[lbl] = h
+        ax.legend(list(seen.values()), list(seen.keys()), fontsize=8)
+        ax.set_xlabel("r² (px²)")
+        ax.set_ylabel("Intensity (ADU)")
+        ax.set_title(f"{stem} — radial profile with detected peaks")
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -1181,10 +1176,12 @@ def main() -> None:
     stage_banner(3, "Peak finding and Gaussian fits")
 
     peak_arrays: list[np.ndarray] = []
+    peaks_list:  list             = []
 
     for fp, path in zip(profiles, cal_paths):
         if fp is None:
             peak_arrays.append(None)
+            peaks_list.append(None)
             continue
         stem = path.stem
         print(f"  Fitting peaks: {path.name}")
@@ -1197,8 +1194,6 @@ def main() -> None:
             print(f"    {len(peaks)} peaks detected.")
             _print_table_s3(peaks, peak_arr)
 
-            _figure_s3a(fp, peaks, peak_arr, stem,
-                        path.parent / f"{stem}_fig_S3a.png")
             _figure_s3b(fp, peaks, peak_arr, stem,
                         path.parent / f"{stem}_fig_S3b.png")
             return peaks, peak_arr
@@ -1206,8 +1201,25 @@ def main() -> None:
         result = run_with_error_handling(3, _s3)
         if result is None:
             peak_arrays.append(None)
+            peaks_list.append(None)
         else:
             peak_arrays.append(result[1])
+            peaks_list.append(result[0])
+
+    # Combined S3a figure — all frames in one column-per-row layout
+    def _s3a_combined():
+        valid = [
+            (fp, pks, pa, path.stem)
+            for fp, pks, pa, path in zip(profiles, peaks_list, peak_arrays, cal_paths)
+            if fp is not None and pks is not None and pa is not None
+        ]
+        if valid:
+            fps_v, pks_v, pas_v, stems_v = zip(*valid)
+            _figure_s3a(
+                list(fps_v), list(pks_v), list(pas_v), list(stems_v),
+                cal_dir / "S3a_combined.png",
+            )
+    run_with_error_handling(3, _s3a_combined)
 
     # ── Stage 4: Tolansky two-line WLS ───────────────────────────────────────
     stage_banner(4, "Tolansky two-line WLS fit")
