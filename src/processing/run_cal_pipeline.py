@@ -28,7 +28,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
@@ -46,40 +46,221 @@ _LAM_A_NM = 640.2248
 _LAM_B_NM = 638.2991
 
 
-# ── Frame loader (big-endian uint16, matches load_image.py) ───────────────────
+# ── Frame loader ──────────────────────────────────────────────────────────────
 
 def _load_bin_frame(path: pathlib.Path) -> np.ndarray:
     """
-    Load a WindCube FPI binary frame as a 2-D uint16 array.
-
-    The binary file is big-endian uint16 (dtype '>u2').  Frame dimensions are
-    read from the first two words of the header row (word 0 = n_rows_frame,
-    word 1 = n_cols_frame), so both binning modes are handled automatically:
-      2×2 binned  : 260 rows × 276 cols = 143 520 bytes
-      1×1 unbinned: 528 rows × 552 cols = 582 912 bytes
-
-    Returns the image pixel region only (header row excluded):
-      shape (259, 276) for 2×2 binned
-      shape (527, 552) for 1×1 unbinned
-
-    This replicates the logic of load_image.py::load_raw() exactly.
+    Load a WindCube FPI binary frame → float64 image array (H, W).
+    Big-endian uint16 ('>u2'). Dimensions read from header. Header row stripped.
+    Matches load_image.py::load_raw() exactly.
     """
     with open(path, "rb") as f:
         first_words = np.frombuffer(f.read(4), dtype=">u2")
     n_rows_frame = int(first_words[0])
     n_cols_frame = int(first_words[1])
-
     expected = n_rows_frame * n_cols_frame * 2
     actual   = path.stat().st_size
     if actual != expected:
         raise ValueError(
-            f"{path.name}: file size {actual} bytes, "
+            f"{path.name}: file size {actual} B, "
             f"expected {expected} for {n_rows_frame}×{n_cols_frame} uint16."
         )
-
     raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
-    # Return image rows only (skip header row 0)
-    return raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame).copy()
+    return raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame).astype(np.float64)
+
+
+# ── Plotting helpers (self-contained — copied from load_image.py) ─────────────
+
+import struct as _struct
+
+def _parse_header(h: np.ndarray) -> dict:
+    """Decode the 276-word big-endian header row into a metadata dict."""
+    from datetime import datetime, timezone
+
+    def _u16(w):  return int(h[w])
+    def _u64(w):  return sum(int(h[w+i]) << (16*i) for i in range(4))
+    def _f64(w):
+        b = _struct.pack(">4H", *reversed([h[w+i] for i in range(4)]))
+        return _struct.unpack(">d", b)[0]
+    def _u8arr(w, n): return [int(h[w+i]) & 0xFF for i in range(n)]
+
+    lua_ms  = _u64(8)
+    adcs_ms = _u64(12)
+    try:
+        utc = datetime.fromtimestamp(lua_ms/1000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        utc = "invalid"
+
+    gpio  = _u8arr(100, 4)
+    lamps = _u8arr(104, 6)
+    q_wxyz = [_f64(28 + i*4) for i in range(4)]
+    q_xyzw = [q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]]
+    e_wxyz = [_f64(44 + i*4) for i in range(4)]
+    e_xyzw = [e_wxyz[1], e_wxyz[2], e_wxyz[3], e_wxyz[0]]
+    shutter  = "closed" if (gpio[0]==1 and gpio[3]==1) else "open"
+    img_type = "cal" if any(lamps) else ("dark" if shutter=="closed" else "science")
+
+    return {
+        "rows":                 _u16(0),
+        "cols":                 _u16(1),
+        "exp_time":             _u16(2),
+        "exp_unit":             _u16(3),
+        "ccd_temp1":            round(_f64(4), 4),
+        "lua_timestamp":        lua_ms,
+        "adcs_timestamp":       adcs_ms,
+        "utc_timestamp":        utc,
+        "attitude_quadternion": q_xyzw,
+        "pointing_error":       e_xyzw,
+        "spacecraft_position":  [_f64(60+i*4) for i in range(3)],
+        "spacecraft_velocity":  [_f64(72+i*4) for i in range(3)],
+        "spacecraft_latitude":  _f64(16),
+        "spacecraft_longitude": _f64(20),
+        "spacecraft_altitude":  _f64(24),
+        "etalon_temps":         [_f64(84+i*4) for i in range(4)],
+        "gpio_pwr_on":          gpio,
+        "shutter_status":       shutter,
+        "lamp_ch_array":        lamps,
+        "lamp1_status":         "on" if lamps[0] else "off",
+        "lamp2_status":         "on" if lamps[1] else "off",
+        "lamp3_status":         "on" if lamps[2] else "off",
+        "img_type":             img_type,
+    }
+
+
+_FIELD_META = {
+    "rows":                 ("Rows",               "pixels",   None),
+    "cols":                 ("Cols",               "pixels",   None),
+    "exp_time":             ("Exposure time",       "cs",
+                             lambda v: f"{v} cs  ({v/100:.2f} s)"),
+    "exp_unit":             ("Exposure unit",       "register", None),
+    "ccd_temp1":            ("CCD temperature",     "°C",       None),
+    "lua_timestamp":        ("Lua timestamp",       "ms (Unix)",None),
+    "adcs_timestamp":       ("ADCS timestamp",      "ms (Unix)",None),
+    "utc_timestamp":        ("UTC timestamp",       "",         None),
+    "attitude_quadternion": ("Attitude quaternion", "[x,y,z,w]",None),
+    "pointing_error":       ("Pointing error",      "[x,y,z,w]",None),
+    "spacecraft_position":  ("SC position (ECI)",   "m",        None),
+    "spacecraft_velocity":  ("SC velocity (ECI)",   "m/s",      None),
+    "spacecraft_latitude":  ("SC latitude",         "rad",      None),
+    "spacecraft_longitude": ("SC longitude",        "rad",      None),
+    "spacecraft_altitude":  ("SC altitude",         "m",        None),
+    "etalon_temps":         ("Etalon temperatures", "°C",       None),
+    "gpio_pwr_on":          ("GPIO power on",       "[ch0-3]",  None),
+    "shutter_status":       ("Shutter status",      "",         None),
+    "lamp_ch_array":        ("Lamp channel array",  "",         None),
+    "lamp1_status":         ("Lamp 1 status",       "",         None),
+    "lamp2_status":         ("Lamp 2 status",       "",         None),
+    "lamp3_status":         ("Lamp 3 status",       "",         None),
+    "img_type":             ("Image type",          "",         None),
+}
+
+
+def _fmt_value(key: str, raw) -> str:
+    meta = _FIELD_META.get(key)
+    if meta and meta[2] is not None:
+        return meta[2](raw)
+    if isinstance(raw, list):
+        return "[" + ",  ".join(
+            f"{v:.6g}" if isinstance(v, float) else str(v) for v in raw
+        ) + "]"
+    if isinstance(raw, float):
+        return f"{raw:.6g}"
+    return str(raw)
+
+
+def _plot_image(ax, fig, image: np.ndarray, title: str) -> None:
+    """Imshow with 1st/99th percentile stretch and colorbar. Matches load_image.py."""
+    vlo = float(np.percentile(image,  1))
+    vhi = float(np.percentile(image, 99))
+    im = ax.imshow(image, cmap="gray", origin="lower",
+                   vmin=vlo, vmax=vhi, aspect="equal")
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label("Counts  (ADU)", fontsize=8)
+    ax.set_title(
+        f"{title}\n"
+        f"{image.shape[0]} rows × {image.shape[1]} cols  |  "
+        f"ADU [{image.min()}, {image.max()}]  |  "
+        f"mean {image.mean():.0f}  std {image.std():.1f}",
+        fontsize=8.5,
+    )
+    ax.set_xlabel("Column  (pixel)", fontsize=8)
+    ax.set_ylabel("Row  (pixel)",    fontsize=8)
+    ax.tick_params(labelsize=7)
+
+
+def _plot_hist(ax, image: np.ndarray, title: str) -> None:
+    """Histogram with 1st/99th percentile markers. Matches load_image.py."""
+    vlo = float(np.percentile(image,  1))
+    vhi = float(np.percentile(image, 99))
+    ax.hist(image.ravel(), bins=256, color="steelblue", edgecolor="none")
+    ax.axvline(vlo, color="orange", linestyle="--", linewidth=1,
+               label=f"1st pct  ({vlo:.0f})")
+    ax.axvline(vhi, color="red",    linestyle="--", linewidth=1,
+               label=f"99th pct ({vhi:.0f})")
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel("ADU  (uint16 counts)", fontsize=8)
+    ax.set_ylabel("Number of pixels",     fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.legend(fontsize=7)
+
+
+def _extract_roi(image: np.ndarray, center: tuple, half: int) -> np.ndarray:
+    """Extract a square ROI centred at (row, col), clamped to image bounds."""
+    r0, c0 = center
+    return image[max(0,r0-half):min(image.shape[0],r0+half),
+                 max(0,c0-half):min(image.shape[1],c0+half)]
+
+
+def _make_metadata_table_data(metadata: dict):
+    """Build cell_text and row_heights_in for the metadata table."""
+    col_labels = ["#", "Field (key)", "Display name", "Units", "Value"]
+    cell_text  = [
+        [str(i), key,
+         _FIELD_META.get(key, (key, "", None))[0],
+         _FIELD_META.get(key, (key, "", None))[1],
+         _fmt_value(key, val)]
+        for i, (key, val) in enumerate(metadata.items(), start=1)
+    ]
+    _LINE_H  = 0.20; _MIN_ROW = 0.28; _HDR_ROW = 0.32
+    row_heights_in = [
+        max(_MIN_ROW, max(v.count("\n") + 1 for v in row) * _LINE_H)
+        for row in cell_text
+    ]
+    table_h_in = max(6.0, sum(row_heights_in) + _HDR_ROW + 1.2)
+    return col_labels, cell_text, row_heights_in, table_h_in
+
+
+def _draw_metadata_table(ax, col_labels, cell_text, row_heights_in,
+                          table_h_in, filename: str) -> None:
+    """Draw the metadata table onto ax. Matches load_image.py table style."""
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        colWidths=[0.03, 0.16, 0.16, 0.10, 0.53],
+        loc="upper center",
+        cellLoc="left",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.5)
+    hdr_bg = "#2C3E50"; alt_bg = "#EBF5FB"
+    n_cols = len(col_labels)
+    for c in range(n_cols):
+        tbl[0, c].set_facecolor(hdr_bg)
+        tbl[0, c].set_text_props(color="white", fontweight="bold")
+        tbl[0, c].set_edgecolor("#CCCCCC")
+    for r_idx, h_in in enumerate(row_heights_in):
+        for c in range(n_cols):
+            cell = tbl[r_idx+1, c]
+            cell.set_height(h_in / table_h_in)
+            cell.set_edgecolor("#CCCCCC")
+            if r_idx % 2 == 1:
+                cell.set_facecolor(alt_bg)
+    ax.set_title(
+        f"WindCube FPI Metadata — {filename}",
+        fontsize=11, fontweight="bold", pad=8,
+    )
+
 
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -143,62 +324,80 @@ def run_with_error_handling(stage_n: int, fn):
 
 
 def _save_and_show(fig: plt.Figure, path: pathlib.Path) -> None:
-    """Save PNG then open in Windows photo viewer; press Enter to continue."""
+    """Save figure as PNG then display it; blocks until the window is closed."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path.name}")
+    plt.show(block=True)
     plt.close(fig)
-    print(f"  Saved: {path}")
-    os.startfile(str(path))
-    input("  [Figure opened in photo viewer — press Enter to continue...]")
 
 
-# ── Figure S0a — Dark frame gallery ──────────────────────────────────────────
+# ── Figure S0a — One load_image-style figure per dark frame ─────────────────
 
 def _figure_s0a(
     raw_stack: np.ndarray,
     dark_paths: list[pathlib.Path],
-    save_path: pathlib.Path,
+    save_dir: pathlib.Path,
 ) -> None:
     """
-    2 rows × N_darks columns: raw images (top) and log-scale histograms (bottom).
-    Shared colour scale and shared histogram x-range across all frames.
+    One figure per dark frame: image (top-left), ROI (top-right),
+    histograms (middle row), metadata table (bottom).
+    Matches the load_image.py display exactly.
     """
-    N = len(dark_paths)
-    fig, axes = plt.subplots(2, N, figsize=(3.2 * N, 6), squeeze=False)
-    fig.suptitle(
-        f"Stage 0 — Raw dark frames  |  N={N}",
-        fontsize=11, fontweight="bold",
-    )
+    from matplotlib.gridspec import GridSpec
+    _ROI_HALF = 100
 
-    # Shared scales
-    vlo = float(np.percentile(raw_stack, 1))
-    vhi = float(np.percentile(raw_stack, 99))
-    g_min = float(raw_stack.min())
-    g_max = float(raw_stack.max())
+    for frame, fpath in zip(raw_stack, dark_paths):
+        # Read header from the bin file
+        raw_be    = np.frombuffer(open(fpath, "rb").read(), dtype=">u2")
+        n_cols    = int(raw_be[1])
+        header_be = raw_be[:n_cols].copy()
+        metadata  = _parse_header(header_be)
 
-    for i, (frame, path) in enumerate(zip(raw_stack, dark_paths)):
-        # Row 0: image
-        ax_im = axes[0, i]
-        im = ax_im.imshow(frame, cmap="gray", origin="lower",
-                          vmin=vlo, vmax=vhi, aspect="auto")
-        ax_im.set_title(path.name, fontsize=8)
-        ax_im.set_xlabel("x (px)", fontsize=8)
-        ax_im.set_ylabel("y (px)", fontsize=8)
-        ax_im.tick_params(labelsize=6)
-        if i == N - 1:
-            plt.colorbar(im, ax=ax_im, label="ADU", shrink=0.85)
+        img_u16 = frame.astype(np.uint16)
+        cr, cc  = img_u16.shape[0] // 2, img_u16.shape[1] // 2
+        roi     = _extract_roi(img_u16, (cr, cc), _ROI_HALF)
 
-        # Row 1: histogram (log y, shared x range)
-        ax_h = axes[1, i]
-        ax_h.hist(frame.ravel(), bins=60, range=(g_min, g_max),
-                  color="steelblue", edgecolor="none", alpha=0.8)
-        ax_h.set_yscale("log")
-        ax_h.set_xlabel("ADU", fontsize=8)
-        ax_h.set_ylabel("Pixel count", fontsize=8)
-        ax_h.set_title(f"μ={frame.mean():.0f}  σ={frame.std():.1f}", fontsize=8)
-        ax_h.tick_params(labelsize=6)
+        col_labels, cell_text, row_heights_in, table_h_in = (
+            _make_metadata_table_data(metadata)
+        )
 
-    fig.tight_layout()
-    _save_and_show(fig, save_path)
+        # Build figure — same layout as load_image.py _build_figure()
+        img_row_h = 5.0
+        total_h   = img_row_h * 2 + table_h_in
+        fig = plt.figure(figsize=(14.0, total_h))
+        gs  = GridSpec(3, 2, figure=fig,
+                       height_ratios=[img_row_h, img_row_h, table_h_in])
+
+        ax00   = fig.add_subplot(gs[0, 0])
+        ax01   = fig.add_subplot(gs[0, 1])
+        ax10   = fig.add_subplot(gs[1, 0])
+        ax11   = fig.add_subplot(gs[1, 1])
+        ax_tbl = fig.add_subplot(gs[2, :])
+
+        _plot_image(ax00, fig, img_u16,
+                    f"Unmasked (full frame)")
+        _plot_image(ax01, fig, roi,
+                    f"ROI {roi.shape[0]}×{roi.shape[1]} px  "
+                    f"centred at (row={cr}, col={cc})")
+        _plot_hist(ax10, img_u16, "Pixel Distribution — Unmasked")
+        _plot_hist(ax11, roi,     "Pixel Distribution — ROI")
+
+        # Centre crosshair on full-frame image
+        ax00.axhline(cr, color="cyan",   linewidth=0.8, linestyle="--", alpha=0.9)
+        ax00.axvline(cc, color="cyan",   linewidth=0.8, linestyle="--", alpha=0.9)
+        ax00.plot([cc-15, cc+15], [cr, cr], color="yellow", linewidth=1.5)
+        ax00.plot([cc, cc], [cr-15, cr+15], color="yellow", linewidth=1.5)
+
+        _draw_metadata_table(ax_tbl, col_labels, cell_text,
+                             row_heights_in, table_h_in, fpath.name)
+        fig.suptitle(f"Stage 0 — {fpath.name}", fontsize=12, fontweight="bold")
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+
+        save_path = save_dir / f"S0a_{fpath.stem}.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {save_path.name}")
+        plt.show(block=True)
+        plt.close(fig)
 
 
 # ── Figure S0b — Master dark ──────────────────────────────────────────────────
@@ -210,46 +409,24 @@ def _figure_s0b(
     master_dark_path: pathlib.Path,
     save_path: pathlib.Path,
 ) -> None:
-    """
-    1×3: master dark image | histogram with median line | statistics table.
-    suptitle shows the full saved-file path.
-    """
-    H, W = master_dark.shape
+    """1×3: master dark image | histogram | statistics table."""
+    H, W       = master_dark.shape
     median_val = float(np.median(master_dark))
+    img_u16    = master_dark.astype(np.uint16)
 
-    fig = plt.figure(figsize=(13, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
     fig.suptitle(
         f"Stage 0 — Master dark\n{master_dark_path}",
         fontsize=10, fontweight="bold",
     )
 
-    gs = gridspec.GridSpec(1, 3, figure=fig, wspace=0.38)
+    _plot_image(axes[0], fig, img_u16, "Master dark (median stack)")
+    _plot_hist(axes[1], img_u16, "Histogram")
+    axes[1].axvline(median_val, color="red", linewidth=1.4, linestyle="--",
+                    label=f"median = {median_val:.1f} ADU")
+    axes[1].legend(fontsize=7)
 
-    # [0] Master dark image
-    ax_im = fig.add_subplot(gs[0, 0])
-    vlo = float(np.percentile(master_dark, 1))
-    vhi = float(np.percentile(master_dark, 99))
-    im = ax_im.imshow(master_dark, cmap="gray", origin="lower",
-                      vmin=vlo, vmax=vhi, aspect="auto")
-    ax_im.set_title("Master dark (median stack)", fontsize=9)
-    ax_im.set_xlabel("x (px)"); ax_im.set_ylabel("y (px)")
-    plt.colorbar(im, ax=ax_im, label="ADU", shrink=0.85)
-
-    # [1] Histogram with median marker
-    ax_h = fig.add_subplot(gs[0, 1])
-    ax_h.hist(master_dark.ravel(), bins=60,
-              color="steelblue", edgecolor="none", alpha=0.8)
-    ax_h.set_yscale("log")
-    ax_h.axvline(median_val, color="red", linewidth=1.4, linestyle="--",
-                 label=f"median = {median_val:.1f} ADU")
-    ax_h.set_xlabel("ADU")
-    ax_h.set_ylabel("Pixel count")
-    ax_h.set_title("Histogram", fontsize=9)
-    ax_h.legend(fontsize=8)
-
-    # [2] Statistics table
-    ax_t = fig.add_subplot(gs[0, 2])
-    ax_t.axis("off")
+    axes[2].axis("off")
     rows = [
         ["N frames stacked", str(len(dark_paths))],
         ["Mean ADU",         f"{master_dark.mean():.2f}"],
@@ -260,16 +437,11 @@ def _figure_s0b(
         ["Max sigma (px)",   f"{dark_sigma.max():.2f}"],
         ["Shape",            f"{H} × {W} px"],
     ]
-    tbl = ax_t.table(
-        cellText=rows,
-        colLabels=["Statistic", "Value"],
-        cellLoc="left",
-        loc="upper left",
-        edges="open",
-    )
+    tbl = axes[2].table(cellText=rows, colLabels=["Statistic", "Value"],
+                        cellLoc="left", loc="upper left", edges="open")
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
-    ax_t.set_title("Summary statistics", fontsize=9)
+    axes[2].set_title("Summary statistics", fontsize=9)
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -909,8 +1081,7 @@ def main() -> None:
     print(f"  Saved: {dark_npy}")
 
     def _s0():
-        _figure_s0a(raw_stack, dark_paths,
-                    cal_dir / "S0a_dark_gallery.png")
+        _figure_s0a(raw_stack, dark_paths, cal_dir)
         _figure_s0b(master_dark, dark_sigma, dark_paths, dark_npy,
                     cal_dir / "S0b_master_dark.png")
     run_with_error_handling(0, _s0)
@@ -1079,8 +1250,9 @@ def main() -> None:
             cal.plot_tolansky_result(tol, save_path=tol_fig_path)
             plt.close("all")
             print(f"  Saved: {tol_fig_path}")
-            os.startfile(str(tol_fig_path))
-            input("  [Figure opened in photo viewer — press Enter to continue...]")
+            print(f"  Saved: {tol_fig_path.name}")
+            plt.show(block=True)
+            plt.close("all")
             return tol
 
         result = run_with_error_handling(4, _s4)
