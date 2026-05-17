@@ -46,6 +46,42 @@ _LAM_A_NM = 640.2248
 _LAM_B_NM = 638.2991
 
 
+# ── Frame loader (big-endian uint16, matches load_image.py) ───────────────────
+
+def _load_bin_frame(path: pathlib.Path) -> np.ndarray:
+    """
+    Load a WindCube FPI binary frame as a 2-D uint16 array.
+
+    The binary file is big-endian uint16 (dtype '>u2').  Frame dimensions are
+    read from the first two words of the header row (word 0 = n_rows_frame,
+    word 1 = n_cols_frame), so both binning modes are handled automatically:
+      2×2 binned  : 260 rows × 276 cols = 143 520 bytes
+      1×1 unbinned: 528 rows × 552 cols = 582 912 bytes
+
+    Returns the image pixel region only (header row excluded):
+      shape (259, 276) for 2×2 binned
+      shape (527, 552) for 1×1 unbinned
+
+    This replicates the logic of load_image.py::load_raw() exactly.
+    """
+    with open(path, "rb") as f:
+        first_words = np.frombuffer(f.read(4), dtype=">u2")
+    n_rows_frame = int(first_words[0])
+    n_cols_frame = int(first_words[1])
+
+    expected = n_rows_frame * n_cols_frame * 2
+    actual   = path.stat().st_size
+    if actual != expected:
+        raise ValueError(
+            f"{path.name}: file size {actual} bytes, "
+            f"expected {expected} for {n_rows_frame}×{n_cols_frame} uint16."
+        )
+
+    raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
+    # Return image rows only (skip header row 0)
+    return raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame).copy()
+
+
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
 def _make_root() -> tk.Tk:
@@ -864,7 +900,7 @@ def main() -> None:
     dark_paths = select_files("Select dark .bin frames")
     print(f"  {len(dark_paths)} dark frame(s) selected.")
 
-    raw_stack = np.stack([cal.load_bin_frame(p) for p in dark_paths])
+    raw_stack = np.stack([_load_bin_frame(p) for p in dark_paths])
     master_dark, dark_sigma = cal.make_master_dark(dark_paths)
 
     cal_dir = dark_paths[0].parent
@@ -889,7 +925,7 @@ def main() -> None:
     raw_frames: list[np.ndarray] = []
     ds_frames:  list[np.ndarray] = []
     for path in cal_paths:
-        raw = cal.load_bin_frame(path)
+        raw = _load_bin_frame(path)
         ds  = cal.dark_subtract(raw, master_dark)
         raw_frames.append(raw)
         ds_frames.append(ds)

@@ -121,25 +121,54 @@ class OrbitCalResult:
 
 def load_bin_frame(
     path: pathlib.Path,
-    shape: tuple[int, int] = (260, 276),
+    shape: tuple[int, int] | None = None,
 ) -> np.ndarray:
-    """Load a single uint16 little-endian .bin frame → float64 array (H, W)."""
-    return np.fromfile(path, dtype="<u2").reshape(shape).astype(np.float64)
+    """
+    Load a WindCube FPI binary frame → float64 image array (H, W).
+
+    The file is big-endian uint16 ('>u2').  Frame dimensions are read from
+    the first two header words (word 0 = n_rows_frame, word 1 = n_cols_frame),
+    so both binning modes are handled automatically:
+      2×2 binned  : 260 rows × 276 cols → image shape (259, 276)
+      1×1 unbinned: 528 rows × 552 cols → image shape (527, 552)
+
+    Row 0 (metadata header) is stripped — only pixel rows are returned.
+    The `shape` argument is accepted for backward compatibility but ignored;
+    dimensions are always read from the file header.
+    """
+    with open(path, "rb") as f:
+        first_words = np.frombuffer(f.read(4), dtype=">u2")
+    n_rows_frame = int(first_words[0])
+    n_cols_frame = int(first_words[1])
+
+    expected = n_rows_frame * n_cols_frame * 2
+    actual   = pathlib.Path(path).stat().st_size
+    if actual != expected:
+        raise ValueError(
+            f"{pathlib.Path(path).name}: file size {actual} bytes, "
+            f"expected {expected} for {n_rows_frame}×{n_cols_frame} uint16."
+        )
+
+    raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
+    # Skip header row 0; return image pixel rows as float64
+    return raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame).astype(np.float64)
 
 
 def make_master_dark(
     paths: list[pathlib.Path],
-    shape: tuple[int, int] = (260, 276),
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Median-stack N dark frames.
+
+    Frame dimensions and endianness are handled automatically by load_bin_frame().
+    All frames must have the same binning mode.
 
     Returns
     -------
     master_dark : float64 (H, W) — median per pixel
     dark_sigma  : float64 (H, W) — std per pixel
     """
-    frames = np.stack([load_bin_frame(p, shape) for p in paths])
+    frames = np.stack([load_bin_frame(p) for p in paths])
     return np.median(frames, axis=0), frames.std(axis=0)
 
 
