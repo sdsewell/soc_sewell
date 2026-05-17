@@ -881,8 +881,7 @@ def _figure_s3b(
         r2f_str  = f"{p.r2_fit_px2:.1f}" if np.isfinite(p.r2_fit_px2) else "—"
         sr2_str  = f"{p.sigma_r2_fit_px2:.2f}" if np.isfinite(p.sigma_r2_fit_px2) else "—"
         ax.set_title(
-            f"Peak {i}  λ={lam_str} nm
-"
+            f"Peak {i}  λ={lam_str} nm\n"
             f"r²={r2f_str} ± {sr2_str}  χ²={chi2_str}",
             fontsize=7,
         )
@@ -907,8 +906,7 @@ def _print_table_s3(peaks: list, peak_arr: np.ndarray) -> None:
            f"{'r²_fit (px²)':>13}  {'+/-sig r² (px²)':>15}  "
            f"{'r_der (px)':>11}  {'+/-sig_r (px)':>13}  "
            f"{'Amp (ADU)':>10}  {'Width σr²':>10}  {'χ²_red':>7}")
-    print("
-" + hdr)
+    print("\n" + hdr)
     print("-" * len(hdr))
     for i, p in enumerate(peaks):
         line_id = peak_arr[i, 9]
