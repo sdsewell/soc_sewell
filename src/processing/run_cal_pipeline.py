@@ -1,4 +1,4 @@
-"""run_cal_pipeline.py — WindCube FPI calibration workflow driver (SPEC-CAL01 v1.1).
+"""run_cal_pipeline.py — WindCube FPI calibration workflow driver (SPEC-CAL01 v1.3).
 
 Orchestrates stages S0–S6: dark stacking → centre finding → annular reduction
 → peak fitting → Tolansky seeds → H05 LM fit → OrbitCalResult.
@@ -38,12 +38,25 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import importlib.util as _ilu
-_cal_path = _REPO_ROOT / "src" / "fpi" / "fpi_cal_lib_v1.2_2026-05-17.py"
-_spec = _ilu.spec_from_file_location("fpi_cal_lib", _cal_path)
-cal = _ilu.module_from_spec(_spec)
-sys.modules["fpi_cal_lib"] = cal  # must be registered before exec so dataclasses resolves __module__
-_spec.loader.exec_module(cal)
+from src.fpi.fpi_cal_lib import (  # noqa: E402
+    CentreResult,
+    FringeProfile,
+    TolanskySeedMean,
+    FitResult,
+    OrbitCalResult,
+    _variance_cost,
+    _model_components,
+    make_master_dark,
+    dark_subtract,
+    find_centre,
+    build_radial_profile,
+    fit_peaks,
+    peaks_to_array,
+    run_tolansky,
+    average_tolansky_seeds,
+    run_h05,
+    plot_tolansky_result,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -569,7 +582,7 @@ def _figure_s1_cal_gallery(
 def _figure_s1(
     raw: np.ndarray,
     ds: np.ndarray,
-    ctr: "cal.CentreResult",
+    ctr: "CentreResult",
     stem: str,
     save_path: pathlib.Path,
 ) -> None:
@@ -592,21 +605,21 @@ def _figure_s1(
     grid_cx_pts  = cx_seed + grid_offsets
     grid_cy_pts  = cy_seed + grid_offsets
     grid_cost_cx = np.array([
-        cal._variance_cost(cx, ctr.grid_cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(cx, ctr.grid_cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cx in grid_cx_pts
     ])
     grid_cost_cy = np.array([
-        cal._variance_cost(ctr.grid_cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(ctr.grid_cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cy in grid_cy_pts
     ])
     coarse_cx_line = np.linspace(grid_cx_pts[0], grid_cx_pts[-1], 200)
     coarse_cy_line = np.linspace(grid_cy_pts[0], grid_cy_pts[-1], 200)
     coarse_cost_cx = np.array([
-        cal._variance_cost(cx, ctr.grid_cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(cx, ctr.grid_cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cx in coarse_cx_line
     ])
     coarse_cost_cy = np.array([
-        cal._variance_cost(ctr.grid_cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(ctr.grid_cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cy in coarse_cy_line
     ])
 
@@ -616,11 +629,11 @@ def _figure_s1(
     fine_cx_scan = np.linspace(ctr.cx - fine_half, ctr.cx + fine_half, fine_pts)
     fine_cy_scan = np.linspace(ctr.cy - fine_half, ctr.cy + fine_half, fine_pts)
     fine_cost_cx = np.array([
-        cal._variance_cost(cx, ctr.cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(cx, ctr.cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cx in fine_cx_scan
     ])
     fine_cost_cy = np.array([
-        cal._variance_cost(ctr.cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
+        _variance_cost(ctr.cx, cy, img_c, r_min_sq, r_max_sq, n_var_bins)
         for cy in fine_cy_scan
     ])
 
@@ -836,7 +849,7 @@ def _figure_s3a(
 # ── Figure S3b — Individual peak fits (per frame) ────────────────────────────
 
 def _figure_s3b(
-    fp: "cal.FringeProfile",
+    fp: "FringeProfile",
     peaks: list,
     peak_arr: np.ndarray,
     stem: str,
@@ -1024,7 +1037,7 @@ def _print_table_s3(peaks: list, peak_arr: np.ndarray) -> None:
 
 def _figure_s5(
     tol_results: list,
-    seeds: "cal.TolanskySeedMean",
+    seeds: "TolanskySeedMean",
     chi2_threshold: float,
     save_path: pathlib.Path,
 ) -> None:
@@ -1078,7 +1091,7 @@ def _figure_s5(
 
 def _print_table_s5(
     tol_results: list,
-    seeds: "cal.TolanskySeedMean",
+    seeds: "TolanskySeedMean",
     chi2_threshold: float,
 ) -> None:
     """Print per-frame and orbit-mean Tolansky seed values to stdout."""
@@ -1102,8 +1115,8 @@ def _print_table_s5(
 # ── Figure S6 — H05 diagnostic ───────────────────────────────────────────────
 
 def _figure_s6(
-    fp: "cal.FringeProfile",
-    fit: "cal.FitResult",
+    fp: "FringeProfile",
+    fit: "FitResult",
     save_path: pathlib.Path,
 ) -> None:
     """4-panel H05 calibration fit diagnostic."""
@@ -1115,7 +1128,7 @@ def _figure_s6(
     r_max   = float(fp.r_max_px)
 
     # Model components
-    comp, lam1, lam2 = cal._model_components(
+    comp, lam1, lam2 = _model_components(
         r_good, r_max,
         fit.t_m, fit.alpha, fit.R1, fit.R2,
         fit.I0, fit.I1, fit.I2,
@@ -1217,12 +1230,12 @@ def main() -> None:
 
     dark_paths = select_files(
         "Select dark .bin frames",
-        filetypes=[("Dark frames (*_bin*)", "*_bin*"), ("All files", "*.*")],
+        filetypes=[("Dark frames (*_dark.bin)", "*_dark.bin"), ("All files", "*.*")],
     )
     print(f"  {len(dark_paths)} dark frame(s) selected.")
 
     raw_stack = np.stack([_load_bin_frame(p) for p in dark_paths])
-    master_dark, dark_sigma = cal.make_master_dark(dark_paths)
+    master_dark, dark_sigma = make_master_dark(dark_paths)
 
     cal_dir = dark_paths[0].parent
     dark_npy = cal_dir / "master_dark.npy"
@@ -1240,7 +1253,7 @@ def main() -> None:
 
     cal_paths = select_files(
         "Select neon cal .bin frames",
-        filetypes=[("Cal frames (*_cal*)", "*_cal*"), ("All files", "*.*")],
+        filetypes=[("Cal frames (*_cal.bin)", "*_cal.bin"), ("All files", "*.*")],
     )
     print(f"  {len(cal_paths)} cal frame(s) selected.")
 
@@ -1249,27 +1262,27 @@ def main() -> None:
     ds_frames:  list[np.ndarray] = []
     for path in cal_paths:
         raw = _load_bin_frame(path)
-        ds  = cal.dark_subtract(raw, master_dark)
+        ds  = dark_subtract(raw, master_dark)
         raw_frames.append(raw)
         ds_frames.append(ds)
         print(f"  Dark-subtracted: {path.name}")
 
     # Phase 1b: centre finding per frame (slower — Nelder-Mead)
-    _FALLBACK_CTR = cal.CentreResult(
+    _FALLBACK_CTR = CentreResult(
         cx=138.0, cy=130.0,
         sigma_cx=1.0, sigma_cy=1.0,
         two_sigma_cx=2.0, two_sigma_cy=2.0,
         cost_at_min=0.0,
         grid_cx=138.0, grid_cy=130.0, grid_cost=0.0,
     )
-    centres: list[cal.CentreResult] = []
+    centres: list[CentreResult] = []
 
     for raw, ds, path in zip(raw_frames, ds_frames, cal_paths):
         stem = path.stem
         print(f"  Finding centre: {path.name}")
 
         def _s1_centre(raw=raw, ds=ds, path=path, stem=stem):
-            ctr = cal.find_centre(ds)
+            ctr = find_centre(ds)
             np.savez(
                 path.parent / f"{stem}_center.npz",
                 cx=np.array(ctr.cx),
@@ -1297,14 +1310,14 @@ def main() -> None:
     # ── Stage 2: Annular integration ─────────────────────────────────────────
     stage_banner(2, "Annular integration → radial profile")
 
-    profiles: list[cal.FringeProfile] = []
+    profiles: list[FringeProfile] = []
 
     for ds, ctr, path in zip(ds_frames, centres, cal_paths):
         stem = path.stem
         print(f"  Reducing: {path.name}")
 
         def _s2(ds=ds, ctr=ctr, path=path, stem=stem):
-            fp = cal.build_radial_profile(ds, ctr.cx, ctr.cy)
+            fp = build_radial_profile(ds, ctr.cx, ctr.cy)
 
             np.savez(
                 path.parent / f"{stem}_L1.2.npz",
@@ -1355,8 +1368,8 @@ def main() -> None:
         print(f"  Fitting peaks: {path.name}")
 
         def _s3(fp=fp, path=path, stem=stem, s3b_shown=s3b_shown):
-            peaks    = cal.fit_peaks(fp)
-            peak_arr = cal.peaks_to_array(peaks)
+            peaks    = fit_peaks(fp)
+            peak_arr = peaks_to_array(peaks)
 
             np.save(path.parent / f"{stem}_peak_fits_r2.npy", peak_arr)
             print(f"    {len(peaks)} peaks detected.")
@@ -1417,7 +1430,7 @@ def main() -> None:
         print(f"  Tolansky: {path.name}")
 
         def _s4(peak_arr=peak_arr, path=path, stem=stem):
-            tol = cal.run_tolansky(peak_arr, n_pairs=n_pairs)
+            tol = run_tolansky(peak_arr, n_pairs=n_pairs)
 
             tol_dict = {
                 k: getattr(tol, k)
@@ -1431,7 +1444,7 @@ def main() -> None:
                   f"ε_a={tol.eps_a:.6f}")
 
             tol_fig_path = path.parent / f"{stem}_fig_S4.png"
-            fig = cal.plot_tolansky_result(tol, save_path=tol_fig_path)
+            fig = plot_tolansky_result(tol, save_path=tol_fig_path)
             print(f"  Saved: {tol_fig_path.name}")
             if _s4_first[0]:
                 plt.show(block=True)
@@ -1453,7 +1466,7 @@ def main() -> None:
     CHI2_THRESH = 5.0
 
     def _s5():
-        seeds = cal.average_tolansky_seeds(valid_tol, chi2_threshold=CHI2_THRESH)
+        seeds = average_tolansky_seeds(valid_tol, chi2_threshold=CHI2_THRESH)
         np.save(cal_dir / "orbit_seeds_mean.npy", seeds.__dict__, allow_pickle=True)
         _print_table_s5(valid_tol, seeds, CHI2_THRESH)
         _figure_s5(
@@ -1493,9 +1506,9 @@ def main() -> None:
         if fp_sel is None:
             raise ValueError(f"Profile for frame {idx_1based} is not available.")
 
-        fit = cal.run_h05(fp_sel, seeds)
+        fit = run_h05(fp_sel, seeds)
 
-        orbit_cal = cal.OrbitCalResult(
+        orbit_cal = OrbitCalResult(
             seeds=seeds,
             fit=fit,
             source_cal_files=[str(p) for p in cal_paths],
