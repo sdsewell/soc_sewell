@@ -815,6 +815,39 @@ def _gaussian(r: np.ndarray, A: float, mu: float, sig: float, B: float) -> np.nd
     return A * np.exp(-0.5 * ((r - mu) / sig) ** 2) + B
 
 
+def _find_valley_bounds(
+    profile: np.ndarray,
+    peak_idx: int,
+    search_hw: int = 120,
+) -> tuple[int, int]:
+    """
+    Find the local minimum (valley) to the left and right of peak_idx.
+
+    Scans profile[peak_idx - search_hw : peak_idx] for the left valley
+    and profile[peak_idx + 1 : peak_idx + search_hw + 1] for the right.
+    Returns (valley_L_idx, valley_R_idx) as absolute bin indices.
+    Falls back to (peak_idx - search_hw, peak_idx + search_hw) if the
+    scan range is empty.
+    """
+    n    = len(profile)
+    lo_L = max(0, peak_idx - search_hw)
+    hi_R = min(n - 1, peak_idx + search_hw)
+
+    if peak_idx > lo_L:
+        left_slice = profile[lo_L:peak_idx]
+        valley_L   = lo_L + int(np.argmin(left_slice))
+    else:
+        valley_L   = lo_L
+
+    if hi_R > peak_idx:
+        right_slice = profile[peak_idx + 1:hi_R + 1]
+        valley_R    = peak_idx + 1 + int(np.argmin(right_slice))
+    else:
+        valley_R    = hi_R
+
+    return valley_L, valley_R
+
+
 def _find_and_fit_peaks(
     r_grid:          np.ndarray,
     profile:         np.ndarray,
@@ -904,14 +937,13 @@ def _find_and_fit_peaks(
         # Rule: leave at least 1 bin gap to the nearest neighbour.
         #   max_hw = floor((nearest_neighbour_separation - 1) / 2)
         # Minimum of 2 bins on each side ensures at least 5 points in the window.
-        left_sep  = (bin_idx - all_bin_indices[peak_pos - 1]) if peak_pos > 0                          else 9999
-        right_sep = (all_bin_indices[peak_pos + 1] - bin_idx) if peak_pos < len(all_bin_indices) - 1  else 9999
-        nearest   = min(left_sep, right_sep)
-        adaptive_hw = max(2, (nearest - 1) // 2)
-        effective_hw = min(fit_half_window, adaptive_hw)
+        # Asymmetric valley-bounded window
+        valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
+        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
+        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
 
-        lo      = max(0, bin_idx - effective_hw)
-        hi      = min(len(r_grid) - 1, bin_idx + effective_hw)
+        lo      = max(0, bin_idx - hw_L)
+        hi      = min(len(r_grid) - 1, bin_idx + hw_R)
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
         win_use = win[usable]
@@ -1034,14 +1066,13 @@ def _find_and_fit_peaks_r2(
 
     results: list[PeakFitR2] = []
     for peak_pos, (sub_idx, bin_idx) in enumerate(zip(peaks_sub, all_bin_indices)):
-        left_sep  = (bin_idx - all_bin_indices[peak_pos - 1]) if peak_pos > 0                          else 9999
-        right_sep = (all_bin_indices[peak_pos + 1] - bin_idx) if peak_pos < len(all_bin_indices) - 1  else 9999
-        nearest      = min(left_sep, right_sep)
-        adaptive_hw  = max(2, (nearest - 1) // 2)
-        effective_hw = min(fit_half_window, adaptive_hw)
+        # Asymmetric valley-bounded window
+        valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
+        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
+        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
 
-        lo      = max(0, bin_idx - effective_hw)
-        hi      = min(len(r2_grid) - 1, bin_idx + effective_hw)
+        lo      = max(0, bin_idx - hw_L)
+        hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
         win_use = win[usable]
@@ -1163,7 +1194,7 @@ def annular_reduce(
     bad_pixel_mask: Optional[np.ndarray] = None,
     peak_distance: int = 50,
     peak_prominence: float = 50.0,
-    peak_fit_half_window: int = 40,  # upper bound; adaptive clamp controls effective value
+    peak_fit_half_window: int = 40,  # search radius for valley-bounded asymmetric window (bins)
     min_peak_sep_px: float = 3.0,
 ) -> FringeProfile:
     """
@@ -1196,7 +1227,7 @@ def annular_reduce(
                           Prominence is measured peak-to-trough (local), NOT
                           relative to zero.  A high background pedestal does
                           not affect this value.
-    peak_fit_half_window: half-width of Gaussian fitting window per peak (bins)
+    peak_fit_half_window: search radius for valley-bounded asymmetric window (bins)
     min_peak_sep_px     : minimum physical separation between peaks in pixels,
                           used to derive a safe lower bound on peak_distance
                           from the actual good-bin spacing.  Prevents the
@@ -3297,9 +3328,7 @@ def fit_peaks(
 
     Parameters
     ----------
-    fit_half_window      : upper bound on adaptive half-window (bins).
-                           With n_bins=1500 use 56 (covers ±3σ without
-                           bleeding into the adjacent peak).
+    fit_half_window      : search radius for valley-bounded asymmetric window (bins).
     chi2_refit_threshold : peaks with chi2_red above this trigger pass 2.
     """
     from scipy.optimize import curve_fit as _curve_fit
@@ -3355,15 +3384,13 @@ def fit_peaks(
 
         bin_idx = p.peak_idx
 
-        # Same adaptive window as _find_and_fit_peaks_r2
-        left_sep  = (bin_idx - all_bin_indices[i_pk - 1]) if i_pk > 0              else 9999
-        right_sep = (all_bin_indices[i_pk + 1] - bin_idx) if i_pk < len(peaks) - 1 else 9999
-        nearest      = min(left_sep, right_sep)
-        adaptive_hw  = max(2, (nearest - 1) // 2)
-        effective_hw = min(fit_half_window, adaptive_hw)
+        # Asymmetric valley-bounded window (same logic as _find_and_fit_peaks_r2)
+        valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
+        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
+        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
 
-        lo  = max(0, bin_idx - effective_hw)
-        hi  = min(len(r2_grid) - 1, bin_idx + effective_hw)
+        lo  = max(0, bin_idx - hw_L)
+        hi  = min(len(r2_grid) - 1, bin_idx + hw_R)
         win = np.arange(lo, hi + 1)
         use = good_all[win] & np.isfinite(sig_prof[win]) & (sig_prof[win] > 0)
         win_use = win[use]
