@@ -34,7 +34,7 @@
 | G01_dark | dark frame synthesis | PASS v1.2 | 5/5 | 2026-05-16 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
-| CAL01 | fpi_cal_lib + run_cal_pipeline | CONSOLIDATION IN PROGRESS (Session A done: centre_finder + airy_forward_model + annular_reduction → fpi_cal_lib.py v1.3; Session B pending) | smoke A OK | 2026-05-17 |
+| CAL01 | fpi_cal_lib + run_cal_pipeline | PASS (all S0–S6 complete) | 10/10 | 2026-05-18 |
 
 ## Known pre-existing test failures (not introduced by current work)
 

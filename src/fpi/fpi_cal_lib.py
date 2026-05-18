@@ -1167,7 +1167,7 @@ def _find_and_fit_peaks_r2(
         # ── User-specified window overrides (r² domain) ──────────────────────
         _R2_WINDOWS = {
             0:  (200.0,   400.0),
-            1:  (200.0,   350.0),
+            1:  (800.0,  1000.0),
             4:  (2600.0,  2900.0),
             5:  (3250.0,  3450.0),
             18: (11250.0, 11500.0),
@@ -1841,7 +1841,7 @@ def _plot_all_fringe_diagnostics_r2(
         # ── User-specified window overrides (r² domain) ──────────────────────
         _R2_WINDOWS = {
             0:  (200.0,   400.0),
-            1:  (200.0,   350.0),
+            1:  (800.0,  1000.0),
             4:  (2600.0,  2900.0),
             5:  (3250.0,  3450.0),
             18: (11250.0, 11500.0),
@@ -3672,14 +3672,14 @@ def peaks_to_array(peaks: list[PeakFitR2]) -> np.ndarray:
       8  reduced_chi2      (NaN if fit failed)
       9  line_id           (0.0 = 640.2 nm, 1.0 = 638.3 nm; median-amp split)
     """
-    # Family assignment: strict interleaving by peak index.
-    # Even-indexed peaks are always 640.2 nm (strong), odd-indexed are always
-    # 638.3 nm (weak).  This is the physical reality — the two neon lines
-    # produce strictly alternating rings in r².  A median-amplitude split
-    # fails at large r² where the lines partially overlap.
+    # Family assignment: strict interleaving by list position (i=0,1,2,...).
+    # Even list positions are 640.2 nm (strong), odd are 638.3 nm (weak).
+    # This is the physical reality — the two neon lines produce strictly
+    # alternating rings in r².  A median-amplitude split fails at large r²
+    # where the lines partially overlap.
     rows = []
-    for p in peaks:
-        line_id = 0.0 if (p.peak_idx % 2 == 0) else 1.0
+    for i, p in enumerate(peaks):
+        line_id = 0.0 if (i % 2 == 0) else 1.0
         rows.append([
             float(p.peak_idx),
             p.r2_raw_px2,
