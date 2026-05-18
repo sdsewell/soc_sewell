@@ -1164,6 +1164,22 @@ def _find_and_fit_peaks_r2(
         lo      = max(0, bin_idx - hw_L)
         hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
 
+        # ── User-specified window overrides (r² domain) ──────────────────────
+        _R2_WINDOWS = {
+            0:  (200.0,   400.0),
+            1:  (200.0,   350.0),
+            4:  (2600.0,  2900.0),
+            5:  (3250.0,  3450.0),
+            18: (11250.0, 11500.0),
+            19: (11850.0, 12000.0),
+        }
+        if peak_pos in _R2_WINDOWS:
+            _r2_lo, _r2_hi = _R2_WINDOWS[peak_pos]
+            lo = int(np.searchsorted(r2_grid, _r2_lo, side="left"))
+            hi = int(np.searchsorted(r2_grid, _r2_hi, side="right")) - 1
+            lo = max(0, lo)
+            hi = min(len(r2_grid) - 1, hi)
+        # ── End user-specified overrides ──────────────────────────────────────
 
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
@@ -1820,6 +1836,23 @@ def _plot_all_fringe_diagnostics_r2(
         hw_R = max(6, min(int(np.round(0.8 * hwhm_R)), fit_half_window))
         lo   = max(0, bin_idx - hw_L)
         hi   = min(len(fp.r2_grid) - 1, bin_idx + hw_R)
+
+        # ── User-specified window overrides (r² domain) ──────────────────────
+        _R2_WINDOWS = {
+            0:  (200.0,   400.0),
+            1:  (200.0,   350.0),
+            4:  (2600.0,  2900.0),
+            5:  (3250.0,  3450.0),
+            18: (11250.0, 11500.0),
+            19: (11850.0, 12000.0),
+        }
+        if k in _R2_WINDOWS:
+            _r2_lo, _r2_hi = _R2_WINDOWS[k]
+            lo = int(np.searchsorted(fp.r2_grid, _r2_lo, side="left"))
+            hi = int(np.searchsorted(fp.r2_grid, _r2_hi, side="right")) - 1
+            lo = max(0, lo)
+            hi = min(len(fp.r2_grid) - 1, hi)
+        # ── End user-specified overrides ──────────────────────────────────────
 
         win     = np.arange(lo, hi + 1)
         usable  = ~fp.masked[win] & np.isfinite(fp.sigma_profile[win])
