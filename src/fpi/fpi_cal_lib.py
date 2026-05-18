@@ -819,41 +819,35 @@ def _find_valley_bounds(
     profile: np.ndarray,
     peak_idx: int,
     search_hw: int = 120,
+    smooth_sigma: float = 3.0,
 ) -> tuple[int, int]:
     """
-    Find the NEAREST local minimum (valley) on each side of peak_idx.
+    Find the valley (inter-peak minimum) on each side of peak_idx.
 
-    Walks outward from peak_idx one bin at a time and stops as soon as
-    the profile starts rising (i.e. at the first local minimum). This
-    prevents overshooting to a deeper but more distant valley.
+    Applies a light Gaussian smooth (sigma=smooth_sigma bins) to suppress
+    noise before searching for the minimum. The smooth prevents premature
+    stopping at noise dips while preserving the true inter-peak valley.
+    Uses np.argmin on the smoothed profile within [peak_idx-search_hw,
+    peak_idx] (left) and [peak_idx, peak_idx+search_hw] (right).
 
-    Falls back to the search boundary if no local minimum is found
-    within search_hw bins (e.g. edge peaks with no left neighbour).
+    Returns (valley_L_idx, valley_R_idx) as absolute bin indices into
+    the original (unsmoothed) profile array.
     """
-    n = len(profile)
+    n        = len(profile)
+    smoothed = gaussian_filter1d(profile.astype(float), sigma=smooth_sigma)
 
-    # Left valley — walk leftward from peak_idx-1
-    valley_L = max(0, peak_idx - search_hw)   # fallback
-    for i in range(peak_idx - 1, max(0, peak_idx - search_hw) - 1, -1):
-        if i == 0:
-            valley_L = 0
-            break
-        if profile[i] <= profile[i - 1]:   # still descending or flat
-            valley_L = i
-            break
-        # profile[i] > profile[i-1] means we've passed the minimum
-        valley_L = i
+    lo_L = max(0, peak_idx - search_hw)
+    hi_R = min(n - 1, peak_idx + search_hw)
 
-    # Right valley — walk rightward from peak_idx+1
-    valley_R = min(n - 1, peak_idx + search_hw)   # fallback
-    for i in range(peak_idx + 1, min(n, peak_idx + search_hw + 1)):
-        if i == n - 1:
-            valley_R = n - 1
-            break
-        if profile[i] <= profile[i + 1]:   # still descending or flat
-            valley_R = i
-            break
-        valley_R = i
+    if peak_idx > lo_L:
+        valley_L = lo_L + int(np.argmin(smoothed[lo_L:peak_idx]))
+    else:
+        valley_L = lo_L
+
+    if hi_R > peak_idx:
+        valley_R = peak_idx + 1 + int(np.argmin(smoothed[peak_idx + 1:hi_R + 1]))
+    else:
+        valley_R = hi_R
 
     return valley_L, valley_R
 
