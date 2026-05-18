@@ -808,6 +808,9 @@ class PeakFitR2:
     width_r2_px2:      float  # Gaussian sigma width in r² (px²); nan if fit failed
     fit_ok:            bool   # False if curve_fit failed or window too small
     reduced_chi2:      float  # chi² / (n_points - 4); nan if fit failed
+    para_ok:           bool   # True if parabolic centroid succeeded
+    para_rms:          float  # RMS of parabolic fit residuals (px²); nan if failed
+    gauss_ok:          bool   # True if Gaussian fallback succeeded
 
 
 def _gaussian(r: np.ndarray, A: float, mu: float, sig: float, B: float) -> np.ndarray:
@@ -850,6 +853,51 @@ def _find_valley_bounds(
         valley_R = hi_R
 
     return valley_L, valley_R
+
+
+def _measure_hwhm(
+    profile:      np.ndarray,
+    peak_idx:     int,
+    valley_L:     int,
+    valley_R:     int,
+    smooth_sigma: float = 3.0,
+) -> tuple[int, int]:
+    """
+    Measure the half-width at half-maximum on each flank of a peak.
+
+    Uses the smoothed profile. Half-maximum is defined relative to the
+    local valley floor on each side independently:
+      half_level_L = profile[valley_L] + 0.5*(profile[peak_idx] - profile[valley_L])
+      half_level_R = profile[valley_R] + 0.5*(profile[peak_idx] - profile[valley_R])
+
+    Walks inward from each valley toward the peak and finds the first
+    bin that crosses the half-level. Returns (hwhm_L_bins, hwhm_R_bins)
+    as bin counts (not absolute indices).
+    Falls back to (peak_idx - valley_L, valley_R - peak_idx) if no
+    crossing is found.
+    """
+    smoothed = gaussian_filter1d(profile.astype(float), sigma=smooth_sigma)
+    peak_val = smoothed[peak_idx]
+
+    # Left HWHM
+    floor_L = smoothed[valley_L]
+    half_L  = floor_L + 0.5 * (peak_val - floor_L)
+    hwhm_L  = peak_idx - valley_L   # fallback
+    for i in range(valley_L, peak_idx):
+        if smoothed[i] >= half_L:
+            hwhm_L = peak_idx - i
+            break
+
+    # Right HWHM
+    floor_R = smoothed[valley_R]
+    half_R  = floor_R + 0.5 * (peak_val - floor_R)
+    hwhm_R  = valley_R - peak_idx   # fallback
+    for i in range(valley_R, peak_idx, -1):
+        if smoothed[i] >= half_R:
+            hwhm_R = i - peak_idx
+            break
+
+    return max(4, hwhm_L), max(4, hwhm_R)
 
 
 def _parabolic_centroid(
@@ -972,10 +1020,11 @@ def _find_and_fit_peaks(
         # Rule: leave at least 1 bin gap to the nearest neighbour.
         #   max_hw = floor((nearest_neighbour_separation - 1) / 2)
         # Minimum of 2 bins on each side ensures at least 5 points in the window.
-        # Asymmetric valley-bounded window
+        # HWHM-based asymmetric window
         valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
-        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
-        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
+        hwhm_L, hwhm_R    = _measure_hwhm(profile, bin_idx, valley_L, valley_R)
+        hw_L = min(max(6, int(np.round(0.8 * hwhm_L))), fit_half_window)
+        hw_R = min(max(6, int(np.round(0.8 * hwhm_R))), fit_half_window)
 
         lo      = max(0, bin_idx - hw_L)
         hi      = min(len(r_grid) - 1, bin_idx + hw_R)
@@ -1106,10 +1155,11 @@ def _find_and_fit_peaks_r2(
 
     results: list[PeakFitR2] = []
     for peak_pos, (sub_idx, bin_idx) in enumerate(zip(peaks_sub, all_bin_indices)):
-        # Asymmetric valley-bounded window
+        # HWHM-based asymmetric window
         valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
-        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
-        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
+        hwhm_L, hwhm_R    = _measure_hwhm(profile, bin_idx, valley_L, valley_R)
+        hw_L = min(max(6, int(np.round(0.8 * hwhm_L))), fit_half_window)
+        hw_R = min(max(6, int(np.round(0.8 * hwhm_R))), fit_half_window)
 
         lo      = max(0, bin_idx - hw_L)
         hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
@@ -1117,12 +1167,34 @@ def _find_and_fit_peaks_r2(
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
         win_use = win[usable]
 
-        r2_fit_px2       = float(r2_grid[bin_idx])   # fallback if fit fails
+        # --- Parabolic primary fit ---
+        para_ok    = False
+        para_mu    = float(r2_grid[bin_idx])   # fallback
+        para_rms   = np.nan
+        para_resid = None
+
+        if win_use.size >= 4:
+            r2_w  = r2_grid[win_use]
+            p_w   = profile[win_use]
+            sem_w = sigma_profile[win_use]
+
+            para_mu_raw, para_rms = _parabolic_centroid(r2_w, p_w, top_fraction=0.5)
+            if r2_w[0] <= para_mu_raw <= r2_w[-1]:
+                para_mu = para_mu_raw
+                para_ok = True
+                threshold = np.min(p_w) + 0.5 * (np.max(p_w) - np.min(p_w))
+                mask_top  = p_w >= threshold
+                if mask_top.sum() >= 3:
+                    coeffs     = np.polyfit(r2_w[mask_top], p_w[mask_top], 2)
+                    para_resid = p_w[mask_top] - np.polyval(coeffs, r2_w[mask_top])
+
+        # --- Gaussian fallback ---
+        gauss_ok         = False
+        r2_fit_px2       = para_mu
         sigma_r2_fit_px2 = np.nan
         amplitude_adu    = float(profile[bin_idx])
         width_r2_px2     = np.nan
         reduced_chi2     = np.nan
-        fit_ok           = False
 
         if win_use.size >= 4:
             r2_w  = r2_grid[win_use]
@@ -1131,36 +1203,35 @@ def _find_and_fit_peaks_r2(
 
             B0   = float(np.percentile(p_w, 20))
             A0   = max(float(profile[bin_idx]) - B0, 1.0)
-            mu0  = float(r2_grid[bin_idx])
+            mu0  = para_mu if para_ok else float(r2_grid[bin_idx])
             sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0, median_dr2_px2 * 0.5)
-            p0   = [A0, mu0, sig0, B0]
-            bounds = (
+            p0      = [A0, mu0, sig0, B0]
+            bounds  = (
                 [0.0,    float(r2_w[0]),  0.3 * median_dr2_px2,    -np.inf],
                 [np.inf, float(r2_w[-1]), float(r2_w[-1]) - float(r2_w[0]), np.inf],
             )
             try:
-                popt, pcov = curve_fit(
+                popt, pcov       = curve_fit(
                     _gaussian, r2_w, p_w,
                     p0=p0, sigma=sem_w, absolute_sigma=True,
                     bounds=bounds, maxfev=5000,
                 )
                 perr             = np.sqrt(np.diag(pcov))
-                r2_fit_px2       = float(popt[1])
                 sigma_r2_fit_px2 = float(perr[1])
                 amplitude_adu    = float(popt[0])
                 width_r2_px2     = float(abs(popt[2]))
                 n_dof            = len(r2_w) - 4
                 if n_dof > 0:
-                    chi2         = float(np.sum(((p_w - _gaussian(r2_w, *popt)) / sem_w) ** 2))
+                    chi2         = float(np.sum(
+                        ((p_w - _gaussian(r2_w, *popt)) / sem_w) ** 2))
                     reduced_chi2 = chi2 / n_dof
-                fit_ok           = True
-                # Parabolic centroid refinement
-                para_mu, _ = _parabolic_centroid(r2_w, p_w, top_fraction=0.4)
-                if (r2_w[0] <= para_mu <= r2_w[-1] and
-                        abs(para_mu - r2_fit_px2) < 2.0 * width_r2_px2):
-                    r2_fit_px2 = para_mu
+                gauss_ok         = True
+                if not para_ok:
+                    r2_fit_px2   = float(popt[1])
             except (RuntimeError, ValueError):
                 pass
+
+        fit_ok = para_ok or gauss_ok
 
         results.append(PeakFitR2(
             peak_idx         = bin_idx,
@@ -1173,6 +1244,9 @@ def _find_and_fit_peaks_r2(
             width_r2_px2     = width_r2_px2,
             fit_ok           = fit_ok,
             reduced_chi2     = reduced_chi2,
+            para_ok          = para_ok,
+            para_rms         = para_rms,
+            gauss_ok         = gauss_ok,
         ))
 
     results.sort(key=lambda p: p.r2_raw_px2)
@@ -3409,10 +3483,11 @@ def fit_peaks(
 
         bin_idx = p.peak_idx
 
-        # Asymmetric valley-bounded window (same logic as _find_and_fit_peaks_r2)
+        # HWHM-based asymmetric window (same logic as _find_and_fit_peaks_r2)
         valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
-        hw_L = min(max(4, bin_idx - valley_L), fit_half_window)
-        hw_R = min(max(4, valley_R - bin_idx), fit_half_window)
+        hwhm_L, hwhm_R    = _measure_hwhm(profile, bin_idx, valley_L, valley_R)
+        hw_L = min(max(6, int(np.round(0.8 * hwhm_L))), fit_half_window)
+        hw_R = min(max(6, int(np.round(0.8 * hwhm_R))), fit_half_window)
 
         lo  = max(0, bin_idx - hw_L)
         hi  = min(len(r2_grid) - 1, bin_idx + hw_R)
@@ -3471,6 +3546,9 @@ def fit_peaks(
                     width_r2_px2     = float(abs(popt[2])),
                     fit_ok           = True,
                     reduced_chi2     = new_chi2,
+                    para_ok          = p.para_ok,
+                    para_rms         = p.para_rms,
+                    gauss_ok         = True,
                 )
         except (RuntimeError, ValueError):
             pass  # keep pass-1 result
