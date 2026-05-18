@@ -821,31 +821,72 @@ def _find_valley_bounds(
     search_hw: int = 120,
 ) -> tuple[int, int]:
     """
-    Find the local minimum (valley) to the left and right of peak_idx.
+    Find the NEAREST local minimum (valley) on each side of peak_idx.
 
-    Scans profile[peak_idx - search_hw : peak_idx] for the left valley
-    and profile[peak_idx + 1 : peak_idx + search_hw + 1] for the right.
-    Returns (valley_L_idx, valley_R_idx) as absolute bin indices.
-    Falls back to (peak_idx - search_hw, peak_idx + search_hw) if the
-    scan range is empty.
+    Walks outward from peak_idx one bin at a time and stops as soon as
+    the profile starts rising (i.e. at the first local minimum). This
+    prevents overshooting to a deeper but more distant valley.
+
+    Falls back to the search boundary if no local minimum is found
+    within search_hw bins (e.g. edge peaks with no left neighbour).
     """
-    n    = len(profile)
-    lo_L = max(0, peak_idx - search_hw)
-    hi_R = min(n - 1, peak_idx + search_hw)
+    n = len(profile)
 
-    if peak_idx > lo_L:
-        left_slice = profile[lo_L:peak_idx]
-        valley_L   = lo_L + int(np.argmin(left_slice))
-    else:
-        valley_L   = lo_L
+    # Left valley — walk leftward from peak_idx-1
+    valley_L = max(0, peak_idx - search_hw)   # fallback
+    for i in range(peak_idx - 1, max(0, peak_idx - search_hw) - 1, -1):
+        if i == 0:
+            valley_L = 0
+            break
+        if profile[i] <= profile[i - 1]:   # still descending or flat
+            valley_L = i
+            break
+        # profile[i] > profile[i-1] means we've passed the minimum
+        valley_L = i
 
-    if hi_R > peak_idx:
-        right_slice = profile[peak_idx + 1:hi_R + 1]
-        valley_R    = peak_idx + 1 + int(np.argmin(right_slice))
-    else:
-        valley_R    = hi_R
+    # Right valley — walk rightward from peak_idx+1
+    valley_R = min(n - 1, peak_idx + search_hw)   # fallback
+    for i in range(peak_idx + 1, min(n, peak_idx + search_hw + 1)):
+        if i == n - 1:
+            valley_R = n - 1
+            break
+        if profile[i] <= profile[i + 1]:   # still descending or flat
+            valley_R = i
+            break
+        valley_R = i
 
     return valley_L, valley_R
+
+
+def _parabolic_centroid(
+    x: np.ndarray,
+    y: np.ndarray,
+    top_fraction: float = 0.5,
+) -> tuple[float, float]:
+    """
+    Fit a parabola to the top fraction of a peak and return the centroid.
+
+    Selects bins where y >= y_min + top_fraction*(y_max - y_min), fits
+    a quadratic y = a*x^2 + b*x + c, and returns centroid = -b/(2a).
+
+    Returns (centroid, residual_rms). Returns (x[argmax], nan) if fewer
+    than 3 points are available or if parabola opens upward (a >= 0).
+    """
+    y_min = float(np.min(y))
+    y_max = float(np.max(y))
+    threshold = y_min + top_fraction * (y_max - y_min)
+    mask = y >= threshold
+    xm, ym = x[mask], y[mask]
+    if len(xm) < 3:
+        return float(x[int(np.argmax(y))]), float("nan")
+    coeffs = np.polyfit(xm, ym, 2)
+    a, b, _ = coeffs
+    if a >= 0:
+        return float(x[int(np.argmax(y))]), float("nan")
+    centroid = -b / (2.0 * a)
+    residuals = ym - np.polyval(coeffs, xm)
+    rms = float(np.sqrt(np.mean(residuals ** 2)))
+    return centroid, rms
 
 
 def _find_and_fit_peaks(
@@ -992,6 +1033,11 @@ def _find_and_fit_peaks(
                     chi2         = float(np.sum(((p_w - _gaussian(r_w, *popt)) / sem_w) ** 2))
                     reduced_chi2 = chi2 / n_dof
                 fit_ok         = True
+                # Parabolic centroid refinement
+                para_mu, _ = _parabolic_centroid(r_w, p_w, top_fraction=0.4)
+                if (r_w[0] <= para_mu <= r_w[-1] and
+                        abs(para_mu - r_fit_px) < 2.0 * width_px):
+                    r_fit_px = para_mu
             except (RuntimeError, ValueError):
                 pass
 
@@ -1114,6 +1160,11 @@ def _find_and_fit_peaks_r2(
                     chi2         = float(np.sum(((p_w - _gaussian(r2_w, *popt)) / sem_w) ** 2))
                     reduced_chi2 = chi2 / n_dof
                 fit_ok           = True
+                # Parabolic centroid refinement
+                para_mu, _ = _parabolic_centroid(r2_w, p_w, top_fraction=0.4)
+                if (r2_w[0] <= para_mu <= r2_w[-1] and
+                        abs(para_mu - r2_fit_px2) < 2.0 * width_r2_px2):
+                    r2_fit_px2 = para_mu
             except (RuntimeError, ValueError):
                 pass
 
