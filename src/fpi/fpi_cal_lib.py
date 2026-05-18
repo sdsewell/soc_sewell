@@ -3265,26 +3265,6 @@ def dark_subtract(
     return frame.astype(np.float64) - master_dark
 
 
-def find_centre(
-    image: np.ndarray,
-    cx_seed: float | None = None,
-    cy_seed: float | None = None,
-    var_r_max_px: float | None = None,
-) -> CentreResult:
-    """
-    Two-pass azimuthal variance centre finder.
-
-    Seeds default to image centre if None.
-    Calls azimuthal_variance_centre() then estimate_centre_uncertainty().
-    Returns CentreResult with cx, cy, sigma_cx, sigma_cy,
-    two_sigma_cx, two_sigma_cy, cost_at_min, grid_cx, grid_cy, grid_cost.
-    """
-    kwargs: dict = {}
-    if var_r_max_px is not None:
-        kwargs["var_r_max_px"] = var_r_max_px
-    return _cf_find_centre(image, cx_seed=cx_seed, cy_seed=cy_seed, **kwargs)
-
-
 def build_radial_profile(
     image: np.ndarray,
     cx: float,
