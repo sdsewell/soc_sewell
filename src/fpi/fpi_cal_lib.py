@@ -1778,7 +1778,8 @@ def _plot_first_fringe_diagnostic_r2(
 def _plot_all_fringe_diagnostics_r2(
     fp: FringeProfile,
     fit_half_window: int = 40,
-    n_cols: int = 5,
+    n_cols: int = 4,
+    save_path: "Path | str | None" = None,
 ) -> None:
     """
     Grid figure showing the r²-domain Gaussian fitting window for every
@@ -1913,9 +1914,11 @@ def _plot_all_fringe_diagnostics_r2(
                 ax.axvspan(r2_fit - sigma_r2_fit, r2_fit + sigma_r2_fit,
                            alpha=0.15, color="darkorange", zorder=1)
 
+        ax.set_xlim(max(0.0, r2_lo_plot), r2_hi_plot)
+
         # ── Title ────────────────────────────────────────────────────────────
-        lam    = "640.2" if (k + 1) % 2 == 1 else "638.3"
-        hw_str = f"({hw_L},{hw_R})"
+        lam_str = "640.2" if k % 2 == 0 else "638.3"
+        hw_str  = f"({hw_L},{hw_R})"
         if fit_ok:
             r_derived = float(np.sqrt(r2_fit)) if r2_fit > 0 else float("nan")
             chi2_str  = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "nan"
@@ -1923,14 +1926,14 @@ def _plot_all_fringe_diagnostics_r2(
             tag_para  = f"para ok rms={rms_str}" if para_ok else "para FAIL"
             tag_gauss = "gauss ok" if gauss_ok else "gauss FAIL"
             title = (
-                f"P{k+1} · {lam} nm  hw={hw_str}\n"
+                f"Peak {k}  λ={lam_str} nm  hw={hw_str}\n"
                 f"r²={r2_fit:.1f}±{sigma_r2_fit:.1f}  r={r_derived:.3f}  χ²={chi2_str}\n"
                 f"{tag_para}  {tag_gauss}"
             )
             title_color = "#1a6e2e"
         else:
             title = (
-                f"P{k+1} · {lam} nm  hw={hw_str}  FAILED\n"
+                f"Peak {k}  λ={lam_str} nm  hw={hw_str}  FAILED\n"
                 f"{'para ok' if para_ok else 'para FAIL'}  "
                 f"{'gauss ok' if gauss_ok else 'gauss FAIL'}"
             )
@@ -1946,6 +1949,72 @@ def _plot_all_fringe_diagnostics_r2(
         axes[r, c].axis("off")
 
     fig.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    # ── Peak summary table ───────────────────────────────────────────────────
+    col_labels = [
+        "Peak", "λ (nm)", "r²_raw (px²)", "r²_fit (px²)", "±σ r² (px²)",
+        "r_derived (px)", "±σ_r (px)", "Amp (ADU)", "Width σ r² (px²)",
+        "para_ok", "χ²_red",
+    ]
+    table_data = []
+    for k, pf in enumerate(peaks):
+        lam_str_k = "640.2" if k % 2 == 0 else "638.3"
+        if pf.fit_ok and pf.r2_fit_px2 > 0:
+            r_der      = float(np.sqrt(pf.r2_fit_px2))
+            sigma_r_dr = pf.sigma_r2_fit_px2 / (2.0 * r_der)
+        else:
+            r_der      = float("nan")
+            sigma_r_dr = float("nan")
+        chi2_s = f"{pf.reduced_chi2:.2f}" if np.isfinite(pf.reduced_chi2) else "—"
+        row = [
+            str(k),
+            lam_str_k,
+            f"{pf.r2_raw_px2:.1f}",
+            f"{pf.r2_fit_px2:.3f}" if pf.fit_ok else "—",
+            f"{pf.sigma_r2_fit_px2:.3f}" if (pf.fit_ok and np.isfinite(pf.sigma_r2_fit_px2)) else "—",
+            f"{r_der:.4f}" if np.isfinite(r_der) else "—",
+            f"{sigma_r_dr:.4f}" if np.isfinite(sigma_r_dr) else "—",
+            f"{pf.amplitude_adu:.1f}",
+            f"{pf.width_r2_px2:.2f}" if np.isfinite(pf.width_r2_px2) else "—",
+            "yes" if pf.para_ok else "no",
+            chi2_s,
+        ]
+        table_data.append(row)
+
+    n_tbl_rows = len(table_data)
+    n_tbl_cols = len(col_labels)
+    fig_tbl_h  = max(4.0, 0.35 * n_tbl_rows + 1.5)
+    fig_tbl, ax_tbl = plt.subplots(figsize=(22, fig_tbl_h))
+    ax_tbl.axis("off")
+    tbl = ax_tbl.table(
+        cellText=table_data,
+        colLabels=col_labels,
+        loc="center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.5)
+    tbl.scale(1, 1.3)
+    for col in range(n_tbl_cols):
+        tbl[(0, col)].set_facecolor("#c8d8f0")
+    for row in range(1, n_tbl_rows + 1):
+        bg = "#f0f4ff" if row % 2 == 0 else "white"
+        for col in range(n_tbl_cols):
+            tbl[(row, col)].set_facecolor(bg)
+    ax_tbl.set_title(
+        "Peak Fit Results (r² domain) — parabolic centroids",
+        fontsize=11, fontweight="bold", pad=12,
+    )
+    fig_tbl.tight_layout()
+    if save_path is not None:
+        from pathlib import Path as _Path
+        tbl_path = _Path(save_path).with_name(
+            _Path(save_path).stem + "_peak_table.png"
+        )
+        fig_tbl.savefig(tbl_path, dpi=150, bbox_inches="tight")
+    plt.show()
 
 
 def _print_peak_table(peak_fits: list[PeakFit]) -> None:
