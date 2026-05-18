@@ -1163,6 +1163,20 @@ def _find_and_fit_peaks_r2(
 
         lo      = max(0, bin_idx - hw_L)
         hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
+
+        # ── Diagnostic window overrides (remove after validation) ──
+        _DIAG_WINDOWS = {
+            0:  (200.0,   400.0),    # Peak 0  640.2 nm
+            19: (11850.0, 12000.0),  # Peak 19 638.3 nm
+        }
+        if peak_pos in _DIAG_WINDOWS:
+            r2_lo_diag, r2_hi_diag = _DIAG_WINDOWS[peak_pos]
+            lo = int(np.searchsorted(r2_grid, r2_lo_diag))
+            hi = int(np.searchsorted(r2_grid, r2_hi_diag))
+            lo = max(0, lo)
+            hi = min(len(r2_grid) - 1, hi)
+        # ── End diagnostic overrides ──
+
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
         win_use = win[usable]
