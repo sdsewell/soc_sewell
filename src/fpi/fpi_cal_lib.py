@@ -1164,18 +1164,6 @@ def _find_and_fit_peaks_r2(
         lo      = max(0, bin_idx - hw_L)
         hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
 
-        # ── Diagnostic window overrides (remove after validation) ──
-        _DIAG_WINDOWS = {
-            0:  (200.0,   400.0),    # Peak 0  640.2 nm
-            19: (11850.0, 12000.0),  # Peak 19 638.3 nm
-        }
-        if peak_pos in _DIAG_WINDOWS:
-            r2_lo_diag, r2_hi_diag = _DIAG_WINDOWS[peak_pos]
-            lo = int(np.searchsorted(r2_grid, r2_lo_diag))
-            hi = int(np.searchsorted(r2_grid, r2_hi_diag))
-            lo = max(0, lo)
-            hi = min(len(r2_grid) - 1, hi)
-        # ── End diagnostic overrides ──
 
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
@@ -1803,17 +1791,15 @@ def _plot_all_fringe_diagnostics_r2(
         median_dr_px   = 1.0
         median_dr2_px2 = 1.0
 
-    all_bin_indices = [pf.peak_idx for pf in peaks]
-
     fig, axes = plt.subplots(
         n_rows, n_cols,
         figsize=(4.2 * n_cols, 3.6 * n_rows),
         squeeze=False,
     )
     fig.suptitle(
-        f"All-Fringe Gaussian Fit Diagnostics (r² domain)  —  {n_peaks} peaks  |  "
+        f"All-Fringe Fit Diagnostics (r² domain)  —  {n_peaks} peaks  |  "
         f"median r² bin width = {median_dr2_px2:.3f} px²  |  "
-        f"fit_half_window = {fit_half_window} (adaptive clamp applied per peak)",
+        f"fit_half_window = {fit_half_window} (HWHM-based asymmetric window per peak)",
         fontsize=10, fontweight="bold",
     )
 
@@ -1821,15 +1807,20 @@ def _plot_all_fringe_diagnostics_r2(
         row, col = divmod(k, n_cols)
         ax = axes[row, col]
 
-        bin_idx   = all_bin_indices[k]
-        left_sep  = (bin_idx - all_bin_indices[k - 1]) if k > 0           else 9999
-        right_sep = (all_bin_indices[k + 1] - bin_idx) if k < n_peaks - 1 else 9999
-        nearest      = min(left_sep, right_sep)
-        adaptive_hw  = max(2, (nearest - 1) // 2)
-        effective_hw = min(fit_half_window, adaptive_hw)
+        bin_idx = pf.peak_idx
 
-        lo      = max(0, bin_idx - effective_hw)
-        hi      = min(len(fp.r2_grid) - 1, bin_idx + effective_hw)
+        # HWHM-based asymmetric window — matches _find_and_fit_peaks_r2
+        valley_L, valley_R = _find_valley_bounds(
+            fp.profile, bin_idx, search_hw=fit_half_window
+        )
+        hwhm_L, hwhm_R = _measure_hwhm(
+            fp.profile, bin_idx, valley_L, valley_R
+        )
+        hw_L = max(6, min(int(np.round(0.8 * hwhm_L)), fit_half_window))
+        hw_R = max(6, min(int(np.round(0.8 * hwhm_R)), fit_half_window))
+        lo   = max(0, bin_idx - hw_L)
+        hi   = min(len(fp.r2_grid) - 1, bin_idx + hw_R)
+
         win     = np.arange(lo, hi + 1)
         usable  = ~fp.masked[win] & np.isfinite(fp.sigma_profile[win])
         win_use = win[usable]
@@ -1838,52 +1829,21 @@ def _plot_all_fringe_diagnostics_r2(
         p_w   = fp.profile[win_use]
         sem_w = fp.sigma_profile[win_use]
 
-        # Initial guess — same formulas as _find_and_fit_peaks_r2
-        B0   = float(np.percentile(p_w, 20)) if len(p_w) > 0 else 0.0
-        A0   = max(float(fp.profile[bin_idx]) - B0, 1.0)
-        mu0  = float(fp.r2_grid[bin_idx])
-        sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0,
-                   median_dr2_px2 * 0.5) if len(r2_w) > 1 else median_dr2_px2
-        p0   = [A0, mu0, sig0, B0]
+        # Stored fit results from _find_and_fit_peaks_r2
+        fit_ok       = pf.fit_ok
+        para_ok      = pf.para_ok
+        gauss_ok     = pf.gauss_ok
+        r2_fit       = pf.r2_fit_px2
+        sigma_r2_fit = pf.sigma_r2_fit_px2
+        reduced_chi2 = pf.reduced_chi2
+        para_rms     = pf.para_rms
 
-        bounds_lo = [0.0,    float(r2_w[0])  if len(r2_w) else mu0 - 1,
-                     0.3 * median_dr2_px2,                                    0.0   ]
-        bounds_hi = [np.inf, float(r2_w[-1]) if len(r2_w) else mu0 + 1,
-                     float(r2_w[-1]) - float(r2_w[0]) if len(r2_w) > 1
-                     else median_dr2_px2 * 4,                                 np.inf]
+        mu0        = float(fp.r2_grid[bin_idx])
+        r2_lo_plot = r2_w[0]  if len(r2_w) > 0 else mu0 - 2 * median_dr2_px2
+        r2_hi_plot = r2_w[-1] if len(r2_w) > 0 else mu0 + 2 * median_dr2_px2
+        r2_fine    = np.linspace(r2_lo_plot, r2_hi_plot, 300)
 
-        fit_ok = False
-        popt   = p0[:]
-        perr   = [np.nan] * 4
-        mesg   = f"n_usable = {win_use.size} < 4"
-        reduced_chi2 = np.nan
-        if win_use.size >= 4:
-            try:
-                popt, pcov = curve_fit(
-                    _gaussian, r2_w, p_w,
-                    p0=p0, sigma=sem_w, absolute_sigma=True,
-                    bounds=(bounds_lo, bounds_hi), maxfev=5000,
-                )
-                perr   = list(np.sqrt(np.diag(pcov)))
-                fit_ok = True
-                mesg   = "converged"
-                n_dof  = len(r2_w) - 4
-                if n_dof > 0:
-                    chi2         = float(np.sum(
-                        ((p_w - _gaussian(r2_w, *popt)) / sem_w) ** 2
-                    ))
-                    reduced_chi2 = chi2 / n_dof
-            except RuntimeError as exc:
-                mesg = f"RuntimeError: {str(exc)[:55]}"
-            except ValueError as exc:
-                mesg = f"ValueError: {str(exc)[:55]}"
-
-        r2_lo_plot = r2_w[0]  if len(r2_w) else mu0 - 2 * median_dr2_px2
-        r2_hi_plot = r2_w[-1] if len(r2_w) else mu0 + 2 * median_dr2_px2
-        r2_fine = np.linspace(r2_lo_plot, r2_hi_plot, 300)
-        y_init  = _gaussian(r2_fine, *p0)
-
-        # ── Plot ──────────────────────────────────────────────────────────────
+        # ── Plot ─────────────────────────────────────────────────────────────
         ax.set_facecolor("#F0FFF4" if fit_ok else "#FFF0F0")
 
         if win_use.size > 0:
@@ -1891,31 +1851,55 @@ def _plot_all_fringe_diagnostics_r2(
                         fmt="o", color="steelblue", markersize=4,
                         ecolor="cornflowerblue", elinewidth=1.0, capsize=2,
                         zorder=3)
-        ax.plot(r2_fine, y_init, color="goldenrod", lw=1.2, ls="--", zorder=2)
-        if fit_ok:
-            y_fit = _gaussian(r2_fine, *popt)
-            ax.plot(r2_fine, y_fit, color="crimson", lw=1.8, zorder=4)
-            # Red band = ±1σ uncertainty on the r²-domain Gaussian centroid μ
-            ax.axvspan(popt[1] - perr[1], popt[1] + perr[1],
-                       alpha=0.15, color="crimson")
 
-        ax.axvline(pf.r2_raw_px2, color="darkorange", lw=0.9, ls="--", alpha=0.8)
-        if fit_ok:
-            ax.axvline(popt[1], color="crimson", lw=1.0, ls="-", alpha=0.9)
+        # Parabolic fit curve — recompute polynomial for display (orange solid)
+        if para_ok and win_use.size >= 3:
+            y_min_w  = float(np.min(p_w))
+            y_max_w  = float(np.max(p_w))
+            thresh   = y_min_w + 0.5 * (y_max_w - y_min_w)
+            mask_top = p_w >= thresh
+            xm, ym   = r2_w[mask_top], p_w[mask_top]
+            if len(xm) >= 3:
+                coeffs = np.polyfit(xm, ym, 2)
+                if coeffs[0] < 0:
+                    ax.plot(r2_fine, np.polyval(coeffs, r2_fine),
+                            color="darkorange", lw=1.8, zorder=4)
 
-        # ── Title ─────────────────────────────────────────────────────────────
-        lam = "640.2" if (k + 1) % 2 == 1 else "638.3"
+        # Gaussian curve — dashed blue, only if gauss_ok
+        if gauss_ok and win_use.size > 0:
+            B_est   = float(np.percentile(p_w, 20))
+            y_gauss = _gaussian(r2_fine, pf.amplitude_adu, r2_fit,
+                                pf.width_r2_px2, B_est)
+            ax.plot(r2_fine, y_gauss, color="steelblue", lw=1.2, ls="--", zorder=2)
+
+        # Raw detection (gray dashed) and fitted centroid (orange solid + band)
+        ax.axvline(pf.r2_raw_px2, color="gray", lw=0.9, ls="--", alpha=0.6)
         if fit_ok:
-            r_derived = float(np.sqrt(popt[1])) if popt[1] > 0 else float("nan")
+            ax.axvline(r2_fit, color="darkorange", lw=1.0, ls="-", alpha=0.9, zorder=5)
+            if np.isfinite(sigma_r2_fit):
+                ax.axvspan(r2_fit - sigma_r2_fit, r2_fit + sigma_r2_fit,
+                           alpha=0.15, color="darkorange", zorder=1)
+
+        # ── Title ────────────────────────────────────────────────────────────
+        lam    = "640.2" if (k + 1) % 2 == 1 else "638.3"
+        hw_str = f"({hw_L},{hw_R})"
+        if fit_ok:
+            r_derived = float(np.sqrt(r2_fit)) if r2_fit > 0 else float("nan")
+            chi2_str  = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "nan"
+            rms_str   = f"{para_rms:.2f}" if np.isfinite(para_rms) else "nan"
+            tag_para  = f"para ok rms={rms_str}" if para_ok else "para FAIL"
+            tag_gauss = "gauss ok" if gauss_ok else "gauss FAIL"
             title = (
-                f"P{k+1} · {lam} nm  ·  hw={effective_hw}\n"
-                f"r²={popt[1]:.1f} ± {perr[1]:.1f} px²   r={r_derived:.3f} px   χ²={reduced_chi2:.2f}"
+                f"P{k+1} · {lam} nm  hw={hw_str}\n"
+                f"r²={r2_fit:.1f}±{sigma_r2_fit:.1f}  r={r_derived:.3f}  χ²={chi2_str}\n"
+                f"{tag_para}  {tag_gauss}"
             )
             title_color = "#1a6e2e"
         else:
             title = (
-                f"P{k+1} · {lam} nm  ·  hw={effective_hw}  FAILED\n"
-                f"{mesg[:48]}"
+                f"P{k+1} · {lam} nm  hw={hw_str}  FAILED\n"
+                f"{'para ok' if para_ok else 'para FAIL'}  "
+                f"{'gauss ok' if gauss_ok else 'gauss FAIL'}"
             )
             title_color = "#b22222"
 
