@@ -23,7 +23,7 @@ from astropy.time import Time
 from astropy.coordinates import GCRS, ITRS, CartesianRepresentation
 import astropy.units as u
 
-from src.constants import WGS84_A_M, WGS84_B_M
+from windcube.constants import WGS84_A_M, WGS84_B_M
 
 
 def _eci_to_geodetic(pos_eci_m: np.ndarray, epoch: Time) -> tuple[float, float, float]:

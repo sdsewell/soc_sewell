@@ -26,7 +26,7 @@ from sgp4.api import Satrec, WGS84, jday
 from astropy.time import Time
 from astropy.coordinates import GCRS, ITRS, CartesianRepresentation
 import astropy.units as u
-from src.constants import (
+from windcube.constants import (
     EARTH_GRAV_PARAM_M3_S2,
     WGS84_A_M,
     EARTH_J2,

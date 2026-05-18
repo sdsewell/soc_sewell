@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.fpi.airy_forward_model_2026_05_05 import InstrumentParams, airy_modified, phase_correct_gap  # noqa: E402
 from src.fpi.m02_calibration_synthesis_2026_05_05 import synthesise_calibration_image  # noqa: E402
-from src.constants import (  # noqa: E402
+from windcube.constants import (  # noqa: E402
     NE_WAVELENGTH_1_AIR_M,
     NE_WAVELENGTH_2_AIR_M,
     NE_INTENSITY_2,

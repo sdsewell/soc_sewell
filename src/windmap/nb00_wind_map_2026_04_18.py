@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from src.constants import (
+from windcube.constants import (
     LAT_RANGE_DEG,
     TP_ALTITUDE_KM,
     WIND_BIAS_BUDGET_MS,
@@ -409,7 +409,7 @@ class WindMap(ABC):
         import matplotlib.pyplot as plt
 
         try:
-            from src.constants import WIND_BIAS_BUDGET_MS as _WBMS
+            from windcube.constants import WIND_BIAS_BUDGET_MS as _WBMS
         except ImportError:
             _WBMS = 9.8
 

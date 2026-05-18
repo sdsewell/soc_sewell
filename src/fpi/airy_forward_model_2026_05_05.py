@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from src.constants import (
+from windcube.constants import (
     OI_WAVELENGTH_AIR_M,
     NE_WAVELENGTH_1_AIR_M,
     NE_WAVELENGTH_2_AIR_M,

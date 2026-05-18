@@ -24,7 +24,7 @@ from astropy.time import Time
 from astropy.coordinates import GCRS, ITRS, CartesianRepresentation
 import astropy.units as u
 
-from src.constants import EARTH_OMEGA_RAD_S
+from windcube.constants import EARTH_OMEGA_RAD_S
 
 
 def _itrs_to_gcrs_vector(vec_itrs: np.ndarray, epoch: Time) -> np.ndarray:

@@ -205,7 +205,7 @@ def test_T1_plot_all_modes():
 def test_T4b_storm_magnitude_bounded():
     """T4b — Storm peak wind is physically bounded (< 1.5 × WIND_MAX_STORM_MS)."""
     pytest.importorskip("hwm14", reason="hwm14 not installed; skipping T4")
-    from src.constants import WIND_MAX_STORM_MS
+    from windcube.constants import WIND_MAX_STORM_MS
     storm = StormWindMap(ap=80)
     lats = np.arange(-60, 61, 10.0)
     lons = np.zeros_like(lats)

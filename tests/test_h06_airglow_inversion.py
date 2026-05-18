@@ -13,7 +13,7 @@ from src.fpi.m06_airglow_inversion_2026_05_05 import (
     fit_airglow_fringe,
 )
 from windcube.constants import OI_WAVELENGTH_AIR_M, SPEED_OF_LIGHT_MS
-from src.constants import WIND_BIAS_BUDGET_MS
+from windcube.constants import WIND_BIAS_BUDGET_MS
 
 
 # ---------------------------------------------------------------------------

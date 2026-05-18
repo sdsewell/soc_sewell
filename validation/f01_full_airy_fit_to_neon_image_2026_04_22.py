@@ -20,7 +20,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.signal import find_peaks
 
-from src.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M
+from windcube.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M
 from src.fpi import airy_modified, airy_ideal  # noqa: F401
 from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
 

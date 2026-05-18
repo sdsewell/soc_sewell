@@ -33,8 +33,6 @@ from windcube.constants import (
     ETALON_R_INSTRUMENT,
     ALPHA_RAD_PX,
     R_MAX_PX,
-)
-from src.constants import (
     OI_WAVELENGTH_AIR_M,
     NE_WAVELENGTH_1_AIR_M,
     NE_WAVELENGTH_2_AIR_M,

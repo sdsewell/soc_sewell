@@ -22,6 +22,8 @@ Sources:
   R_MAX_PX            : FlatSat/flight maximum fringe radius
 """
 
+import math
+
 # ---------------------------------------------------------------------------
 # H01 — constants required by airy_forward_model (Section 3 of H01 spec)
 # All values are authoritative for the H01 Airy forward model.
@@ -220,3 +222,113 @@ GROUND_TRACK_DELTA_LON_DEG : float = 23.75   # longitude spacing between success
 # ---------------------------------------------------------------------------
 R_EARTH_MEAN_KM  : float = 6371.0   # mean Earth radius for altitude display [km]
 SGP4_MAX_AGE_DAYS: float = 7.0      # warn if TLE epoch older than this before t_start
+
+# ---------------------------------------------------------------------------
+# S03 consolidation — constants migrated from src/constants.py
+# src/constants.py is now deleted; windcube/constants.py is the single source.
+# ---------------------------------------------------------------------------
+
+# Edlén (1966) refractive index of standard dry air at 15 °C, 101 325 Pa.
+# Uses correct wavenumber units: σ = 1/λ_vac (µm⁻¹) = 1000/λ_nm.
+def _edlen_n(lambda_vac_nm: float) -> float:
+    """Refractive index of standard air. lambda_vac_nm in nm. Returns n > 1."""
+    s = 1e3 / lambda_vac_nm
+    n_minus_1 = (8342.13
+                 + 2406030.0 / (130.0 - s ** 2)
+                 + 15997.0   / (38.9  - s ** 2)) * 1e-8
+    return 1.0 + n_minus_1
+
+
+def _air_to_vac_nm(lambda_air_nm: float, tol: float = 1e-10) -> float:
+    """Air wavelength (nm) → vacuum wavelength (nm) via Edlén (1966) iteration."""
+    lv = lambda_air_nm
+    for _ in range(20):
+        lv_new = lambda_air_nm * _edlen_n(lv)
+        if abs(lv_new - lv) < tol:
+            return lv_new
+        lv = lv_new
+    return lv
+
+
+# Vacuum wavelengths — computed from air values via Edlén.  λ_vac > λ_air (n > 1).
+OI_WAVELENGTH_M   : float = _air_to_vac_nm(OI_WAVELENGTH_AIR_M   * 1e9) * 1e-9
+NE_WAVELENGTH_1_M : float = _air_to_vac_nm(NE_WAVELENGTH_1_AIR_M * 1e9) * 1e-9
+NE_WAVELENGTH_2_M : float = _air_to_vac_nm(NE_WAVELENGTH_2_AIR_M * 1e9) * 1e-9
+
+# Fundamental physical constants (CODATA 2018)
+BOLTZMANN_J_PER_K    : float = 1.380649e-23     # J/K  — exact SI
+PLANCK_J_S           : float = 6.62607015e-34   # J·s  — exact SI
+
+# WGS84 geodetic
+EARTH_GRAV_PARAM_M3_S2 : float = 3.986004418e14  # m³/s² — EGM2008 GM
+EARTH_J2               : float = 1.08263e-3       # J2 zonal harmonic
+WGS84_F   : float = 1.0 / 298.257_223_563         # flattening (exact)
+WGS84_E2  : float = 1.0 - (WGS84_B_M / WGS84_A_M) ** 2  # first eccentricity²
+
+# Molecular mass
+OXYGEN_MASS_KG : float = 2.6567e-26  # kg — one oxygen-16 atom
+
+# Etalon tolerances and aliases
+ETALON_GAP_TOLERANCE_M      : float = SIGMA_D_TOLANSKY_MM * 1e-3  # m (1σ)
+ETALON_GAP_ICOS_M           : float = ICOS_GAP_MM * 1e-3          # m (integer disambiguation only)
+ETALON_GAP_ICOS_TOLERANCE_M : float = 0.010e-3                    # m (manufacturing tolerance)
+ETALON_R_COATING            : float = 0.80         # — as-deposited reflectivity at 630 nm
+R_REFL_FLATSAT              : float = ETALON_R_INSTRUMENT  # alias for M01/M03 code
+
+# CCD / detector aliases
+CCD_PIXEL_UM       : float = 16.0   # µm — native pixel pitch (unbinned)
+CCD_PIXEL_2X2_UM   : float = 32.0   # µm — 2×2 binned pixel pitch
+CCD_PIXELS_2X2     : int   = 256    # px — per side after 2×2 binning
+CCD_PIXELS_NATIVE  : int   = CCD_PIXELS_UNBINNED  # alias
+CCD_READ_NOISE_E   : float = 2.2    # e⁻ rms — conventional readout
+CCD_READ_NOISE_EM_E: float = 1.0    # e⁻ rms — EM gain mode
+CCD_FULL_WELL_E    : int   = 130_000  # e⁻ — peak capacity
+CCD_EM_GAIN_DEFAULT: int   = 200    # — default EM gain
+CCD_QE_PEAK        : float = 0.90   # — peak QE ~550 nm
+CCD_QE_630         : float = 0.85   # — QE at 630 nm
+CCD_DARK_RATE_E_PX_S : float = 400.0  # e⁻/px/s — at 20°C
+
+# Mission / orbital constants
+SC_ALTITUDE_KM           : float = 510.0          # km — nominal spacecraft altitude
+SC_ALTITUDE_RANGE_KM     : tuple = (500.0, 550.0) # km — operational range
+TP_ALTITUDE_KM           : float = 250.0          # km — OI 630 nm tangent height
+TP_ALTITUDE_TOLERANCE_KM : float = 5.0            # km — THRF model error budget
+SC_VELOCITY_MS           : float = 7600.0         # m/s — circular orbit at 510 km
+SC_ORBITAL_PERIOD_S      : float = 5640.0         # s — ~94 minutes
+ORBIT_INCLINATION_DEG    : float = 97.4           # deg — sun-synchronous
+LTAN_HOURS               : float = 6.0            # hours — LTAN
+SCIENCE_CADENCE_S        : float = 10.0           # s — nominal image cadence
+
+# Wind measurement / error budget
+WIND_BIAS_BUDGET_MS    : float = 9.8           # m/s — STM 1σ wind precision
+WIND_MAX_STORM_MS      : float = 400.0         # m/s — G2 storm wind
+WIND_MIN_DETECTABLE_MS : float = 20.0          # m/s — minimum detectable
+LAT_RANGE_DEG          : tuple = (-40.0, 40.0) # deg — primary science latitude band
+
+# Derived etalon quantities
+ETALON_FSR_NE1_M    : float = NE_WAVELENGTH_1_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
+ETALON_FSR_OI_M     : float = OI_WAVELENGTH_AIR_M   ** 2 / (2.0 * ETALON_GAP_M)
+VELOCITY_PER_FSR_MS : float = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_M
+NE_DELTA_LAMBDA_M   : float = NE_WAVELENGTH_1_AIR_M - NE_WAVELENGTH_2_AIR_M
+NE_SEPARATION_FSR   : float = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M
+
+
+def compute_depression_angle(sc_alt_km: float, tp_alt_km: float) -> float:
+    """Limb depression angle (degrees) from spacecraft and tangent point altitudes.
+
+    Uses WGS84 equatorial radius. δ = arccos(R_tp / R_sc). Always positive.
+    """
+    R_earth_km = WGS84_A_M / 1e3
+    return math.degrees(math.acos((R_earth_km + tp_alt_km) / (R_earth_km + sc_alt_km)))
+
+
+DEPRESSION_ANGLE_DEG : float = compute_depression_angle(SC_ALTITUDE_KM, TP_ALTITUDE_KM)
+
+
+class PipelineFlags:
+    """Global quality flags — S04 convention. Bits 0–3."""
+    GOOD           = 0x00
+    FIT_FAILED     = 0x01
+    CHI2_HIGH      = 0x02
+    CHI2_VERY_HIGH = 0x04
+    CHI2_LOW       = 0x08

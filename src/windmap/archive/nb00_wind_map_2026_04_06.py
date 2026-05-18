@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from src.constants import (
+from windcube.constants import (
     LAT_RANGE_DEG,
     TP_ALTITUDE_KM,
     WIND_BIAS_BUDGET_MS,

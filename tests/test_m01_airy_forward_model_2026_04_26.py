@@ -326,7 +326,7 @@ def test_psf_sigma_positive():
 # ---------------------------------------------------------------------------
 def test_alpha_plate_scale():
     """alpha default must equal ALPHA_RAD_PX from constants (2×2 binned)."""
-    from src.constants import ALPHA_RAD_PX
+    from windcube.constants import ALPHA_RAD_PX
     params = InstrumentParams()
     # The 2026_04_05 InstrumentParams uses Tolansky-fitted alpha (1.6071e-4),
     # not the theoretical ALPHA_RAD_PX (1.600e-4). Both should be in [1e-4, 2e-4].
@@ -356,7 +356,7 @@ def test_ne_spectrum_line_positions():
     Ne2 (638.299 nm) falls outside the grid when centered at Ne1 with
     n_fsr=220 (grid min = 639.098 nm; gap = ~0.8 nm).
     """
-    from src.constants import (
+    from windcube.constants import (
         NE_WAVELENGTH_1_AIR_M, NE_WAVELENGTH_2_AIR_M,
         NE_INTENSITY_1, NE_INTENSITY_2,
     )
@@ -390,7 +390,7 @@ def test_airglow_zero_velocity():
     """
     At v_rel=0, λ_c must equal OI_WAVELENGTH_AIR_M to within one bin width.
     """
-    from src.constants import OI_WAVELENGTH_AIR_M
+    from windcube.constants import OI_WAVELENGTH_AIR_M
     params = InstrumentParams()
     lam_grid = make_wavelength_grid(OI_WAVELENGTH_AIR_M, n_fsr=5,
                                     L=201, params=params)
@@ -411,7 +411,7 @@ def test_airglow_doppler_shift():
     A negative v_rel must shift λ_c to a shorter wavelength (blueshift).
     Magnitude: Δλ = λ₀ · v_rel / c
     """
-    from src.constants import OI_WAVELENGTH_AIR_M, SPEED_OF_LIGHT_MS
+    from windcube.constants import OI_WAVELENGTH_AIR_M, SPEED_OF_LIGHT_MS
     params = InstrumentParams()
     lam_grid = make_wavelength_grid(OI_WAVELENGTH_AIR_M, n_fsr=5,
                                     L=501, params=params)
@@ -442,7 +442,7 @@ def test_airglow_velocity_bounds():
     v_rel outside [−7700, +1000] m/s must raise ValueError.
     Boundary values must not raise.
     """
-    from src.constants import OI_WAVELENGTH_AIR_M
+    from windcube.constants import OI_WAVELENGTH_AIR_M
     params = InstrumentParams()
     lam_grid = make_wavelength_grid(OI_WAVELENGTH_AIR_M, n_fsr=30,
                                     L=501, params=params)
@@ -471,7 +471,7 @@ def test_ne_forward_model_roundtrip():
     with 3 args; expanded to match existing 13-arg signature.
     Spec used n_fsr=220; changed to n_fsr=400 (same reason as T11).
     """
-    from src.constants import NE_WAVELENGTH_1_AIR_M
+    from windcube.constants import NE_WAVELENGTH_1_AIR_M
     from scipy.signal import find_peaks
 
     params = InstrumentParams()

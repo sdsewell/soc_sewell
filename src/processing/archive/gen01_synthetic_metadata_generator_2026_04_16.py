@@ -51,7 +51,7 @@ from src.metadata.p01_image_metadata_2026_04_06 import (
     AdcsQualityFlags,
     compute_adcs_quality_flag,
 )
-from src.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
+from windcube.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
 
 # ---------------------------------------------------------------------------
 # Constants — scheduling / instrument
