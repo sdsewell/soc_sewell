@@ -89,30 +89,46 @@ FRINGE_CENTER = (144,141)
 # Loading
 # ---------------------------------------------------------------------------
 
+_KNOWN_FRAME_SIZES = [(260, 276), (528, 552)]
+
+
 def load_raw(path: str):
     """
     Load the header row and image pixel region from a big-endian FPI binary.
     Frame dimensions are read from header words 0 (n_rows_frame) and 1 (n_cols_frame),
     so both 2×2 binned (260×276) and 1×1 unbinned (528×552) files are supported.
 
+    If the header dimensions are corrupt or missing, the function falls back to
+    the known frame size that matches the file size exactly.
+
     Returns
     -------
     header_be : ndarray (n_cols_frame,) uint16  — full header row, big-endian decoded
     image     : ndarray (n_rows_frame-1, n_cols_frame) uint16 — pixel data
     """
-    # Read the first 4 bytes to decode n_rows_frame (word 0) and n_cols_frame (word 1)
     with open(path, "rb") as f:
         first_words = np.frombuffer(f.read(4), dtype=">u2")
     n_rows_frame = int(first_words[0])
     n_cols_frame = int(first_words[1])
 
+    actual = os.path.getsize(path)
     expected = n_rows_frame * n_cols_frame * 2
-    actual   = os.path.getsize(path)
     if actual != expected:
-        raise ValueError(
-            f"File size mismatch: got {actual} bytes, "
-            f"expected {expected} for a {n_rows_frame}×{n_cols_frame} uint16 image."
-        )
+        # Header dimensions are corrupt; infer from file size using known frame geometries.
+        for rows, cols in _KNOWN_FRAME_SIZES:
+            if rows * cols * 2 == actual:
+                print(
+                    f"WARNING: Header says {n_rows_frame}×{n_cols_frame} but file is "
+                    f"{actual} bytes — using known frame size {rows}×{cols}."
+                )
+                n_rows_frame, n_cols_frame = rows, cols
+                break
+        else:
+            raise ValueError(
+                f"File size mismatch: got {actual} bytes, "
+                f"expected {expected} for a {n_rows_frame}×{n_cols_frame} uint16 image, "
+                f"and size does not match any known frame geometry."
+            )
     raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
     return raw[:n_cols_frame].copy(), raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame)
 
