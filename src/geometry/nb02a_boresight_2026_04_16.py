@@ -23,7 +23,7 @@ if str(_project_root) not in sys.path:
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from src.constants import WGS84_A_M, WGS84_B_M
+from windcube.constants import WGS84_A_M, WGS84_B_M
 
 # ---------------------------------------------------------------------------
 # BORESIGHT DIRECTION NOTE (SI-UCAR-WC-RP-004 §2.4.2.1)

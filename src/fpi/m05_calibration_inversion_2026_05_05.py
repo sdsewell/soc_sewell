@@ -29,7 +29,7 @@ from windcube.constants import (
     NE_WAVELENGTH_2_AIR_M as NE_WAVELENGTH_2_M,
     NE_INTENSITY_2,
 )
-from src.constants import (
+from windcube.constants import (
     ETALON_GAP_M,
     ETALON_R_INSTRUMENT,
     ALPHA_RAD_PX,

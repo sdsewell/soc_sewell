@@ -4,7 +4,7 @@
 | S02  | —           | impl   | n/a      | 2026-04-06    |
 | S03  | —           | v4     | 10/10    | 2026-04-29    |
 | S04  | —           | impl   | n/a      | 2026-04-06    |
-| S05  | NB00        | impl   | n/a      | 2026-04-06    |
+| S05  | NB00        | FIXED  | n/a      | 2026-05-16    |
 | S06  | NB01        | impl   | n/a      | 2026-04-06    |
 | S07  | NB02        | impl   | n/a      | 2026-04-06    |
 | S07b | NB03        | impl   | 8/8      | 2026-04-12    |
@@ -30,17 +30,50 @@
 | Z04  | snr-sweep   | impl   | 6/6      | 2026-04-11    |
 | F01  | neon-fit    | impl   | 10/10+skip | 2026-04-22  |
 | F02  | airglow-fit | impl   | 8/8+skip | 2026-04-21    |
-| G01  | GEN01 mission-dataset-syn | PASS v14 | smoke | 2026-05-14 |
+| G01  | GEN01 mission-dataset-syn | PASS v16 | smoke+HWM14 e2e | 2026-05-16 |
+| G01_dark | dark frame synthesis | PASS v1.2 | 5/5 | 2026-05-16 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
+| CAL01 | fpi_cal_lib + run_cal_pipeline | PASS (all S0–S6 complete) | 10/10 | 2026-05-18 |
 
 ## Known pre-existing test failures (not introduced by current work)
 
 | Test file                                    | Reason                        |
 |----------------------------------------------|-------------------------------|
-| test_z04.py                                  | missing joblib package        |
+| test_z04.py                                  | joblib now installed; re-check pending |
 | test_s06_nb01_orbit_propagator.py            | missing module (NB01 not impl)|
 | test_z02_synthetic_airglow_generator.py      | wrong script path             |
 
 These failures pre-date the S07b session and are excluded from regression
 assessment until the relevant modules are fixed or installed.
+
+## Notes
+
+- NB00 HWM14WindMap (spec v2026-05-16): uses `pyhwm2014` backend (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
+  T3 quiet-time and T4 storm wind maps verified at 250 km (84c5250).
+  lgpedersen/hwm14 not compatible (numpy.distutils removed in NumPy 2.x; different API).
+
+- pyhwm2014 in windcube env (2026-05-16): windcube uses Python 3.11 (MSVC); pyhwm2014 required >=3.12.
+  Resolved by building hwm14.cp311-win_amd64.pyd with f2py --backend meson + hwm14_env gfortran.
+  DLL resolution: libgfortran-5.dll already in windcube Library\bin; sitecustomize.py added to
+  windcube Lib\ to call os.add_dll_directory(Library\bin) at startup.
+  pyhwm2014 made importable via pyhwm2014_dev.pth in windcube site-packages.
+  T3 quiet-time equator: U=-80.9 m/s V=-32.1 m/s PASS.
+  T4 storm 60N: U=+111.5 m/s V=-62.2 m/s PASS.
+  GEN01 wind map options 4 (HWM14 quiet) and 5 (HWM14 storm) operational in windcube.
+
+- pyHWM14 submodule (2026-05-16): tracked as git submodule at 500d7dd; outer repo pointer unchanged.
+  Local working-tree changes (dirty) are WIP inside the submodule — no outer-repo commit required.
+
+- GEN01 HWM14 end-to-end integration (2026-05-16): wind map option 4 (quiet-time, 250 km) verified on
+  GEN01-V2/GEN01_20270101_001.0d_hwm14_seed0042.csv (8641 rows). v_wind_los_approach_ms:
+  mean=+3.0, std=56.9, min=-126.6, max=+142.1 m/s — SPATIALLY VARYING: PASS (std >> 5 m/s threshold).
+  Wind columns present: wind_v_zonal_ms, wind_v_merid_ms, v_wind_los_approach_ms.
+  matplotlib savefig outside conda-activated env: native LoadLibrary calls bypass os.add_dll_directory;
+  fix is to prepend conda env dirs to os.environ["PATH"] before importing matplotlib.
+
+- windcube env GEN01 dependencies (2026-05-16): all third-party packages verified present.
+  numpy 2.4.5, pandas 3.0.3, scipy 1.17.1, astropy 7.2.0, sgp4 2.25, matplotlib 3.10.9,
+  cartopy 0.25.0 (conda-forge, new), netCDF4 1.7.4 (conda-forge, new), pyhwm2014 0.0.0,
+  joblib (already present), lmfit (already present), tkinter (stdlib).
+  GEN01 import-only check: PASS (2026-05-16).

@@ -93,7 +93,7 @@ except ImportError:
 
 # ── constants ────────────────────────────────────────────────────────────────
 try:
-    from src.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M, D_25C_MM, \
+    from windcube.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M, D_25C_MM, \
                               PLATE_SCALE_RPX, R_MAX_PX
 except ImportError:
     NE_WAVELENGTH_1_M = 640.2248e-9

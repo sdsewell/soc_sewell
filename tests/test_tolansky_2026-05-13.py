@@ -9,29 +9,20 @@ use the d_true that IS self-consistent with the chosen eps values and
 N_Delta, verifying that the Benoit round-trip recovers d to < 1 um.
 """
 
-import importlib.util
-import pathlib
-import sys
-
 import numpy as np
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import the production module by file path
+# Import from fpi_cal_lib (consolidated single-file library, v1.3+)
 # ---------------------------------------------------------------------------
-_lib_path = (pathlib.Path(__file__).resolve().parent.parent
-             / "src" / "fpi" / "tolansky_2026-05-13.py")
-_spec = importlib.util.spec_from_file_location("tolansky_unified", str(_lib_path))
-_mod  = importlib.util.module_from_spec(_spec)
-sys.modules["tolansky_unified"] = _mod
-_spec.loader.exec_module(_mod)
-
-InsufficientRingsError = _mod.InsufficientRingsError
-run_tolansky           = _mod.run_tolansky           # backward-compat alias
-run_tolansky_2line     = _mod.run_tolansky_2line
-TolanskyResult         = _mod.TolanskyResult
-to_m05_priors          = _mod.to_m05_priors
-benoit_d               = _mod.benoit_d
+from src.fpi.fpi_cal_lib import (  # noqa: F401
+    InsufficientRingsError,
+    run_tolansky as run_tolansky,           # backward-compat alias
+    run_tolansky_2line,
+    TolanskyResult,
+    to_m05_priors,
+    benoit_d,
+)
 
 
 # ---------------------------------------------------------------------------

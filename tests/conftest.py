@@ -3,6 +3,8 @@ Shared pytest fixtures for the soc_sewell test suite.
 
 Fixtures defined here are available to all test modules automatically.
 """
+import types
+
 import pytest
 import numpy as np
 
@@ -14,7 +16,6 @@ from src.fpi.archive.m05_calibration_inversion_2026_04_06 import (
     fit_calibration_fringe,
     FitConfig,
 )
-from src.two_d_one_d_reduction.tolansky import TwoLineResult
 
 
 # ---------------------------------------------------------------------------
@@ -22,11 +23,9 @@ from src.two_d_one_d_reduction.tolansky import TwoLineResult
 # reliability issue on synthetic data)
 # ---------------------------------------------------------------------------
 
-def _build_tolansky_stub(params: InstrumentParams) -> TwoLineResult:
-    """
-    Build a TwoLineResult stub with correct values from known InstrumentParams.
-    """
-    tol = TwoLineResult.__new__(TwoLineResult)
+def _build_tolansky_stub(params: InstrumentParams) -> types.SimpleNamespace:
+    """Build a Tolansky stub with correct values from known InstrumentParams."""
+    tol = types.SimpleNamespace()
     tol.d_m          = float(params.t)
     tol.alpha_rad_px = float(params.alpha)
     tol.eps1         = float((2.0 * params.t / NE_WAVELENGTH_1_M) % 1.0)

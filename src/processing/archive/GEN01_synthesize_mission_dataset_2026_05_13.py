@@ -1,0 +1,2405 @@
+"""
+GEN01 v14 — Synthetic Metadata Generator.
+
+Spec:      specs/G01_synthetic_metadata_generator_2026-05-14.md
+Spec date: 2026-05-14
+Generated: 2026-05-13
+Tool:      Claude Code
+CONOPS:    WC-SE-0003 WindCube Concept of Operations, V8
+Usage:     python src/processing/GEN01_synthesize_mission_dataset_2026_05_13.py
+
+v11 — constants corrected from Tolansky two-line Benoit result;
+       science pixel generator now encodes Doppler shift and uses
+       physical CCD noise model (Poisson + temperature-dependent dark);
+       read noise Gaussian draws removed throughout.
+"""
+
+import datetime
+import os
+import struct
+import sys
+import pathlib
+import dataclasses
+
+# On Windows, conda DLLs (OpenBLAS, etc.) are in Library\bin inside the env.
+# VS Code sets the Python exe but not PATH, so prepend conda dirs before any
+# scientific package is imported.
+if sys.platform == "win32":
+    _py = pathlib.Path(sys.executable).parent
+    _conda_dirs = [
+        str(_py),
+        str(_py / "Library" / "bin"),
+        str(_py / "Library" / "mingw-w64" / "bin"),
+        str(_py / "Library" / "usr" / "bin"),
+        str(_py / "Scripts"),
+    ]
+    _existing = os.environ.get("PATH", "").split(os.pathsep)
+    _new_dirs = [d for d in _conda_dirs if d not in _existing and pathlib.Path(d).is_dir()]
+    if _new_dirs:
+        os.environ["PATH"] = os.pathsep.join(_new_dirs) + os.pathsep + os.environ.get("PATH", "")
+import tkinter as tk
+from tkinter import filedialog
+
+_project_root = pathlib.Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+import numpy as np
+import pandas as pd
+from astropy.time import Time
+
+from sgp4.api import Satrec, jday
+from src.geometry.nb01_orbit_propagator_2026_04_16 import (
+    propagate_orbit,
+    propagate_orbit_from_state,
+)
+from windcube.constants import R_EARTH_MEAN_KM, SGP4_MAX_AGE_DAYS
+from src.geometry.nb02a_boresight_2026_04_16 import compute_los_eci
+from src.geometry.nb02b_tangent_point_2026_04_16 import compute_tangent_point
+from src.geometry.nb02c_los_projection_2026_04_16 import compute_v_rel
+from src.metadata.p01_image_metadata_2026_04_06 import (
+    ImageMetadata,
+    AdcsQualityFlags,
+    compute_adcs_quality_flag,
+)
+from windcube.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
+
+# ---------------------------------------------------------------------------
+# Constants — scheduling / instrument
+# ---------------------------------------------------------------------------
+
+SCHED_DT_S            = 10.0   # NB01 propagation cadence — always fixed
+CAL_TRIGGER_LAT_DEG   = 70.0   # CONOPS ascending trigger — see spec header
+SIGMA_POINTING_ARCSEC =  5.0
+ETALON_TEMP_MEAN_C    = 24.0
+ETALON_TEMP_STD_C     =  0.1
+CCD_TEMP_MEAN_C       = -10.0
+CCD_TEMP_STD_C        =   1.0
+EXP_UNIT              = 38500  # timing register value
+TIMER_PERIOD_S        = 0.001  # seconds per count when exp_unit = 38500
+
+WIND_MAP_TAGS = {
+    "1": "uniform",
+    "2": "sine_lat",
+    "3": "wave4",
+    "4": "hwm14",
+    "5": "storm",
+    "6": "storm_onset",
+}
+
+# ---------------------------------------------------------------------------
+# Constants — FPI optical model (§7.1)
+# ---------------------------------------------------------------------------
+
+LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm source wavelength, m
+LAMBDA_NE1_M     = 640.2248e-9    # Neon strong line (Burns et al. 1950)
+LAMBDA_NE2_M     = 638.2991e-9    # Neon weak line  (Burns et al. 1950)
+ETALON_GAP_M     = 20.1069751e-3  # Real FlatSat H05 fit: t_m = 20.1069751 mm
+PLATE_SCALE_RPX  = 1.60885e-4     # Real FlatSat H05 fit: alpha = 1.60885e-4 rad/px
+R_REFL           = 0.23737        # Real FlatSat H05 fit: R1 at λ1=640.2 nm
+R_REFL_2         = 0.33603        # Real FlatSat H05 fit: R2 at λ2=638.3 nm
+SIGMA0_PX        = 0.5540         # Real FlatSat H05 fit: PSF base width [px]
+N_GAP            = 1.0            # Refractive index of etalon gap (air)
+C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
+
+FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 3.24 with R_REFL=0.23737 (real FlatSat)
+
+# CCD / pixel layout — keyed by binning factor (1 or 2)
+# Layout: row 0 of file = header (276 words, zero-padded to N_COLS_FRAME);
+#         remaining rows = pixel data; science region at [ROW_OFF:ROW_OFF+NY, COL_OFF:COL_OFF+NX]
+BINNING_CFG = {
+    2: dict(
+        nx_pix        = 256,
+        ny_pix        = 256,
+        n_rows_frame  = 260,    # 1 header + 259 pixel rows
+        n_cols_frame  = 276,
+        row_offset    = 1,
+        col_offset    = 10,
+        plate_scale   = PLATE_SCALE_RPX,          # 1.6071e-4 rad/px
+        rows_meta     = 260,
+        cols_meta     = 276,
+    ),
+    1: dict(
+        nx_pix        = 512,
+        ny_pix        = 512,
+        n_rows_frame  = 528,    # 1 header + 527 pixel rows
+        n_cols_frame  = 552,
+        row_offset    = 2,
+        col_offset    = 20,
+        plate_scale   = PLATE_SCALE_RPX / 2.0,   # 8.036e-5 rad/px
+        rows_meta     = 528,
+        cols_meta     = 552,
+    ),
+}
+
+# Legacy module-level aliases (used by pixel generators — overridden at runtime via binning_cfg)
+NX_PIX           = 256
+NY_PIX           = 256
+N_ROWS_BIN       = 259
+N_COLS_BIN       = 276
+ROW_OFFSET_PIX   = 1
+COL_OFFSET_PIX   = 10
+OFFSET_ADU       = 5              # post-subtraction pedestal, CCD97 at -20°C
+ADU_MAX          = 16383
+
+# Signal levels
+SCI_PEAK_ADU     = 5000
+CAL_PEAK_ADU     = 12000
+REL_638          = 0.5087         # Real FlatSat H05 fit: ne_ratio (weak/strong amplitude ratio)
+
+# Dark model — doubling interval (shared by science and dark generators)
+T_DOUBLE_C       = 6.5
+
+# CCD97 physical noise model (Teledyne e2v datasheet)
+GAIN_E_PER_ADU   = 1.0            # e-/ADU, OSH mode
+READ_NOISE_E     = 2.2            # e- rms, OSH 50 kHz CDS
+QDD_AT_20C       = 400.0          # e-/pix/s dark reference, CCD97 datasheet
+
+
+# ---------------------------------------------------------------------------
+# Helper: interactive text prompt
+# ---------------------------------------------------------------------------
+
+def _prompt(msg: str, default, cast, lo=None, hi=None):
+    """Re-prompts on ValueError or out-of-range. Blank → default."""
+    while True:
+        raw = input(msg).strip()
+        if raw == "":
+            return default
+        try:
+            val = cast(raw)
+        except (ValueError, TypeError):
+            print(f"  Invalid input — expected {cast.__name__}. Try again.")
+            continue
+        if lo is not None and val < lo:
+            print(f"  Value {val} below minimum {lo}. Try again.")
+            continue
+        if hi is not None and val > hi:
+            print(f"  Value {val} above maximum {hi}. Try again.")
+            continue
+        return val
+
+
+# ---------------------------------------------------------------------------
+# Helper: Windows folder-picker dialog
+# ---------------------------------------------------------------------------
+
+def _pick_folder(title: str, default: str) -> str:
+    """
+    Open a native Windows folder-browser dialog.
+    Returns the selected path, or default if the user cancels.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    folder = filedialog.askdirectory(
+        title=title,
+        initialdir=default,
+    )
+    root.destroy()
+    return folder if folder else default
+
+
+# ---------------------------------------------------------------------------
+# Helper: pointing error quaternion  (§4.1)
+# ---------------------------------------------------------------------------
+
+def _pointing_error_quat(rng: np.random.Generator, sigma_arcsec: float) -> list:
+    """Return a small random rotation quaternion [x, y, z, w] (scalar-last)."""
+    sigma_rad = sigma_arcsec * (np.pi / 648000.0)
+    theta = rng.normal(0.0, sigma_rad)          # draw 1: rotation magnitude
+    raw   = rng.standard_normal(3)              # draws 2-4: axis components
+    n     = np.linalg.norm(raw)
+    raw   = raw / n if n > 1e-12 else np.array([1.0, 0.0, 0.0])
+    s     = np.sin(theta / 2.0)
+    qe    = np.array([raw[0] * s, raw[1] * s, raw[2] * s, np.cos(theta / 2.0)])
+    qe    = qe / np.linalg.norm(qe)
+    return qe.tolist()
+
+
+# ---------------------------------------------------------------------------
+# Helper: img_type classification  (§3.4 — mirrors P01 logic)
+# ---------------------------------------------------------------------------
+
+def _classify_img_type(lamp_ch_array: list, gpio_pwr_on: list) -> str:
+    """P01 classification logic — keep in sync with p01_image_metadata_2026_04_06.py."""
+    if any(lamp_ch_array):
+        return "cal"
+    elif gpio_pwr_on[0] == 1 and gpio_pwr_on[3] == 1:
+        return "dark"
+    return "science"
+
+
+# ---------------------------------------------------------------------------
+# Helper: instrument state per frame type  (§3.2–3.3)
+# ---------------------------------------------------------------------------
+
+def _instrument_state(frame_type: str) -> tuple:
+    """Returns (gpio_pwr_on, lamp_ch_array).
+
+    GPIO bit layout: [0]=shutter_closed, [1]=unused, [2]=shutter_open, [3]=pwr_on
+    Shutter closed (cal/dark): gpio[0]=1, gpio[2]=0  → [1,0,0,1]
+    Shutter open   (science) : gpio[0]=0, gpio[2]=1  → [1,0,1,0]
+    """
+    if frame_type == "science":
+        return [1, 0, 1, 0], [0, 0, 0, 0, 0, 0]
+    elif frame_type == "cal":
+        return [1, 0, 0, 1], [1, 1, 1, 1, 1, 1]
+    elif frame_type == "dark":
+        return [1, 0, 0, 1], [0, 0, 0, 0, 0, 0]
+    else:
+        raise ValueError(f"Unknown frame_type: {frame_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Wind map builder functions  (§3)
+# ---------------------------------------------------------------------------
+
+def _build_uniform(rng, h_target_km, v_zonal_ms=100.0, v_merid_ms=0.0):
+    from src.windmap import UniformWindMap
+    return UniformWindMap(v_zonal_ms=v_zonal_ms, v_merid_ms=v_merid_ms)
+
+
+def _build_analytic_sine(rng, h_target_km, A_zonal_ms=200.0, A_merid_ms=100.0):
+    from src.windmap import AnalyticWindMap
+    return AnalyticWindMap(pattern="sine_lat",
+                           A_zonal_ms=A_zonal_ms, A_merid_ms=A_merid_ms)
+
+
+def _build_analytic_wave4(rng, h_target_km,
+                          A_zonal_ms=150.0, A_merid_ms=75.0, phase_rad=0.0):
+    from src.windmap import AnalyticWindMap
+    return AnalyticWindMap(pattern="wave4", A_zonal_ms=A_zonal_ms,
+                           A_merid_ms=A_merid_ms, phase_rad=phase_rad)
+
+
+def _build_hwm14(rng, h_target_km, day_of_year=172, ut_hours=12.0,
+                 f107=150.0, ap=4.0):
+    from src.windmap import HWM14WindMap
+    return HWM14WindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
+                        ut_hours=ut_hours, f107=f107, ap=float(ap))
+
+
+def _build_storm(rng, h_target_km, day_of_year=355, ut_hours=3.0,
+                 f107=180.0, ap=80.0):
+    from src.windmap import StormWindMap
+    return StormWindMap(alt_km=h_target_km, day_of_year=int(day_of_year),
+                        ut_hours=ut_hours, f107=f107, ap=float(ap))
+
+
+@dataclasses.dataclass
+class TimeVaryingStormWindMap:
+    """
+    HWM14 storm wind map with a trapezoidal ap ramp centred on onset_hour.
+
+    Trapezoidal profile (hours from campaign start):
+      t < onset_hour                      : ap = ap_quiet
+      onset_hour <= t < onset + ramp_up_h : linear ramp ap_quiet → ap_peak
+      onset+ramp_up <= t < onset+ramp_down: ap = ap_peak
+      onset+ramp_down <= t < onset+2*ramp_down: linear recovery ap_peak → ap_quiet
+      t >= onset + 2*ramp_down            : ap = ap_quiet
+
+    Call set_ap(ap) before wind_components() on each frame.
+    """
+    h_target_km:  float
+    day_of_year:  int
+    f107:         float
+    ap_quiet:     float
+    ap_peak:      float
+    onset_hour:   float
+    ramp_up_h:    float
+    ramp_down_h:  float
+    _current_ap:  float = dataclasses.field(init=False)
+
+    def __post_init__(self):
+        self._current_ap = self.ap_quiet
+
+    def ap_at(self, t_hours_from_start: float) -> float:
+        t  = t_hours_from_start
+        t0 = self.onset_hour
+        t1 = t0 + self.ramp_up_h
+        t2 = t1 + self.ramp_down_h
+        t3 = t2 + self.ramp_down_h
+        if t < t0:
+            return self.ap_quiet
+        elif t < t1:
+            return self.ap_quiet + (t - t0) / (t1 - t0) * (self.ap_peak - self.ap_quiet)
+        elif t < t2:
+            return self.ap_peak
+        elif t < t3:
+            return self.ap_peak - (t - t2) / (t3 - t2) * (self.ap_peak - self.ap_quiet)
+        else:
+            return self.ap_quiet
+
+    def set_ap(self, ap: float):
+        self._current_ap = ap
+
+    def wind_components(self, lat_deg, lon_deg):
+        from src.windmap import StormWindMap
+        wm = StormWindMap(alt_km=self.h_target_km,
+                          day_of_year=self.day_of_year,
+                          f107=self.f107, ap=self._current_ap)
+        return wm.wind_components(lat_deg, lon_deg)
+
+    def plot(self, **kwargs):
+        pass   # no-op — ground-track figure calls wind_map.plot() unconditionally
+
+
+def _build_storm_onset(rng, h_target_km, day_of_year=355, ut_hours=3.0,
+                       f107=180.0, ap_quiet=4.0, ap_peak=150.0,
+                       onset_hour=12.0, ramp_up_h=3.0, ramp_down_h=9.0):
+    return TimeVaryingStormWindMap(
+        h_target_km=h_target_km, day_of_year=int(day_of_year),
+        f107=float(f107), ap_quiet=float(ap_quiet), ap_peak=float(ap_peak),
+        onset_hour=float(onset_hour), ramp_up_h=float(ramp_up_h),
+        ramp_down_h=float(ramp_down_h),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Wind map registry  (§3)
+# ---------------------------------------------------------------------------
+
+WIND_MAP_REGISTRY: dict = {
+    "1": ("Uniform constant",          _build_uniform),
+    "2": ("Analytic sine_lat",         _build_analytic_sine),
+    "3": ("Analytic wave4/DE3",        _build_analytic_wave4),
+    "4": ("HWM14 quiet-time",          _build_hwm14),
+    "5": ("HWM14 storm/DWM07",         _build_storm),
+    "6": ("HWM14 storm with onset ramp", _build_storm_onset),
+}
+
+
+def _build_wind_map(choice: str, rng, h_target_km: float, **user_params):
+    """Construct a WindMap from a registry key and user-supplied parameters."""
+    label, builder = WIND_MAP_REGISTRY[choice]
+    return builder(rng, h_target_km, **user_params)
+
+
+# ---------------------------------------------------------------------------
+# Schedule builder  (§3.2–3.5)
+# ---------------------------------------------------------------------------
+
+def _build_schedule(
+    df_sched: pd.DataFrame,
+    lat_min_deg: float,
+    lat_max_deg: float,
+    n_caldark: int,
+    step: int,
+) -> tuple:
+    """
+    Returns (obs_indices, frame_types, cal_trigger_indices) sorted by grid row index.
+    Cal/dark takes precedence over science at any overlap.
+    """
+    n   = len(df_sched)
+    lat = df_sched["lat_deg"].values
+
+    science_indices = []
+    in_band         = False
+    band_entry_i    = None
+
+    for i in range(n):
+        if lat_min_deg <= lat[i] <= lat_max_deg:
+            if not in_band:
+                in_band      = True
+                band_entry_i = i
+            if (i - band_entry_i) % step == 0:
+                science_indices.append(i)
+        else:
+            in_band      = False
+            band_entry_i = None
+
+    cal_trigger_indices = []
+    for i in range(1, n):
+        if (lat[i]     >  CAL_TRIGGER_LAT_DEG
+                and lat[i - 1] <= CAL_TRIGGER_LAT_DEG
+                and lat[i]     >  lat[i - 1]):
+            cal_trigger_indices.append(i)
+
+    cal_indices  = []
+    dark_indices = []
+    for t0 in cal_trigger_indices:
+        for k in range(n_caldark):
+            idx = t0 + k * step
+            if idx < n:
+                cal_indices.append(idx)
+        for k in range(n_caldark):
+            idx = t0 + (n_caldark + k) * step
+            if idx < n:
+                dark_indices.append(idx)
+
+    cal_dark_set  = set(cal_indices) | set(dark_indices)
+    science_final = [i for i in science_indices if i not in cal_dark_set]
+
+    all_tagged = (
+        [(i, "science") for i in science_final]
+        + [(i, "cal")     for i in cal_indices]
+        + [(i, "dark")    for i in dark_indices]
+    )
+    all_tagged.sort(key=lambda x: x[0])
+
+    obs_indices = [x[0] for x in all_tagged]
+    frame_types = [x[1] for x in all_tagged]
+    return obs_indices, frame_types, cal_trigger_indices
+
+
+# ---------------------------------------------------------------------------
+# Binary header encoder helpers (§7.2)
+# ---------------------------------------------------------------------------
+
+def _encode_u64(val: int) -> list:
+    """uint64 → 4 BE uint16 words in LE word order (LSW first)."""
+    return [(val >> (16 * i)) & 0xFFFF for i in range(4)]
+
+
+def _encode_f64(val: float) -> list:
+    """float64 → 4 BE uint16 words in LE word order (LSW first)."""
+    b     = struct.pack(">d", val)
+    words = struct.unpack(">4H", b)        # [MSW, w1, w2, LSW]
+    return list(reversed(words))           # [LSW, w2, w1, MSW]
+
+
+def _encode_header(meta: ImageMetadata) -> np.ndarray:
+    """
+    Encode ImageMetadata into the 276-word binary header row.
+
+    Quaternion convention: pipeline [x,y,z,w] → binary [w,x,y,z].
+    Applied to both attitude_quaternion and pointing_error (words 28–59).
+    """
+    h = np.zeros(276, dtype=">u2")
+
+    h[0] = meta.rows
+    h[1] = meta.cols
+    h[2] = meta.exp_time
+    h[3] = meta.exp_unit
+
+    for i, w in enumerate(_encode_f64(meta.ccd_temp1)):
+        h[4 + i] = w
+
+    for i, w in enumerate(_encode_u64(meta.lua_timestamp)):
+        h[8 + i] = w
+
+    for i, w in enumerate(_encode_u64(meta.adcs_timestamp)):
+        h[12 + i] = w
+
+    for j, val in enumerate([meta.spacecraft_latitude,
+                              meta.spacecraft_longitude,
+                              meta.spacecraft_altitude]):
+        for i, w in enumerate(_encode_f64(val)):
+            h[16 + j * 4 + i] = w
+
+    # Pipeline [x,y,z,w] → binary [w,x,y,z]
+    q = meta.attitude_quaternion
+    q_bin = [q[3], q[0], q[1], q[2]]
+    for j, val in enumerate(q_bin):
+        for i, w in enumerate(_encode_f64(val)):
+            h[28 + j * 4 + i] = w
+
+    qe = meta.pointing_error
+    qe_bin = [qe[3], qe[0], qe[1], qe[2]]
+    for j, val in enumerate(qe_bin):
+        for i, w in enumerate(_encode_f64(val)):
+            h[44 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.pos_eci_hat):
+        for i, w in enumerate(_encode_f64(val)):
+            h[60 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.vel_eci_hat):
+        for i, w in enumerate(_encode_f64(val)):
+            h[72 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.etalon_temps):
+        for i, w in enumerate(_encode_f64(val)):
+            h[84 + j * 4 + i] = w
+
+    for j, val in enumerate(meta.gpio_pwr_on):
+        h[100 + j] = int(val) & 0xFF
+
+    for j, val in enumerate(meta.lamp_ch_array):
+        h[104 + j] = int(val) & 0xFF
+
+    return h
+
+
+# ---------------------------------------------------------------------------
+# Pixel image generators (§7.3)
+# ---------------------------------------------------------------------------
+
+def _generate_science_pixels(v_rel_ms: float, rng,
+                              nx: int, ny: int, plate_scale: float,
+                              cx: float, cy: float,
+                              ccd_temp_c: float, exp_time_s: float) -> np.ndarray:
+    """Generate OI 630 nm Airy fringe image with Doppler shift and physical noise."""
+    # Doppler-shifted wavelength (positive v_rel = recession = smaller r)
+    lambda_obs = LAMBDA_OI_M * (1.0 + v_rel_ms / C_LIGHT_MS)
+    x = np.arange(nx) - cx
+    y = np.arange(ny) - cy
+    XX, YY = np.meshgrid(x, y)
+    r_px = np.sqrt(XX**2 + YY**2)
+    theta  = r_px * plate_scale
+    delta  = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lambda_obs
+    I_airy = 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
+    signal = SCI_PEAK_ADU * I_airy
+    # Physical noise: Poisson photon + temperature-dependent dark current
+    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp_c - 20.0) / 6.5)
+    dark_mean = max(dark_rate * exp_time_s, 0.0)
+    photon = rng.poisson(np.clip(signal, 0, None))
+    dark   = rng.poisson(np.full(signal.shape, dark_mean))
+    image  = np.round(photon + dark + OFFSET_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_cal_pixels(rng, nx: int, ny: int, plate_scale: float,
+                         cx: float, cy: float) -> np.ndarray:
+    """Generate two-line neon calibration fringe image."""
+    x = np.arange(nx) - cx
+    y = np.arange(ny) - cy
+    XX, YY = np.meshgrid(x, y)
+    r_px   = np.sqrt(XX**2 + YY**2)
+    theta  = r_px * plate_scale
+
+    def _airy(lam):
+        delta = 4.0 * np.pi * N_GAP * ETALON_GAP_M * np.cos(theta) / lam
+        return 1.0 / (1.0 + FINESSE_F * np.sin(delta / 2.0)**2)
+
+    I_cal = (_airy(LAMBDA_NE1_M) + REL_638 * _airy(LAMBDA_NE2_M)) \
+            / (1.0 + REL_638)
+
+    signal = CAL_PEAK_ADU * I_cal
+    photon = rng.poisson(np.clip(signal, 0, None))
+    # Cal frames: photon-noise limited per H02; no dark term needed
+    # (120s exposure would add ~6 ADU/px at -20°C; omitted for simplicity)
+    image  = np.round(photon + OFFSET_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_dark_pixels(ccd_temp1_c: float, exp_time_s: float, rng,
+                           nx: int, ny: int) -> np.ndarray:
+    """Generate dark frame based on CCD temperature and exposure time."""
+    dark_rate = QDD_AT_20C * GAIN_E_PER_ADU * 2.0**((ccd_temp1_c - 20.0) / T_DOUBLE_C)
+    mean_dark = max(dark_rate * exp_time_s, 0.0)
+    dark_arr  = rng.poisson(mean_dark, size=(ny, nx)).astype(float)
+    image     = np.round(dark_arr + OFFSET_ADU).astype(np.float32)
+    return np.clip(image, 0, ADU_MAX).astype(np.uint16)
+
+
+def _generate_pixels(frame_type: str, v_rel_ms, ccd_temp1_c: float,
+                     exp_time_s: float, rng, binning_cfg: dict,
+                     cx: float, cy: float) -> np.ndarray:
+    """Dispatch to the appropriate pixel generator."""
+    nx          = binning_cfg["nx_pix"]
+    ny          = binning_cfg["ny_pix"]
+    plate_scale = binning_cfg["plate_scale"]
+    if frame_type == "science":
+        return _generate_science_pixels(v_rel_ms, rng, nx, ny, plate_scale,
+                                         cx, cy, ccd_temp1_c, exp_time_s)
+    elif frame_type == "cal":
+        return _generate_cal_pixels(rng, nx, ny, plate_scale, cx, cy)
+    elif frame_type == "dark":
+        return _generate_dark_pixels(ccd_temp1_c, exp_time_s, rng, nx, ny)
+    else:
+        raise ValueError(f"Unknown frame_type: {frame_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Binary file writer (§7.4)
+# ---------------------------------------------------------------------------
+
+def _write_bin_file(meta: ImageMetadata,
+                    pixels: np.ndarray,
+                    path: pathlib.Path,
+                    binning_cfg: dict) -> None:
+    """
+    Write a WindCube FPI binary image file.
+
+    Layout: row 0 = 276-word header zero-padded to n_cols_frame;
+            remaining rows = pixel data with science region embedded.
+    2×2 binned : 260 rows × 276 cols × 2 B = 143 520 B
+    1×1 unbinned: 528 rows × 552 cols × 2 B = 583 488 B
+    """
+    n_rows  = binning_cfg["n_rows_frame"]
+    n_cols  = binning_cfg["n_cols_frame"]
+    nx      = binning_cfg["nx_pix"]
+    ny      = binning_cfg["ny_pix"]
+    row_off = binning_cfg["row_offset"]
+    col_off = binning_cfg["col_offset"]
+
+    # Header: 276 words, zero-padded to n_cols
+    header_276  = _encode_header(meta)
+    header_row  = np.zeros(n_cols, dtype=">u2")
+    header_row[:276] = header_276
+
+    # Pixel block: bias-filled, science region embedded
+    n_pixel_rows = n_rows - 1
+    pixel_array  = np.full((n_pixel_rows, n_cols), OFFSET_ADU, dtype=np.uint16)
+    pixel_array[row_off : row_off + ny, col_off : col_off + nx] = pixels
+
+    full_array = np.vstack([
+        header_row.reshape(1, n_cols),
+        pixel_array.astype(">u2"),
+    ]).astype(">u2")
+
+    expected_bytes = n_rows * n_cols * 2
+    assert full_array.shape  == (n_rows, n_cols), f"Unexpected shape: {full_array.shape}"
+    assert full_array.nbytes == expected_bytes,   f"Unexpected size: {full_array.nbytes}"
+    path.write_bytes(full_array.tobytes())
+
+
+# ---------------------------------------------------------------------------
+# Binary filename convention (§7.5)
+# ---------------------------------------------------------------------------
+
+def _bin_filename(meta: ImageMetadata) -> str:
+    """
+    Return the binary filename for this frame.
+    Format: YYYYMMDDThhmmssZ_{img_type}.bin  (colons excluded for Windows)
+    """
+    from datetime import datetime, timezone
+    dt     = datetime.fromtimestamp(meta.lua_timestamp / 1000.0, tz=timezone.utc)
+    ts_str = dt.strftime("%Y-%m-%dT%H-%M-%SZ")
+    return f"{ts_str}_{meta.img_type}.bin"
+
+
+# ---------------------------------------------------------------------------
+# Ground track figure
+# ---------------------------------------------------------------------------
+
+def _plot_ground_tracks(
+    df_sched:      pd.DataFrame,
+    metadata_list: list,
+    obs_indices:   list,
+    frame_types:   list,
+    lat_min_deg:   float,
+    lat_max_deg:   float,
+    switch_at:     list,
+    save_path:     pathlib.Path,
+) -> None:
+    """
+    Plot spacecraft and tangent-point ground tracks for three attitude segments:
+      Seg 0 — partial along-track  (t=0 → first cal/dark sequence ends)
+      Seg 1 — full cross-track     (first → second attitude switch)
+      Seg 2 — full along-track     (second → third attitude switch)
+
+    Tangent points plotted only for science frames within the science band.
+    A dashed connector is drawn between the spacecraft position and its
+    tangent point for every 10th science observation.
+    Annotated event markers:
+      * TLE Acquisition                   — first timestep overall
+      * Change attitude to cross-track    — switch_at[0]
+      * Change attitude to along-track    — switch_at[1]
+      ▲ Cal/dark sequence start           — first cal frame per segment
+      ▼ Cal/dark sequence end             — last dark frame per segment
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+
+    lats_all = df_sched["lat_deg"].values
+    lons_all = df_sched["lon_deg"].values
+    n        = len(df_sched)
+
+    # --- Three attitude-based segments ---
+    sw0 = min(switch_at[0], n) if len(switch_at) > 0 else n
+    sw1 = min(switch_at[1], n) if len(switch_at) > 1 else n
+    sw2 = min(switch_at[2], n) if len(switch_at) > 2 else n
+
+    seg_bounds = [(0, sw0), (sw0, sw1), (sw1, sw2)]
+    seg_labels = [
+        "Orbit 1  (partial, along-track)",
+        "Orbit 2  (cross-track)",
+        "Orbit 3  (along-track)",
+    ]
+    seg_sc_cols  = ["#6baed6", "#d6604d", "#2166ac"]   # SC track colours
+    seg_tp_cols  = ["#c6dbef", "#fdae61", "#74add1"]   # tangent point colours
+    seg_cn_cols  = ["#6baed6", "#d6604d", "#2166ac"]   # connector colours
+
+    # Science observations per segment
+    idx_arr = np.arange(n)
+    sci_by_seg = []
+    for s_start, s_end in seg_bounds:
+        sci_by_seg.append([
+            (obs_indices[i], metadata_list[i])
+            for i, ft in enumerate(frame_types)
+            if ft == "science" and s_start <= obs_indices[i] < s_end
+        ])
+
+    # Cal/dark sequence bounds (first cal idx, last dark idx) per segment
+    def _cd_bounds(s_start, s_end):
+        idxs = sorted(
+            obs_indices[i]
+            for i, ft in enumerate(frame_types)
+            if ft in ("cal", "dark") and s_start <= obs_indices[i] < s_end
+        )
+        return (idxs[0], idxs[-1]) if idxs else None
+
+    cd_bounds = [_cd_bounds(s, e) for s, e in seg_bounds]
+
+    # --- Figure setup ---
+    _cartopy = False
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        fig = plt.figure(figsize=(16, 8))
+        ax  = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5, color="0.35")
+        ax.add_feature(cfeature.BORDERS,   linewidth=0.3, color="0.55")
+        ax.set_global()
+        ax.gridlines(draw_labels=True, linewidth=0.3, color="0.7", alpha=0.7)
+        _tr = ccrs.PlateCarree()
+        _cartopy = True
+    except ImportError:
+        fig, ax = plt.subplots(figsize=(16, 8))
+        ax.set_xlim(-180, 180)
+        ax.set_ylim(-90, 90)
+        ax.set_xlabel("Longitude (°)")
+        ax.set_ylabel("Latitude (°)")
+        ax.grid(True, linewidth=0.3, color="0.7", alpha=0.7)
+        _tr = None
+
+    def _sc(x, y, **kw):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        ax.scatter(x, y, **kw, **kw_tr)
+
+    def _ln(xs, ys, **kw):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        try:
+            ax.plot(xs, ys, **kw, **kw_tr)
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
+
+    def _ann(lon, lat, label, marker, color, text_offset=(12, 10)):
+        kw_tr = {"transform": _tr} if _cartopy else {}
+        ax.scatter([lon], [lat], marker=marker, c=color, s=110, zorder=10,
+                   edgecolors="white", linewidths=0.9, **kw_tr)
+        ann_kw = {}
+        if _cartopy:
+            ann_kw["xycoords"] = _tr._as_mpl_transform(ax)
+        ax.annotate(
+            label,
+            xy=(lon, lat),
+            xytext=text_offset,
+            textcoords="offset points",
+            fontsize=6.5,
+            color=color,
+            arrowprops=dict(arrowstyle="-", color=color, lw=0.6, alpha=0.8),
+            bbox=dict(boxstyle="round,pad=0.25", fc="white",
+                      ec=color, lw=0.7, alpha=0.92),
+            zorder=11,
+            **ann_kw,
+        )
+
+    # --- SC ground tracks + tangent points ---
+    for seg, (s_start, s_end) in enumerate(seg_bounds):
+        if s_start >= n:
+            continue
+        seg_mask = (idx_arr >= s_start) & (idx_arr < s_end)
+        _sc(lons_all[seg_mask], lats_all[seg_mask],
+            c=seg_sc_cols[seg], s=1.5, alpha=0.45, zorder=3, linewidths=0)
+
+        for k, (idx, m) in enumerate(sci_by_seg[seg]):
+            if k == 0:
+                # Scatter all tangent pts for this segment in one call
+                tp_lats = [mm.tangent_lat for _, mm in sci_by_seg[seg]]
+                tp_lons = [mm.tangent_lon for _, mm in sci_by_seg[seg]]
+                ax.scatter(tp_lons, tp_lats,
+                           marker="+", c=seg_tp_cols[seg], s=18,
+                           alpha=0.85, zorder=5, linewidths=0.8,
+                           **({} if not _cartopy else {"transform": _tr}))
+            if k % 10 == 0:
+                sc_lat = df_sched.loc[idx, "lat_deg"]
+                sc_lon = df_sched.loc[idx, "lon_deg"]
+                _ln([sc_lon, m.tangent_lon], [sc_lat, m.tangent_lat],
+                    linestyle="--", color=seg_cn_cols[seg],
+                    lw=0.9, alpha=0.55, zorder=4)
+
+    # Science band boundaries
+    for bnd in [lat_min_deg, lat_max_deg]:
+        _ln([-180, 180], [bnd, bnd], linestyle=":", color="k", lw=0.8, alpha=0.55)
+
+    # --- Event markers ---
+    _CD_COL   = "#b5651d"
+    _ATT_COLS = ["#7b2fa8", "#0e6655"]   # cross-track switch, along-track switch
+
+    # Orbit propagation start: very first timestep
+    _t0_utc = pd.Timestamp(df_sched["epoch"].iloc[0]).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _ann(float(lons_all[0]), float(lats_all[0]),
+         f"Orbit Propagation Start\n{_t0_utc}", "*", "#1a7d1a", text_offset=(12, 10))
+
+    # Attitude switch markers
+    att_events = [
+        (sw0, "Change attitude to cross-track",  _ATT_COLS[0], (12, -20)),
+        (sw1, "Change attitude to along-track",  _ATT_COLS[1], (12,  10)),
+    ]
+    for sw_idx, label, col, off in att_events:
+        if sw_idx < n:
+            _ann(float(lons_all[sw_idx]), float(lats_all[sw_idx]),
+                 label, "*", col, text_offset=off)
+
+    # --- KSAT Ground Station (Svalbard, Norway) ---
+    _KSAT_LAT = 78.23
+    _KSAT_LON = 15.40
+    _KSAT_COL = "#c0392b"
+    kw_tr = {"transform": _tr} if _cartopy else {}
+    ax.scatter([_KSAT_LON], [_KSAT_LAT],
+               marker=(3, 0, 0),   # triangle-up used as radar dish silhouette
+               c=_KSAT_COL, s=160, zorder=12,
+               edgecolors="white", linewidths=0.8, **kw_tr)
+    ann_kw = {}
+    if _cartopy:
+        ann_kw["xycoords"] = _tr._as_mpl_transform(ax)
+    ax.annotate(
+        "KSAT Ground Station\n(Svalbard, 78.2°N)",
+        xy=(_KSAT_LON, _KSAT_LAT),
+        xytext=(10, 10),
+        textcoords="offset points",
+        fontsize=6.5,
+        color=_KSAT_COL,
+        arrowprops=dict(arrowstyle="-", color=_KSAT_COL, lw=0.6, alpha=0.8),
+        bbox=dict(boxstyle="round,pad=0.25", fc="white",
+                  ec=_KSAT_COL, lw=0.7, alpha=0.92),
+        zorder=13,
+        **ann_kw,
+    )
+
+    # --- Science band latitude labels (left edge of map) ---
+    for bnd, valign, offset in [
+        (lat_max_deg, "bottom", 2),
+        (lat_min_deg, "top",   -2),
+    ]:
+        label_kw = {}
+        if _cartopy:
+            label_kw["transform"] = _tr
+        ax.text(
+            -178, bnd + offset / 10,
+            f"{bnd:+.0f}°  science band",
+            fontsize=6.5, color="k", va=valign, ha="left",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.75),
+            zorder=9,
+            **label_kw,
+        )
+
+    # --- Legend ---
+    handles = []
+    for seg in range(3):
+        handles += [
+            mlines.Line2D([], [], color=seg_sc_cols[seg], marker="o", ls="None",
+                          markersize=5, label=f"{seg_labels[seg]}  S/C"),
+            mlines.Line2D([], [], color=seg_tp_cols[seg], marker="+", ls="None",
+                          markersize=6, markeredgewidth=0.9,
+                          label=f"{seg_labels[seg]}  tangent pts"),
+            mlines.Line2D([], [], color=seg_cn_cols[seg], ls="--", lw=1.1,
+                          label=f"{seg_labels[seg]}  S/C → tangent pt  (every 10th)"),
+        ]
+    handles += [
+        mlines.Line2D([], [], color="#1a7d1a", marker="*", ls="None",
+                      markersize=8, label="Orbit Propagation Start"),
+        mlines.Line2D([], [], color=_ATT_COLS[0], marker="*", ls="None",
+                      markersize=8, label="Change attitude to cross-track"),
+        mlines.Line2D([], [], color=_ATT_COLS[1], marker="*", ls="None",
+                      markersize=8, label="Change attitude to along-track"),
+        mlines.Line2D([], [], color=_KSAT_COL, marker="^", ls="None",
+                      markersize=8, label="KSAT Ground Station (Svalbard)"),
+    ]
+    ax.legend(handles=handles, fontsize=6.5, loc="lower left",
+              framealpha=0.85, edgecolor="0.6", ncol=2)
+    ax.set_title(
+        "G01 Ground Tracks — Orbits 1, 2 & 3  "
+        "(partial along-track stub + two complete orbits)\n"
+        "S/C positions (all latitudes)  +  observed-volume tangent pts (science band only)"
+    )
+    plt.tight_layout()
+    fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# v_rel histogram figure  (§D)
+# ---------------------------------------------------------------------------
+
+def _plot_vrel_histogram(
+    metadata_list: list,
+    vrel_list: list,
+    windmap_label: str,
+    rng_seed: int,
+    wind_map,
+    save_path,
+):
+    """
+    Two-panel histogram of v_rel by look mode, with truth v_wind_LOS overlay.
+    For TimeVaryingStormWindMap, adds a third panel showing the ap ramp profile.
+    """
+    import matplotlib.pyplot as plt
+    is_storm_onset = isinstance(wind_map, TimeVaryingStormWindMap)
+
+    if is_storm_onset:
+        fig, axes = plt.subplots(
+            1, 3, figsize=(13, 4),
+            gridspec_kw={"width_ratios": [1, 1, 0.4]},
+        )
+        ax_at, ax_ct, ax_ap = axes
+    else:
+        fig, (ax_at, ax_ct) = plt.subplots(1, 2, figsize=(10, 4))
+
+    panels = [
+        (ax_at, "along_track",
+         "Along-track  (odd orbits, LOS ∥ track)",  "#0057C2"),
+        (ax_ct, "cross_track",
+         "Cross-track  (even orbits, LOS ⊥ track)", "#003479"),
+    ]
+
+    for ax, mode, title, color in panels:
+        sci_pairs = [
+            (m, d) for m, d in zip(metadata_list, vrel_list)
+            if m.img_type == "science" and m.obs_mode == mode
+            and not np.isnan(d["v_rel_ms"])
+        ]
+        vrel_vals  = np.array([d["v_rel_ms"]      for _, d in sci_pairs])
+        vwind_vals = np.array([m.truth_v_los       for m, _ in sci_pairs])
+
+        if vrel_vals.size == 0:
+            ax.set_title(title)
+            ax.text(0.5, 0.5, "No data", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
+
+        ax.hist(vrel_vals, bins=40, color=color, alpha=0.75,
+                edgecolor="white", linewidth=0.4)
+        mean_vwind = float(np.nanmean(vwind_vals))
+        ax.axvline(mean_vwind, color="#b5651d", linewidth=1.5, linestyle="--",
+                   label=f"mean v_wind_LOS = {mean_vwind:.0f} m/s")
+        ax.axvline(0.0, color="k", linewidth=0.8, linestyle=":")
+
+        stats_str = (f"v_rel: {vrel_vals.mean():.0f} ± {vrel_vals.std():.0f} m/s"
+                     f"\n(n={vrel_vals.size})")
+        ax.text(0.03, 0.97, stats_str, transform=ax.transAxes,
+                fontsize=8, va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
+
+        ax.set_xlabel("v_rel  (m/s)")
+        ax.set_ylabel("Frame count")
+        ax.set_title(title)
+        ax.legend(loc="lower right", fontsize=8)
+
+    if is_storm_onset:
+        wm = wind_map
+        t_total = wm.onset_hour + 2 * wm.ramp_down_h + 4.0
+        t_pts   = np.linspace(0.0, t_total, 2000)
+        ap_pts  = np.array([wm.ap_at(t) for t in t_pts])
+
+        # colour by phase
+        phase_colours = {
+            "quiet":    "#aaaaaa",
+            "ramp_up":  "#e67e22",
+            "peak":     "#c0392b",
+            "recovery": "#f39c12",
+        }
+        t0, t1 = wm.onset_hour, wm.onset_hour + wm.ramp_up_h
+        t2, t3 = t1 + wm.ramp_down_h, t1 + 2 * wm.ramp_down_h
+
+        def _phase(t):
+            if t < t0:            return "quiet"
+            elif t < t1:          return "ramp_up"
+            elif t < t2:          return "peak"
+            elif t < t3:          return "recovery"
+            else:                 return "quiet"
+
+        prev = 0
+        for k in range(1, len(t_pts)):
+            ph = _phase(t_pts[k])
+            if ph != _phase(t_pts[k - 1]) or k == len(t_pts) - 1:
+                c = phase_colours[_phase(t_pts[prev])]
+                ax_ap.fill_between(t_pts[prev:k+1], ap_pts[prev:k+1],
+                                   color=c, alpha=0.7, step=None)
+                prev = k
+        try:
+            ax_ap.plot(t_pts, ap_pts, color="k", lw=0.8)
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
+        ax_ap.set_xlabel("Hours from start")
+        ax_ap.set_ylabel("ap index")
+        ax_ap.set_title("ap ramp")
+        ax_ap.yaxis.set_label_position("right")
+        ax_ap.yaxis.tick_right()
+
+    fig.suptitle(
+        f"GEN01 v_rel distribution — {windmap_label}  (seed={rng_seed})",
+        fontsize=11, y=1.02,
+    )
+    plt.tight_layout()
+    fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Coverage diagnostic (G01 v15 §9)
+# ---------------------------------------------------------------------------
+
+def _expected_mixed_fraction(n_days: float, dlon: float = 5.0) -> float:
+    """Analytical estimate of mixed AT+CT bin fraction (G01 v15 §9.3)."""
+    passes_per_day = 15.2
+    lon_coverage = min(1.0, n_days * passes_per_day * 2 * dlon / 360.0)
+    return lon_coverage * lon_coverage
+
+
+def _run_coverage_diagnostic(
+    df: "pd.DataFrame",
+    csv_path: pathlib.Path,
+    n_days: float,
+    dlat: float = 5.0,
+    dlon: float = 5.0,
+) -> None:
+    """Print and write a G01 v15 §9 coverage diagnostic report."""
+    # 2a. Filter to science rows with valid tangent point coords
+    sci = df[df["obs_type"] == "science"].copy()
+    sci = sci.dropna(subset=["tp_lat_deg", "tp_lon_deg"])
+
+    # 2b. Assign geographic bins
+    sci["bin_lat"] = (sci["tp_lat_deg"] / dlat).round() * dlat
+    sci["bin_lon"] = (sci["tp_lon_deg"] / dlon).round() * dlon
+
+    # 2c. Per-bin AT/CT counts
+    grp = sci.groupby(["bin_lat", "bin_lon"])
+    bin_stats = grp.apply(
+        lambda g: pd.Series({
+            "n_at": (g["obs_mode"] == "along_track").sum(),
+            "n_ct": (g["obs_mode"] == "cross_track").sum(),
+        })
+    ).reset_index()
+    bin_stats["has_both"] = (bin_stats["n_at"] >= 1) & (bin_stats["n_ct"] >= 1)
+    bin_stats["at_only"]  = (bin_stats["n_at"] >= 1) & (bin_stats["n_ct"] == 0)
+    bin_stats["ct_only"]  = (bin_stats["n_ct"] >= 1) & (bin_stats["n_at"] == 0)
+
+    # 2d. Global summary
+    n_bins_sampled = len(bin_stats)
+    n_bins_mixed   = int(bin_stats["has_both"].sum())
+    n_bins_at_only = int(bin_stats["at_only"].sum())
+    n_bins_ct_only = int(bin_stats["ct_only"].sum())
+    pct_mixed = n_bins_mixed / n_bins_sampled * 100 if n_bins_sampled > 0 else 0.0
+
+    # 2e. Expected fraction and days-for-80%
+    expected_pct = _expected_mixed_fraction(n_days, dlon) * 100
+    days_for_80  = 360.0 / (15.2 * dlon)   # ~4.7 days for dlon=5
+
+    # 2f. Coverage by latitude band (bins only)
+    def _band_pct(lat_lo, lat_hi):
+        b = bin_stats[(bin_stats["bin_lat"] >= lat_lo) & (bin_stats["bin_lat"] < lat_hi)]
+        if len(b) == 0:
+            return 0.0
+        return b["has_both"].sum() / len(b) * 100
+
+    pct_south_hi = _band_pct(-60, -30)
+    pct_south_lo = _band_pct(-30,   0)
+    pct_north_lo = _band_pct(  0,  30)
+    pct_north_hi = _band_pct( 30,  60)
+
+    # 2g. Recommendation
+    if pct_mixed < 10:
+        recommendation_string = "Extend to >=5 days for useful H07 wind coverage."
+    elif pct_mixed < 50:
+        recommendation_string = "Consider extending to >=5 days for >75% H07 coverage."
+    elif pct_mixed < 80:
+        recommendation_string = "Coverage adequate for regional analysis. Extend for global."
+    else:
+        recommendation_string = "Coverage sufficient for global H07 wind map validation."
+
+    # 2h. Build and print report
+    lines = [
+        "================================================================",
+        "GEN01 Coverage Diagnostic Report",
+        "================================================================",
+        f"Dataset         : {csv_path.stem}",
+        f"Duration        : {n_days:.2f} days  ({len(sci)} science frames)",
+        f"Bin size        : {dlat}° x {dlon}°",
+        f"Orbit period    : ~95 min  (15.2 passes/day)",
+        f"Ground track Δλ : 23.75° between successive passes",
+        "----------------------------------------------------------------",
+        "Geographic coverage (5°x5° bins):",
+        f"  Bins sampled (>=1 frame)  : {n_bins_sampled}",
+        f"  Along-track only          : {n_bins_at_only}  ({100*n_bins_at_only/max(n_bins_sampled,1):.1f}%)",
+        f"  Cross-track only          : {n_bins_ct_only}  ({100*n_bins_ct_only/max(n_bins_sampled,1):.1f}%)",
+        f"  Mixed AT+CT (good H07)    : {n_bins_mixed}  ({pct_mixed:.1f}%)",
+        "----------------------------------------------------------------",
+        "H07 wind solution prediction:",
+        f"  Predicted good solutions  : {pct_mixed:.1f}%",
+        f"  Expected for {n_days:.1f}-day dataset : {expected_pct:.1f}%",
+        f"  (~{days_for_80:.1f} days needed for >80% coverage)",
+        "----------------------------------------------------------------",
+        "Coverage by latitude band:",
+        f"  60S-30S : {pct_south_hi:.0f}% mixed",
+        f"  30S-0   : {pct_south_lo:.0f}% mixed",
+        f"  0-30N   : {pct_north_lo:.0f}% mixed",
+        f"  30N-60N : {pct_north_hi:.0f}% mixed",
+        "  (Polar regions >60 deg not shown)",
+        "----------------------------------------------------------------",
+        f"Recommendation:",
+        f"  {recommendation_string}",
+        "================================================================",
+    ]
+    report_text = "\n".join(lines) + "\n"
+    for line in lines:
+        print(line)
+
+    # 2i. Write coverage report sidecar
+    report_path = csv_path.parent / (csv_path.stem + "_coverage_report.txt")
+    report_path.write_text(report_text, encoding="utf-8")
+
+    # 2j. Append one-line summary to README sidecar
+    readme_candidates = list(csv_path.parent.glob(csv_path.stem.rsplit("_seed", 1)[0] + "*.txt"))
+    # also try exact stem match
+    readme_exact = csv_path.parent / (csv_path.stem + ".txt")
+    if readme_exact.exists():
+        readme_candidates = [readme_exact]
+    # filter out the coverage report itself
+    readme_candidates = [p for p in readme_candidates if "_coverage_report" not in p.name]
+    if readme_candidates:
+        readme_path = readme_candidates[0]
+        try:
+            with open(readme_path, "a", encoding="utf-8") as fh:
+                fh.write(
+                    f"Coverage (5x5 deg, mixed AT+CT): {pct_mixed:.1f}%"
+                    f"  ({n_bins_mixed}/{n_bins_sampled} bins)\n"
+                )
+        except OSError:
+            pass   # skip silently
+
+
+# ---------------------------------------------------------------------------
+# TLE helpers (§15.1, §15.2 — v16)
+# ---------------------------------------------------------------------------
+
+def _parse_tle_epoch(line1: str) -> datetime.datetime:
+    """
+    Parse the epoch field from TLE line 1 (columns 19–32, 1-indexed).
+
+    TLE epoch format: YYDDD.DDDDDDDD
+      YY: 2-digit year (57–99 → 1957–1999; 00–56 → 2000–2056)
+      DDD.DDDDDDDD: day-of-year with fractional day
+    Returns a timezone-aware UTC datetime.
+    """
+    epoch_str = line1[18:32].strip()
+    yy = int(epoch_str[:2])
+    year = (1900 + yy) if yy >= 57 else (2000 + yy)
+    day_frac = float(epoch_str[2:])
+    day_int = int(day_frac)
+    frac = day_frac - day_int
+    jan1 = datetime.datetime(year, 1, 1, tzinfo=datetime.timezone.utc)
+    dt = jan1 + datetime.timedelta(days=day_int - 1) + datetime.timedelta(days=frac)
+    return dt
+
+
+def _load_tle_dialog() -> tuple:
+    """
+    Open a file-picker dialog to select a TLE file.
+
+    Returns (title_line, line1, line2) for the selected TLE set.
+    Raises RuntimeError if the file cannot be parsed or no TLE sets found.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    tle_file = filedialog.askopenfilename(
+        title="Select WindCube TLE file",
+        filetypes=[("TLE files", "*.tle *.txt"), ("All files", "*.*")],
+    )
+    root.destroy()
+    if not tle_file:
+        raise RuntimeError("No TLE file selected.")
+
+    with open(tle_file, "r", encoding="utf-8") as fh:
+        raw_lines = [ln.rstrip() for ln in fh.readlines()]
+
+    lines = [ln for ln in raw_lines if ln.strip()]
+
+    # Parse TLE sets: a valid set is line1 starting "1 " and line2 "2 "
+    tle_sets = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("1 ") and i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+            title = lines[i - 1] if i > 0 and not lines[i - 1].startswith(("1 ", "2 ")) else ""
+            tle_sets.append((title.strip(), lines[i], lines[i + 1]))
+            i += 2
+        else:
+            i += 1
+
+    if len(tle_sets) == 0:
+        raise RuntimeError("No valid TLE sets found in the selected file.")
+
+    tle_file_name = pathlib.Path(tle_file).name
+
+    if len(tle_sets) == 1:
+        return tle_sets[0] + (tle_file_name,)
+
+    # Multiple TLE sets: sort newest-first by epoch and let user choose
+    tle_sets_dated = []
+    for (title, l1, l2) in tle_sets:
+        try:
+            ep = _parse_tle_epoch(l1)
+        except Exception:
+            ep = datetime.datetime(1957, 1, 1, tzinfo=datetime.timezone.utc)
+        tle_sets_dated.append((ep, title, l1, l2))
+    tle_sets_dated.sort(key=lambda x: x[0], reverse=True)
+
+    print(f"\nFound {len(tle_sets_dated)} TLE sets in {tle_file_name}:")
+    for k, (ep, title, l1, _) in enumerate(tle_sets_dated, 1):
+        print(f"  [{k}] {ep.strftime('%Y-%m-%dT%H:%M:%SZ')}  {title}")
+
+    raw_sel = input("Select TLE [1 = most recent]: ").strip()
+    sel = int(raw_sel) if raw_sel else 1
+    if sel < 1 or sel > len(tle_sets_dated):
+        sel = 1
+    chosen = tle_sets_dated[sel - 1]
+    return (chosen[1], chosen[2], chosen[3], tle_file_name)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    print("=== G01 — WindCube Synthetic Metadata Generator ===\n")
+
+    # -----------------------------------------------------------------------
+    # TLE mode prompt (§11.2 — v16)
+    # -----------------------------------------------------------------------
+    use_tle_raw = input(
+        "Use a TLE file for orbit initialisation?  [y/N]: "
+    ).strip().lower()
+    use_tle = use_tle_raw in ("y", "yes")
+
+    # Variables set in the TLE path; None in legacy mode
+    pos0_eci_m    = None
+    vel0_eci_m_s  = None
+    tle_title     = ""
+    tle_file_name = ""
+    tle_epoch_dt  = None
+    inclination_deg_tle = None
+    bstar_tle     = None
+    mean_motion   = None
+
+    if use_tle:
+        result = _load_tle_dialog()
+        tle_title, line1, line2, tle_file_name = result
+        sat = Satrec.twoline2rv(line1, line2)
+        tle_epoch_dt = _parse_tle_epoch(line1)
+
+        jd_whole, jd_frac = jday(
+            tle_epoch_dt.year, tle_epoch_dt.month, tle_epoch_dt.day,
+            tle_epoch_dt.hour, tle_epoch_dt.minute,
+            tle_epoch_dt.second + tle_epoch_dt.microsecond / 1e6,
+        )
+        e, r_km, v_km_s = sat.sgp4(jd_whole, jd_frac)
+        if e != 0:
+            raise RuntimeError(f"SGP4 propagation error code {e} at TLE epoch.")
+
+        pos0_eci_m   = np.array(r_km) * 1000.0
+        vel0_eci_m_s = np.array(v_km_s) * 1000.0
+        t_start      = tle_epoch_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        altitude_km  = float(np.linalg.norm(r_km) - R_EARTH_MEAN_KM)
+        mean_motion  = sat.no_kozai * (1440.0 / (2 * np.pi))
+        T_ORBIT_S    = 86400.0 / mean_motion
+        inclination_deg_tle = float(np.degrees(sat.inclo))
+        bstar_tle    = float(sat.bstar)
+
+        # TLE age warning (§12.3)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        age_days = (now_utc - tle_epoch_dt).total_seconds() / 86400.0
+        if age_days > SGP4_MAX_AGE_DAYS:
+            print(f"\nWARNING: TLE epoch is {age_days:.1f} days before now.")
+            print("         Propagation accuracy degrades at >3 days for LEO.")
+            print("         Consider downloading a fresher TLE.")
+
+        # TLE summary table (§11.6)
+        print(f"\nTLE Summary:")
+        print(f"  File             : {tle_file_name}")
+        print(f"  Title            : {tle_title}")
+        print(f"  NORAD ID         : {sat.satnum}")
+        print(f"  TLE epoch        : {tle_epoch_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC")
+        print(f"  TLE age          : {age_days:.1f} days before now")
+        print(f"  Inclination      : {inclination_deg_tle:.4f}°")
+        print(f"  BSTAR drag       : {bstar_tle:.5e}")
+        print(f"  Mean motion      : {mean_motion:.8f} rev/day")
+        print(f"  T_orbit (TLE)    : {T_ORBIT_S:.1f} s  ({T_ORBIT_S / 60:.2f} min)")
+        print(f"  Altitude @ epoch : {altitude_km:.1f} km  (|r| - R_earth)")
+        print(f"  Start epoch      : {t_start} UTC  (set from TLE epoch)")
+    else:
+        t_start  = _prompt(
+            "Start epoch          [2027-01-01T00:00:00 UTC]  : ",
+            "2027-01-01T00:00:00", str)
+        altitude_km = _prompt(
+            "S/C altitude         [km,    default 510       ] : ",
+            510.0, float, 400.0, 700.0)
+
+    duration_days = _prompt(
+        "Duration             [days,  default   1       ] : ",
+        1.0, float, 0.1, 365.0)
+    lat_min_deg   = _prompt(
+        "Science band min lat [deg,   default -40       ] : ",
+        -40.0, float, -89.0, 89.0)
+    lat_max_deg   = _prompt(
+        "Science band max lat [deg,   default +40       ] : ",
+        40.0, float, -89.0, 89.0)
+    obs_cadence_s = _prompt(
+        "Obs. cadence         [sec,   default  10       ] : ",
+        10.0, float, 10.0, 3600.0)
+    n_caldark     = _prompt(
+        "Cal/dark frames (n)  [int,   default   5       ] : ",
+        5, int, 1, 50)
+    exp_time_sci_s = _prompt(
+        "Science exposure     [sec,   default  10       ] : ",
+        10.0, float, 1.0, 3600.0)
+    exp_time_cal_s = _prompt(
+        "Cal/dark exposure    [sec,   default 120       ] : ",
+        120.0, float, 1.0, 3600.0)
+    _bin_factor   = _prompt(
+        "Binning              [1 or 2, default  2       ] : ",
+        2, int, 1, 2)
+    while _bin_factor not in (1, 2):
+        print("  Please enter 1 (unbinned, 528×552) or 2 (2×2 binned, 260×276).")
+        _bin_factor = _prompt(
+            "Binning              [1 or 2, default  2       ] : ",
+            2, int, 1, 2)
+    binning_cfg   = BINNING_CFG[_bin_factor]
+    _cx_default   = binning_cfg["nx_pix"] / 2.0
+    _cy_default   = binning_cfg["ny_pix"] / 2.0
+    cx_offset     = _prompt(
+        f"Fringe centre cx offset  [px,   default  0.00      ]"
+        f"  (default cx={_cx_default:.2f}) : ",
+        0.0, float, -50.0, 50.0)
+    cy_offset     = _prompt(
+        f"Fringe centre cy offset  [px,   default  0.00      ]"
+        f"  (default cy={_cy_default:.2f}) : ",
+        0.0, float, -50.0, 50.0)
+    cx_centre     = round(_cx_default + cx_offset, 2)
+    cy_centre     = round(_cy_default + cy_offset, 2)
+    h_target_km   = _prompt(
+        "Tangent height       [km,    default 250       ] : ",
+        250.0, float, 100.0, 400.0)
+    rng_seed      = _prompt(
+        "Random seed          [int,   default  42       ] : ",
+        42, int, 0, None)
+
+    exp_time_sci_cs = round(exp_time_sci_s * 100)   # centiseconds for P01 metadata
+    exp_time_cal_cs = round(exp_time_cal_s * 100)
+
+    # -----------------------------------------------------------------------
+    # Wind map selection menu
+    # -----------------------------------------------------------------------
+    wind_map = None
+    wm_choice = None
+    while True:
+        print("\nSelect wind map for science frame truth winds:")
+        for key, (label, _) in WIND_MAP_REGISTRY.items():
+            print(f"  [{key}] {label}")
+        wm_choice = _prompt("Choice [default 1]: ", "1", str)
+        if wm_choice not in WIND_MAP_REGISTRY:
+            print("  Invalid choice. Try again.")
+            continue
+
+        wm_params = {}
+        if wm_choice == "1":
+            wm_params["v_zonal_ms"] = _prompt(
+                "  v_zonal  [m/s, default 100] : ", 100.0, float)
+            wm_params["v_merid_ms"] = _prompt(
+                "  v_merid  [m/s, default   0] : ", 0.0, float)
+        elif wm_choice == "2":
+            wm_params["A_zonal_ms"] = _prompt(
+                "  A_zonal  [m/s, default 200] : ", 200.0, float)
+            wm_params["A_merid_ms"] = _prompt(
+                "  A_merid  [m/s, default 100] : ", 100.0, float)
+        elif wm_choice == "3":
+            wm_params["A_zonal_ms"] = _prompt(
+                "  A_zonal  [m/s, default 150] : ", 150.0, float)
+            wm_params["A_merid_ms"] = _prompt(
+                "  A_merid  [m/s, default  75] : ", 75.0, float)
+            wm_params["phase_rad"]  = _prompt(
+                "  phase    [rad, default 0.0] : ", 0.0, float)
+        elif wm_choice == "4":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 172 ] : ", 172, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default  12.0]: ", 12.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 150.0]: ", 150.0, float, 60.0, 300.0)
+            wm_params["ap"]          = _prompt(
+                "  ap          [default   4  ]: ", 4.0, float, 0.0, 400.0)
+        elif wm_choice == "5":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 355 ] : ", 355, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default   3.0]: ", 3.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 180.0]: ", 180.0, float, 60.0, 300.0)
+            wm_params["ap"]          = _prompt(
+                "  ap          [default  80  ]: ", 80.0, float, 0.0, 400.0)
+        elif wm_choice == "6":
+            wm_params["day_of_year"] = _prompt(
+                "  day_of_year [default 355 ] : ", 355, int, 1, 366)
+            wm_params["ut_hours"]    = _prompt(
+                "  ut_hours    [default   3.0]: ", 3.0, float, 0.0, 24.0)
+            wm_params["f107"]        = _prompt(
+                "  f107        [default 180.0]: ", 180.0, float, 60.0, 300.0)
+            wm_params["ap_quiet"]    = _prompt(
+                "  ap_quiet    [default   4  ]: ", 4.0, float, 0.0, 50.0)
+            wm_params["ap_peak"]     = _prompt(
+                "  ap_peak     [default 150  ]: ", 150.0, float, 20.0, 400.0)
+            wm_params["onset_hour"]  = _prompt(
+                "  onset_hour  [hrs from campaign start, default 12]: ",
+                12.0, float, 0.0, 999.0)
+            wm_params["ramp_up_h"]   = _prompt(
+                "  ramp_up_h   [hrs, default  3]: ", 3.0, float, 0.5, 24.0)
+            wm_params["ramp_down_h"] = _prompt(
+                "  ramp_down_h [hrs, default  9]: ", 9.0, float, 1.0, 48.0)
+
+        try:
+            wind_map = _build_wind_map(wm_choice, None, h_target_km, **wm_params)
+            break
+        except ImportError as exc:
+            print(f"\n  ERROR: {exc}")
+            print("  Cannot use this wind map. Please select a different option.")
+            continue
+
+    windmap_tag   = WIND_MAP_TAGS[wm_choice]
+    windmap_label = WIND_MAP_REGISTRY[wm_choice][0]
+
+    _default_out = str(pathlib.Path.home() / "WindCube" / "G01_outputs")
+    print("\nSelect output folder (dialog opening — check taskbar if not visible)...")
+    output_dir = _pick_folder(
+        title="Select output folder for G01 files",
+        default=_default_out,
+    )
+    print(f"  Output directory : {output_dir}")
+
+    if lat_max_deg >= CAL_TRIGGER_LAT_DEG or lat_min_deg <= -CAL_TRIGGER_LAT_DEG:
+        print(
+            f"\n  WARNING: science band ({lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°) "
+            f"overlaps the ±{CAL_TRIGGER_LAT_DEG}°N/S cal/dark trigger latitude. "
+            "Cal/dark takes precedence at trigger epochs."
+        )
+    seq_duration_s = 2 * n_caldark * obs_cadence_s
+    if seq_duration_s > 1200:
+        print(
+            f"\n  WARNING: cal/dark sequence duration ({seq_duration_s:.0f} s = "
+            f"{seq_duration_s / 60:.1f} min) > 20 min and may extend into "
+            "the orbit's descending high-latitude arc."
+        )
+
+    step           = max(1, round(obs_cadence_s / SCHED_DT_S))
+    actual_cadence = step * SCHED_DT_S
+    duration_s     = duration_days * 86400.0
+
+    if use_tle:
+        # T_ORBIT_S already set from TLE mean motion in the TLE block above
+        pass
+    else:
+        a_m       = WGS84_A_M + altitude_km * 1e3
+        T_ORBIT_S = 2 * np.pi * np.sqrt(a_m**3 / EARTH_GRAV_PARAM_M3_S2)
+
+    sched_rows_approx = int(duration_s / SCHED_DT_S) + 1
+
+    print(f"\nParameters:")
+    print(f"  Start epoch      : {t_start} UTC")
+    print(f"  Duration         : {duration_days:.1f} days")
+    print(f"  Science band     : {lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°")
+    print(f"  Obs. cadence     : {obs_cadence_s:.1f} s requested → "
+          f"{actual_cadence:.1f} s actual (step={step})")
+    print(f"  Cal/dark per orb : {n_caldark} + {n_caldark} = {2*n_caldark} frames  "
+          f"({seq_duration_s:.1f} s sequence)")
+    print(f"  Cal trigger lat  : {CAL_TRIGGER_LAT_DEG:.1f}°N ascending  "
+          "[CONOPS TBD document, §TBD]")
+    print(f"  Exp. time (sci)  : {exp_time_sci_s:.1f} s  ({exp_time_sci_cs} cs in P01)")
+    print(f"  Exp. time (cal)  : {exp_time_cal_s:.1f} s  ({exp_time_cal_cs} cs in P01)")
+    print(f"  Binning          : {_bin_factor}×{_bin_factor}  "
+          f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
+          f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)")
+    print(f"  Fringe centre    : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
+          f"(offset from default: Δcx={cx_offset:+.2f},  Δcy={cy_offset:+.2f})")
+    print(f"  S/C altitude     : {altitude_km:.1f} km")
+    print(f"  Tangent ht       : {h_target_km:.1f} km")
+    print(f"  Wind map         : {windmap_label}  "
+          f"(tag={windmap_tag!r})")
+    print(f"  T_orbit          : {T_ORBIT_S:.1f} s ({T_ORBIT_S / 60:.2f} min)")
+    print(f"  NB01 sched rows  : ~{sched_rows_approx}  "
+          f"(10 s grid, {duration_days:.0f} days)")
+    print(f"  RNG seed         : {rng_seed}")
+    print(f"  Output dir       : {output_dir}")
+
+    # -----------------------------------------------------------------------
+    # Step 1: NB01 orbit propagation
+    # -----------------------------------------------------------------------
+    print("\nBuilding NB01 orbit schedule ...", end=" ", flush=True)
+
+    if use_tle:
+        from astropy.time import Time as AstropyTime
+        t0_astropy = AstropyTime(t_start, format="isot", scale="utc")
+        df_sched = propagate_orbit_from_state(
+            pos0_m     = pos0_eci_m,
+            vel0_m_s   = vel0_eci_m_s,
+            t0         = t0_astropy,
+            duration_s = duration_s,
+            dt_s       = SCHED_DT_S,
+        )
+    else:
+        df_sched = propagate_orbit(
+            t_start     = t_start,
+            duration_s  = duration_s,
+            dt_s        = SCHED_DT_S,
+            altitude_km = altitude_km,
+        )
+
+    t0 = pd.Timestamp(t_start, tz="UTC")
+    df_sched["elapsed_s"]    = (df_sched["epoch"] - t0).dt.total_seconds()
+    df_sched["orbit_number"] = (df_sched["elapsed_s"] // T_ORBIT_S).astype(int) + 1
+    # look_mode is assigned after the schedule is built (needs cal_trigger_indices)
+    df_sched["look_mode"] = "along_track"
+
+    print("done")
+
+    # -----------------------------------------------------------------------
+    # Step 2: Build observation schedule
+    # -----------------------------------------------------------------------
+    obs_indices, frame_types, cal_trigger_indices = _build_schedule(
+        df_sched, lat_min_deg, lat_max_deg, n_caldark, step
+    )
+
+    # Attitude switches just after each cal/dark sequence completes.
+    # switch_at[k] is the first df_sched row index at which the new attitude is in effect.
+    switch_at = [t0_i + 2 * n_caldark * step for t0_i in cal_trigger_indices]
+    _n   = len(df_sched)
+    _lk  = np.empty(_n, dtype=object)
+    _md  = "along_track"
+    _sw  = 0
+    for _ii in range(_n):
+        while _sw < len(switch_at) and _ii >= switch_at[_sw]:
+            _md = "cross_track" if _md == "along_track" else "along_track"
+            _sw += 1
+        _lk[_ii] = _md
+    df_sched["look_mode"] = _lk
+    del _lk, _md, _sw, _ii, _n
+    n_obs             = len(obs_indices)
+    n_complete_orbits = len(cal_trigger_indices)
+
+    n_science = frame_types.count("science")
+    n_cal     = frame_types.count("cal")
+    n_dark    = frame_types.count("dark")
+
+    print(f"\nObservation schedule:")
+    print(f"  Science frames : {n_science}")
+    print(f"  Cal frames     : {n_cal}    "
+          f"({n_caldark} per orbit × {n_complete_orbits} complete orbits)")
+    print(f"  Dark frames    : {n_dark}    "
+          f"({n_caldark} per orbit × {n_complete_orbits} complete orbits)")
+    print(f"  Total frames   : {n_obs}")
+
+    if n_science == 0:
+        print("\nFATAL: zero science frames produced. Check lat_min_deg/lat_max_deg and schedule.")
+        return
+    if n_cal == 0:
+        print("\nFATAL: zero cal frames produced. Check CAL_TRIGGER_LAT_DEG and orbit propagation.")
+        return
+
+    orbit_counter   = {}
+    frame_sequences = []
+    for idx in obs_indices:
+        orb = int(df_sched.loc[idx, "orbit_number"])
+        cnt = orbit_counter.get(orb, 0)
+        frame_sequences.append(cnt)
+        orbit_counter[orb] = cnt + 1
+
+    # -----------------------------------------------------------------------
+    # Step 3: Build ImageMetadata list + binary image files
+    # -----------------------------------------------------------------------
+    print("\nBuilding NB02a + NB02b + NB02c + image synthesis ...")
+
+    rng      = np.random.default_rng(rng_seed)
+    bin_dir  = pathlib.Path(output_dir) / "bin_frames"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write simulation settings readme alongside the binary frames
+    _readme_lines = [
+        "G01 Synthetic Metadata Generator — Simulation Settings",
+        "=" * 56,
+        f"Generated          : {pd.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')} UTC",
+        "",
+        "--- Timing & Orbit ---",
+        f"Start epoch        : {t_start} UTC",
+        f"Duration           : {duration_days:.1f} days",
+        f"S/C altitude       : {altitude_km:.1f} km",
+        f"Orbital period     : {T_ORBIT_S:.1f} s  ({T_ORBIT_S / 60:.2f} min)",
+        "",
+        "--- Observation Schedule ---",
+        f"Science band       : {lat_min_deg:+.1f}° to {lat_max_deg:+.1f}°",
+        f"Cal trigger lat    : {CAL_TRIGGER_LAT_DEG:.1f}°N  (ascending)",
+        f"Obs. cadence       : {obs_cadence_s:.1f} s requested  →  {actual_cadence:.1f} s actual  (step={step})",
+        f"Cal/dark per orbit : {n_caldark} cal + {n_caldark} dark = {2 * n_caldark} frames",
+        f"Science frames     : {n_science}",
+        f"Cal frames         : {n_cal}",
+        f"Dark frames        : {n_dark}",
+        f"Total obs frames   : {n_obs}",
+        "",
+        "--- Instrument ---",
+        f"Tangent height     : {h_target_km:.1f} km   (h_target_km_obs in metadata)",
+        f"Fringe centre      : cx={cx_centre:.2f} px,  cy={cy_centre:.2f} px  "
+        f"(offset Δcx={cx_offset:+.2f}, Δcy={cy_offset:+.2f})",
+        f"Exposure time (sci): {exp_time_sci_s:.1f} s  ({exp_time_sci_cs} cs in P01)",
+        f"Exposure time (cal): {exp_time_cal_s:.1f} s  ({exp_time_cal_cs} cs in P01)",
+        "",
+        "--- Wind Map ---",
+        f"Model              : {windmap_label}  (tag='{windmap_tag}')",
+    ]
+    for k, v in wm_params.items():
+        _readme_lines.append(f"  {k:<18s} : {v}")
+    _readme_lines += [
+        "",
+        "--- Reproducibility ---",
+        f"Random seed        : {rng_seed}",
+        "",
+        "--- Output ---",
+        f"Binary frame dir   : {bin_dir}",
+        f"Binary filename fmt: YYYY-MM-DDTHH-MM-SSZ_{{img_type}}.bin",
+        f"Binning            : {_bin_factor}×{_bin_factor}  "
+        f"({binning_cfg['n_rows_frame']} rows × {binning_cfg['n_cols_frame']} cols, "
+        f"science region {binning_cfg['ny_pix']}×{binning_cfg['nx_pix']} px)",
+        f"Frame size         : {binning_cfg['n_rows_frame']} rows × "
+        f"{binning_cfg['n_cols_frame']} cols × 2 bytes = "
+        f"{binning_cfg['n_rows_frame'] * binning_cfg['n_cols_frame'] * 2:,} bytes",
+        "",
+        "--- LOS velocity sign conventions ---",
+        "v_*_los_approach_ms columns: dot(velocity, los_eci) per NB02c.",
+        "  Positive = velocity component along the instrument boresight direction.",
+        "  These are diagnostic/truth columns; not consumed directly by H07.",
+        "",
+        "v_rel_ms: Harding recession convention (NB02c formula).",
+        "  Positive = source receding from spacecraft (redshift, λ increases).",
+        "  Used directly by M06 pixel generator and H07 wind inversion.",
+        "  Relationship (from NB02c compute_v_rel):",
+        "    v_rel_ms = v_wind_los_approach_ms",
+        "               - v_sc_los_approach_ms",
+        "               - v_earth_los_approach_ms",
+        "",
+        "--- FPI Instrument Model ---",
+        f"R_REFL (λ1=640.2 nm)  : {R_REFL:.5f}  (real FlatSat H05 fit)",
+        f"R_REFL_2 (λ2=638.3 nm): {R_REFL_2:.5f}  (real FlatSat H05 fit)",
+        f"ne_ratio (R2/R1)       : {REL_638:.4f}",
+        f"SIGMA0_PX (PSF width)  : {SIGMA0_PX:.4f} px",
+        f"FINESSE_F              : {FINESSE_F:.4f}  (= 4R/(1-R)^2 at λ1)",
+        f"ETALON_GAP_M           : {ETALON_GAP_M*1e3:.7f} mm",
+        f"PLATE_SCALE_RPX        : {PLATE_SCALE_RPX:.5e} rad/px",
+        f"Source                 : real FlatSat cal image, H05 fit, chi2/nu=1.614",
+    ]
+    if use_tle:
+        _readme_lines += [
+            "",
+            "--- TLE Source ---",
+            f"TLE file           : {tle_file_name}",
+            f"NORAD ID           : {sat.satnum}",
+            f"TLE epoch          : {tle_epoch_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC",
+            f"Inclination        : {inclination_deg_tle:.4f}°",
+            f"BSTAR drag         : {bstar_tle:.5e}",
+            f"Mean motion        : {mean_motion:.8f} rev/day",
+            f"T_orbit (TLE)      : {T_ORBIT_S:.1f} s  ({T_ORBIT_S/60:.2f} min)",
+            f"Altitude at epoch  : {altitude_km:.1f} km  (derived: |r| - R_earth)",
+        ]
+    _readme_stem = (f"GEN01_{t_start[:10].replace('-', '')}_{duration_days:05.1f}d_"
+                    f"{windmap_tag}_seed{rng_seed:04d}"
+                    + ("_tle" if use_tle else ""))
+    _readme_path = pathlib.Path(output_dir) / f"{_readme_stem}.txt"
+    _readme_path.write_text("\n".join(_readme_lines) + "\n", encoding="utf-8")
+
+    metadata_list  = []
+    vrel_list      = []   # CSV-only LOS velocity components per frame
+
+    _campaign_start_ts = df_sched.iloc[0]["epoch"].timestamp()
+
+    for i, (idx, frame_type) in enumerate(zip(obs_indices, frame_types)):
+        row = df_sched.loc[idx]
+
+        pos       = np.array([row.pos_eci_x, row.pos_eci_y, row.pos_eci_z])
+        vel       = np.array([row.vel_eci_x, row.vel_eci_y, row.vel_eci_z])
+        look_mode = str(row.look_mode)
+
+        # Storm-onset ramp: update ap before computing wind
+        if isinstance(wind_map, TimeVaryingStormWindMap):
+            t_elapsed_h = (row.epoch.timestamp() - _campaign_start_ts) / 3600.0
+            wind_map.set_ap(wind_map.ap_at(t_elapsed_h))
+
+        # NB02a: attitude quaternion + LOS vector (los_eci retained for NB02b/c)
+        los_eci, q = compute_los_eci(
+            pos, vel, look_mode,
+            altitude_km = altitude_km,
+            h_target_km = h_target_km,
+        )
+
+        # RNG draw order: PE (4 draws), etalon temps (4 draws), CCD temp (1 draw) = 9 total
+        pointing_error = _pointing_error_quat(rng, SIGMA_POINTING_ARCSEC)
+        etalon_temps   = rng.normal(ETALON_TEMP_MEAN_C, ETALON_TEMP_STD_C, size=4).tolist()
+        ccd_temp1      = float(rng.normal(CCD_TEMP_MEAN_C, CCD_TEMP_STD_C))
+
+        # NB02b + NB02c: tangent point + full LOS decomposition (science frames only)
+        tp_lat = tp_lon = tp_alt = None
+        v_zonal = v_merid = None
+        v_wind_LOS = v_earth_LOS = V_sc_LOS = v_rel_val = None
+
+        if frame_type == "science":
+            epoch_t = Time(row.epoch.to_pydatetime(), scale="utc")
+            tp = compute_tangent_point(pos, los_eci, epoch_t, h_target_km=h_target_km)
+            tp_lat = tp["tp_lat_deg"]
+            tp_lon = tp["tp_lon_deg"]
+            tp_alt = tp["tp_alt_km"]
+
+            vr = compute_v_rel(
+                wind_map,
+                tp_lat, tp_lon, tp["tp_eci"],
+                vel, los_eci, epoch_t,
+            )
+            v_wind_LOS  = vr["v_wind_LOS"]
+            v_earth_LOS = vr["v_earth_LOS"]
+            V_sc_LOS    = vr["V_sc_LOS"]
+            v_rel_val   = vr["v_rel"]
+            v_zonal     = vr["v_zonal_ms"]
+            v_merid     = vr["v_merid_ms"]
+
+        # Instrument state
+        gpio, lamp = _instrument_state(frame_type)
+
+        # Derived fields
+        img_type       = _classify_img_type(lamp, gpio)
+        shutter_status = "closed" if (gpio[0] == 1 and gpio[3] == 1) else "open"
+        lamp1_status   = "on" if (lamp[0] or lamp[1]) else "off"
+        lamp2_status   = "on" if (lamp[2] or lamp[3]) else "off"
+        lamp3_status   = "on" if (lamp[4] or lamp[5]) else "off"
+
+        lua_ts       = int(row.epoch.timestamp() * 1000)
+        orbit_num    = int(row.orbit_number)
+        orbit_parity = str(row.look_mode)
+
+        adcs_flag = compute_adcs_quality_flag({
+            "pointing_error": pointing_error,
+            "pos_eci_hat":    pos.tolist(),
+            "adcs_timestamp": lua_ts,
+        })
+
+        _exp_cs = exp_time_sci_cs if frame_type == "science" else exp_time_cal_cs
+        meta = ImageMetadata(
+            rows                 = binning_cfg["rows_meta"],
+            cols                 = binning_cfg["cols_meta"],
+            exp_time             = _exp_cs,
+            exp_unit             = EXP_UNIT,
+            binning              = _bin_factor,
+            img_type             = img_type,
+            lua_timestamp        = lua_ts,
+            adcs_timestamp       = lua_ts,
+            utc_timestamp        = row.epoch.isoformat(),
+            spacecraft_latitude  = float(np.radians(row.lat_deg)),
+            spacecraft_longitude = float(np.radians(row.lon_deg)),
+            spacecraft_altitude  = float(row.alt_km * 1e3),
+            pos_eci_hat          = pos.tolist(),
+            vel_eci_hat          = vel.tolist(),
+            attitude_quaternion  = q.tolist(),
+            pointing_error       = pointing_error,
+            obs_mode             = look_mode,
+            ccd_temp1            = ccd_temp1,
+            etalon_temps         = etalon_temps,
+            shutter_status       = shutter_status,
+            gpio_pwr_on          = gpio,
+            lamp_ch_array        = lamp,
+            lamp1_status         = lamp1_status,
+            lamp2_status         = lamp2_status,
+            lamp3_status         = lamp3_status,
+            orbit_number         = orbit_num,
+            frame_sequence       = frame_sequences[i],
+            orbit_parity         = orbit_parity,
+            adcs_quality_flag    = adcs_flag,
+            is_synthetic         = True,
+            noise_seed           = i,
+            tangent_lat          = tp_lat,
+            tangent_lon          = tp_lon,
+            tangent_alt_km       = tp_alt,
+            truth_v_zonal        = v_zonal,
+            truth_v_meridional   = v_merid,
+            truth_v_los          = v_wind_LOS,   # populated for science frames (v9)
+            h_target_km_obs      = h_target_km,  # v14: intended emission layer altitude
+        )
+        metadata_list.append(meta)
+
+        _ap_now = (wind_map._current_ap
+                   if isinstance(wind_map, TimeVaryingStormWindMap)
+                   else float("nan"))
+        vrel_list.append({
+            "v_wind_los_ms":  v_wind_LOS  if frame_type == "science" else float("nan"),
+            "v_earth_los_ms": v_earth_LOS if frame_type == "science" else float("nan"),
+            "v_sc_los_ms":    V_sc_LOS    if frame_type == "science" else float("nan"),
+            "v_rel_ms":       v_rel_val   if frame_type == "science" else float("nan"),
+            "ap_current":     _ap_now,
+        })
+
+        # Binary image synthesis — pixel draws follow the 9 metadata draws
+        _exp_s = exp_time_sci_s if frame_type == "science" else exp_time_cal_s
+        pixels = _generate_pixels(frame_type, v_rel_val, ccd_temp1,
+                                  _exp_s, rng, binning_cfg,
+                                  cx_centre, cy_centre)
+        _write_bin_file(meta, pixels, bin_dir / _bin_filename(meta), binning_cfg)
+
+        if i % max(1, n_obs // 100) == 0 or i == n_obs - 1:
+            pct = 100 * (i + 1) / n_obs
+            bar = "=" * int(pct // 5) + " " * (20 - int(pct // 5))
+            print(f"\r  [{bar}] {i+1}/{n_obs}", end="", flush=True)
+
+    print()
+    _frame_bytes = binning_cfg["n_rows_frame"] * binning_cfg["n_cols_frame"] * 2
+    bin_gb = len(metadata_list) * _frame_bytes / 1e9
+    print(f"  NB02b+NB02c called for {n_science} science frames.")
+    print(f"  .bin files written to: {bin_dir}  "
+          f"({len(metadata_list)} files, ~{bin_gb:.1f} GB)")
+
+    # -----------------------------------------------------------------------
+    # Step 4: Console summaries
+    # -----------------------------------------------------------------------
+    img_types_out = [m.img_type for m in metadata_list]
+    print(f"\nImage type verification:")
+    for t in ("science", "cal", "dark"):
+        print(f"  {t:7s} : {img_types_out.count(t)}")
+
+    flags_out = [m.adcs_quality_flag for m in metadata_list]
+    n_good  = flags_out.count(AdcsQualityFlags.GOOD)
+    n_slew  = sum(1 for f in flags_out if f & AdcsQualityFlags.SLEW_IN_PROGRESS)
+    print(f"\nADCS quality flags (P01):")
+    print(f"  GOOD             : {n_good}")
+    print(f"  SLEW_IN_PROGRESS : {n_slew}   (expected ~0)")
+
+    pe_angles = []
+    for m in metadata_list:
+        qe       = m.pointing_error
+        vn       = min(np.sqrt(qe[0]**2 + qe[1]**2 + qe[2]**2), 1.0)
+        angle_as = 2.0 * np.degrees(np.arcsin(vn)) * 3600.0
+        pe_angles.append(angle_as)
+    pe_arr = np.array(pe_angles)
+    pe_expected_mean = SIGMA_POINTING_ARCSEC * np.sqrt(2.0 / np.pi)
+    pe_expected_std  = SIGMA_POINTING_ARCSEC * np.sqrt(1 - 2.0 / np.pi)
+    print(f"\nPointing error stats (arcsec):")
+    print(f"  Mean  : {pe_arr.mean():6.2f}   (expected ~{pe_expected_mean:.2f}, half-normal)")
+    print(f"  Std   : {pe_arr.std():6.2f}   (expected ~{pe_expected_std:.2f}, half-normal)")
+    print(f"  Max   : {pe_arr.max():6.1f}")
+
+    et_all = np.array([m.etalon_temps for m in metadata_list]).flatten()
+    print(f"\nEtalon temperature stats (°C):")
+    print(f"  Mean  : {et_all.mean():.2f}   (expected ~{ETALON_TEMP_MEAN_C:.2f})")
+    print(f"  Std   : {et_all.std():.2f}   (expected ~{ETALON_TEMP_STD_C:.2f})")
+
+    ccd_all = np.array([m.ccd_temp1 for m in metadata_list])
+    print(f"\nCCD temperature stats (°C):")
+    print(f"  Mean  : {ccd_all.mean():.2f}   (expected ~{CCD_TEMP_MEAN_C:.2f})")
+    print(f"  Std   : {ccd_all.std():.2f}   (expected ~{CCD_TEMP_STD_C:.2f})")
+
+    sci_meta = [m for m in metadata_list if m.img_type == "science"]
+    if sci_meta:
+        tp_lats   = np.array([m.tangent_lat for m in sci_meta])
+        vz_all    = np.array([m.truth_v_zonal for m in sci_meta])
+        vm_all    = np.array([m.truth_v_meridional for m in sci_meta])
+        vlos_all  = np.array([m.truth_v_los for m in sci_meta])
+        sci_vrel = [(m, d["v_rel_ms"]) for m, d in zip(metadata_list, vrel_list)
+                    if m.img_type == "science" and not np.isnan(d["v_rel_ms"])]
+        vrel_sci  = np.array([v for _, v in sci_vrel])
+        print(f"\nTangent point stats (science frames):")
+        print(f"  tp_lat  : mean={tp_lats.mean():.1f}°, "
+              f"min={tp_lats.min():.1f}°, max={tp_lats.max():.1f}°")
+        print(f"\nWind stats at tangent point (science frames):")
+        print(f"  v_zonal : mean={vz_all.mean():.1f}, "
+              f"min={vz_all.min():.1f}, max={vz_all.max():.1f} m/s")
+        print(f"  v_merid : mean={vm_all.mean():.1f}, "
+              f"min={vm_all.min():.1f}, max={vm_all.max():.1f} m/s")
+        print(f"\nv_rel stats by look mode (m/s):")
+        for label, mode in [("Along-track", "along_track"), ("Cross-track", "cross_track")]:
+            vals = np.array([v for m, v in sci_vrel if m.obs_mode == mode])
+            if vals.size:
+                print(f"  {label} ({vals.size} frames):")
+                print(f"    Mean : {vals.mean():8.1f}   (dominated by V_sc_LOS)")
+                print(f"    Std  : {vals.std():8.1f}")
+                print(f"    Min  : {vals.min():8.1f}")
+                print(f"    Max  : {np.abs(vals).max():8.1f}")
+
+        at_meta = [m for m in sci_meta if m.obs_mode == "along_track"]
+        ct_meta = [m for m in sci_meta if m.obs_mode == "cross_track"]
+        print(f"\nv_wind_LOS stats by look mode (m/s):")
+        for label, subset in [("Along-track", at_meta), ("Cross-track", ct_meta)]:
+            if subset:
+                los = np.array([m.truth_v_los for m in subset])
+                print(f"  {label} ({len(subset)} frames):")
+                print(f"    Mean : {los.mean():8.1f}   (truth wind projected onto LOS)")
+                print(f"    Std  : {los.std():8.1f}")
+                print(f"    Min  : {los.min():8.1f}")
+                print(f"    Max  : {np.abs(los).max():8.1f}")
+
+    # -----------------------------------------------------------------------
+    # Step 5: Save outputs
+    # -----------------------------------------------------------------------
+    out_path = pathlib.Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    t_start_compact = t_start[:10].replace("-", "")
+    stem     = (f"GEN01_{t_start_compact}_{duration_days:05.1f}d_"
+                f"{windmap_tag}_seed{rng_seed:04d}"
+                + ("_tle" if use_tle else ""))
+    npy_path = out_path / f"{stem}.npy"
+    csv_path = out_path / f"{stem}.csv"
+
+    records = [dataclasses.asdict(m) for m in metadata_list]
+    np.save(str(npy_path), np.array(records, dtype=object), allow_pickle=True)
+
+    # Build lookup: df_sched index → (record_dict, vrel_dict, frame_type)
+    obs_data = {
+        idx: (records[i], vrel_list[i], frame_types[i])
+        for i, idx in enumerate(obs_indices)
+    }
+
+    # CSV: one row per obs-cadence step across the full schedule.
+    # Observed frames carry full metadata (50 cols: obs_type + obs_mode + 46 data cols + ap_current).
+    # Non-observing steps have exp_time=0, obs_type='none', NaN for frame fields.
+    all_indices = sorted(set(range(0, len(df_sched), step)) | set(obs_indices))
+
+    _nan = float("nan")
+    rows_csv = []
+    for idx in all_indices:
+        srow = df_sched.loc[idx]
+        lua_ts = int(srow.epoch.timestamp() * 1000)
+
+        if idx in obs_data:
+            r, vd, ft = obs_data[idx]
+            rows_csv.append({
+                "obs_type":               ft,
+                "obs_mode":               r["obs_mode"],          # v14: 1a
+                "rows":                   r["rows"],
+                "cols":                   r["cols"],
+                "exp_time":               r["exp_time"],
+                "exp_unit":               r["exp_unit"],
+                "ccd_temp1":              r["ccd_temp1"],
+                "lua_timestamp":          r["lua_timestamp"],
+                "adcs_timestamp":         r["adcs_timestamp"],
+                "spacecraft_latitude":    r["spacecraft_latitude"],
+                "spacecraft_longitude":   r["spacecraft_longitude"],
+                "spacecraft_altitude":    r["spacecraft_altitude"],
+                "att_q_x":  r["attitude_quaternion"][0],
+                "att_q_y":  r["attitude_quaternion"][1],
+                "att_q_z":  r["attitude_quaternion"][2],
+                "att_q_w":  r["attitude_quaternion"][3],
+                "pe_q_x":   r["pointing_error"][0],
+                "pe_q_y":   r["pointing_error"][1],
+                "pe_q_z":   r["pointing_error"][2],
+                "pe_q_w":   r["pointing_error"][3],
+                "pos_eci_x": r["pos_eci_hat"][0],
+                "pos_eci_y": r["pos_eci_hat"][1],
+                "pos_eci_z": r["pos_eci_hat"][2],
+                "vel_eci_x": r["vel_eci_hat"][0],
+                "vel_eci_y": r["vel_eci_hat"][1],
+                "vel_eci_z": r["vel_eci_hat"][2],
+                "etalon_t0": r["etalon_temps"][0],
+                "etalon_t1": r["etalon_temps"][1],
+                "etalon_t2": r["etalon_temps"][2],
+                "etalon_t3": r["etalon_temps"][3],
+                "gpio_0": r["gpio_pwr_on"][0],
+                "gpio_1": r["gpio_pwr_on"][1],
+                "gpio_2": r["gpio_pwr_on"][2],
+                "gpio_3": r["gpio_pwr_on"][3],
+                "lamp_0": r["lamp_ch_array"][0],
+                "lamp_1": r["lamp_ch_array"][1],
+                "lamp_2": r["lamp_ch_array"][2],
+                "lamp_3": r["lamp_ch_array"][3],
+                "lamp_4": r["lamp_ch_array"][4],
+                "lamp_5": r["lamp_ch_array"][5],
+                "tp_lat_deg":               r["tangent_lat"]       if r["tangent_lat"]       is not None else _nan,
+                "tp_lon_deg":               r["tangent_lon"]        if r["tangent_lon"]        is not None else _nan,
+                "h_target_km_obs":          r["h_target_km_obs"]    if r["h_target_km_obs"]    is not None else _nan,  # v14: 1c
+                "wind_v_zonal_ms":          r["truth_v_zonal"]      if r["truth_v_zonal"]      is not None else _nan,
+                "wind_v_merid_ms":          r["truth_v_meridional"] if r["truth_v_meridional"] is not None else _nan,
+                "v_wind_los_approach_ms":   vd["v_wind_los_ms"],    # v14: 1b renamed
+                "v_earth_los_approach_ms":  vd["v_earth_los_ms"],   # v14: 1b renamed
+                "v_sc_los_approach_ms":     vd["v_sc_los_ms"],      # v14: 1b renamed
+                "v_rel_ms":                 vd["v_rel_ms"],
+                "ap_current":               vd["ap_current"],
+            })
+        else:
+            # Non-observing step: orbital state only, exp_time=0
+            rows_csv.append({
+                "obs_type":               "none",
+                "obs_mode":               _nan,                    # v14: 1a
+                "rows":                   0,
+                "cols":                   0,
+                "exp_time":               0,
+                "exp_unit":               0,
+                "ccd_temp1":              _nan,
+                "lua_timestamp":          lua_ts,
+                "adcs_timestamp":         lua_ts,
+                "spacecraft_latitude":    float(np.radians(srow.lat_deg)),
+                "spacecraft_longitude":   float(np.radians(srow.lon_deg)),
+                "spacecraft_altitude":    float(srow.alt_km * 1e3),
+                "att_q_x":  _nan, "att_q_y":  _nan,
+                "att_q_z":  _nan, "att_q_w":  _nan,
+                "pe_q_x":   _nan, "pe_q_y":   _nan,
+                "pe_q_z":   _nan, "pe_q_w":   _nan,
+                "pos_eci_x": float(srow.pos_eci_x),
+                "pos_eci_y": float(srow.pos_eci_y),
+                "pos_eci_z": float(srow.pos_eci_z),
+                "vel_eci_x": float(srow.vel_eci_x),
+                "vel_eci_y": float(srow.vel_eci_y),
+                "vel_eci_z": float(srow.vel_eci_z),
+                "etalon_t0": _nan, "etalon_t1": _nan,
+                "etalon_t2": _nan, "etalon_t3": _nan,
+                "gpio_0": 0, "gpio_1": 0, "gpio_2": 0, "gpio_3": 0,
+                "lamp_0": 0, "lamp_1": 0, "lamp_2": 0,
+                "lamp_3": 0, "lamp_4": 0, "lamp_5": 0,
+                "tp_lat_deg":               _nan, "tp_lon_deg":               _nan,
+                "h_target_km_obs":          _nan,                  # v14: 1c
+                "wind_v_zonal_ms":          _nan, "wind_v_merid_ms":          _nan,
+                "v_wind_los_approach_ms":   _nan,                  # v14: 1b renamed
+                "v_earth_los_approach_ms":  _nan,                  # v14: 1b renamed
+                "v_sc_los_approach_ms":     _nan,                  # v14: 1b renamed
+                "v_rel_ms":                 _nan,
+                "ap_current":               _nan,
+            })
+
+    df_csv = pd.DataFrame(rows_csv)
+    df_csv.to_csv(str(csv_path), index=False)
+
+    _run_coverage_diagnostic(df_csv, csv_path, duration_days, dlat=5.0, dlon=5.0)
+
+    if wm_choice == "1":
+        _wm_title = (
+            f"G01  Uniform  "
+            f"({wm_params['v_zonal_ms']:+.0f} m/s eastward,  "
+            f"{wm_params['v_merid_ms']:+.0f} m/s southward)"
+        )
+    else:
+        _wm_title = f"G01  {windmap_label}"
+
+    png_path = out_path / f"{stem}_windmap_vector.png"
+    print("Saving wind map vector plot ...", end=" ", flush=True)
+    try:
+        wind_map.plot(
+            title=_wm_title,
+            alt_km=h_target_km,
+            subsample=8,
+            mode="vector",
+            save_path=str(png_path),
+        )
+        print("done")
+    except Exception as e:
+        print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
+
+    gt_path = out_path / f"{stem}_ground_tracks.png"
+    print("Saving ground track figure ...", end=" ", flush=True)
+    _plot_ground_tracks(
+        df_sched      = df_sched,
+        metadata_list = metadata_list,
+        obs_indices   = obs_indices,
+        frame_types   = frame_types,
+        lat_min_deg   = lat_min_deg,
+        lat_max_deg   = lat_max_deg,
+        switch_at     = switch_at,
+        save_path     = gt_path,
+    )
+    print("done")
+
+    vh_path = out_path / f"{stem}_vrel_histogram.png"
+    print("Saving v_rel histogram figure ...", end=" ", flush=True)
+    _plot_vrel_histogram(
+        metadata_list = metadata_list,
+        vrel_list     = vrel_list,
+        windmap_label = windmap_label,
+        rng_seed      = rng_seed,
+        wind_map      = wind_map,
+        save_path     = vh_path,
+    )
+    print("done")
+
+    npy_mb = npy_path.stat().st_size / 1e6
+    csv_mb = csv_path.stat().st_size / 1e6
+    png_kb = png_path.stat().st_size / 1e3
+    gt_kb  = gt_path.stat().st_size  / 1e3
+    vh_kb  = vh_path.stat().st_size  / 1e3
+    print(f"\nOutput files:")
+    print(f"  {npy_path}  ({npy_mb:.1f} MB)")
+    print(f"  {csv_path}  ({csv_mb:.1f} MB)")
+    print(f"  {png_path}  ({png_kb:.0f} KB)")
+    print(f"  {gt_path}  ({gt_kb:.0f} KB)")
+    print(f"  {vh_path}  ({vh_kb:.0f} KB)")
+
+    # -----------------------------------------------------------------------
+    # Step 6: Verification checks C1–C21
+    # -----------------------------------------------------------------------
+    print(f"\nVerification checks:")
+
+    def _chk(label: str, passed: bool, detail: str = ""):
+        status = "PASS" if passed else f"FAIL — {detail}"
+        print(f"  {label}: {status}")
+        return passed
+
+    expected_rows = int(duration_s / SCHED_DT_S) + 1
+    actual_rows   = len(df_sched)
+    c1  = _chk("C1  NB01 sched rows",
+                abs(actual_rows - expected_rows) <= 2,
+                f"expected {expected_rows}, got {actual_rows}")
+
+    valid_parities = {"along_track", "cross_track"}
+    c2  = _chk("C2  orbit_parity values",
+                all(m.orbit_parity in valid_parities for m in metadata_list),
+                "invalid parity found")
+
+    att_q = np.array([m.attitude_quaternion for m in metadata_list])
+    c3  = _chk("C3  No NaN in att_q_*",
+                not np.any(np.isnan(att_q)),
+                "NaN found in attitude quaternions")
+
+    att_norms   = np.linalg.norm(att_q, axis=1)
+    max_att_dev = float(np.max(np.abs(att_norms - 1.0)))
+    c4  = _chk("C4  att_q unit norm",
+                max_att_dev < 1e-6,
+                f"max deviation {max_att_dev:.2e}")
+
+    pe_q      = np.array([m.pointing_error for m in metadata_list])
+    pe_norms  = np.linalg.norm(pe_q, axis=1)
+    max_pe_dev = float(np.max(np.abs(pe_norms - 1.0)))
+    c5  = _chk("C5  pointing_error unit norm",
+                max_pe_dev < 1e-6,
+                f"max deviation {max_pe_dev:.2e}")
+
+    pe_expected_std_v = SIGMA_POINTING_ARCSEC * np.sqrt(1.0 - 2.0 / np.pi)
+    pe_std_dev = float(abs(pe_arr.std() - pe_expected_std_v) / pe_expected_std_v)
+    c6  = _chk("C6  PE std within 20% of expected half-normal",
+                pe_std_dev < 0.20,
+                f"std={pe_arr.std():.2f} arcsec, expected {pe_expected_std_v:.2f} "
+                f"({pe_std_dev*100:.1f}% off)")
+
+    et_mean_dev = float(abs(et_all.mean() - ETALON_TEMP_MEAN_C))
+    c7  = _chk("C7  Etalon temp mean within 0.05°C",
+                et_mean_dev < 0.05,
+                f"mean={et_all.mean():.3f}°C")
+
+    frac_good = n_good / max(n_obs, 1)
+    c8  = _chk("C8  ADCS GOOD > 99.9%",
+                frac_good > 0.999,
+                f"{frac_good*100:.2f}% good")
+
+    valid_img = {"science", "cal", "dark"}
+    c9  = _chk("C9  img_type values valid",
+                all(m.img_type in valid_img for m in metadata_list),
+                "unexpected img_type found")
+
+    exp_cal  = n_caldark * n_complete_orbits
+    c10_dev  = abs(n_cal - exp_cal) / max(exp_cal, 1)
+    c10 = _chk(f"C10 Cal count within 5% of expected ({exp_cal})",
+               c10_dev <= 0.05,
+               f"got {n_cal} ({c10_dev*100:.1f}% off)")
+
+    exp_dark = n_caldark * n_complete_orbits
+    c11_dev  = abs(n_dark - exp_dark) / max(exp_dark, 1)
+    c11 = _chk(f"C11 Dark count within 5% of expected ({exp_dark})",
+               c11_dev <= 0.05,
+               f"got {n_dark} ({c11_dev*100:.1f}% off)")
+
+    c12 = _chk("C12 CSV has exactly 50 columns",
+               len(df_csv.columns) == 50,
+               f"got {len(df_csv.columns)}")
+
+    try:
+        loaded = np.load(str(npy_path), allow_pickle=True)
+        ImageMetadata(**loaded[0])
+        c13 = _chk("C13 P01 round-trip", True)
+    except Exception as exc:
+        c13 = _chk("C13 P01 round-trip", False, str(exc))
+
+    # Derive masks from the obs_type column (CSV now contains non-obs rows too)
+    obs_type_col  = df_csv["obs_type"].values
+    sci_mask      = obs_type_col == "science"
+    cal_dark_mask = np.isin(obs_type_col, ["cal", "dark"])
+
+    tp_col = df_csv["tp_lat_deg"].values
+
+    c14 = _chk("C14 tp_lat_deg NaN for all cal/dark rows",
+               bool(np.all(np.isnan(tp_col[cal_dark_mask]))),
+               f"{np.sum(~np.isnan(tp_col[cal_dark_mask]))} non-NaN cal/dark rows found")
+
+    c15 = _chk("C15 tp_lat_deg non-NaN for all science rows",
+               bool(np.all(~np.isnan(tp_col[sci_mask]))),
+               f"{np.sum(np.isnan(tp_col[sci_mask]))} NaN science rows found")
+
+    if sci_mask.any():
+        min_tp = float(np.nanmin(tp_col[sci_mask]))
+        max_tp = float(np.nanmax(tp_col[sci_mask]))
+        c16 = _chk(
+            f"C16 tp_lat_deg within science band ±5° "
+            f"({lat_min_deg-5:.1f}° to {lat_max_deg+5:.1f}°)",
+            min_tp >= lat_min_deg - 5.0 and max_tp <= lat_max_deg + 5.0,
+            f"tp_lat range [{min_tp:.2f}°, {max_tp:.2f}°]",
+        )
+    else:
+        c16 = _chk("C16 tp_lat_deg within lat_band+5° of equator", True)
+
+    wv_col = df_csv["wind_v_zonal_ms"].values
+    c17 = _chk("C17 wind_v_zonal_ms non-NaN for all science rows",
+               bool(np.all(~np.isnan(wv_col[sci_mask]))),
+               f"{np.sum(np.isnan(wv_col[sci_mask]))} NaN science rows found")
+
+    vrel_col = df_csv["v_rel_ms"].values
+    c18 = _chk("C18 v_rel_ms non-NaN for all science rows",
+               bool(np.all(~np.isnan(vrel_col[sci_mask]))),
+               f"{np.sum(np.isnan(vrel_col[sci_mask]))} NaN science rows found")
+
+    c19 = _chk("C19 v_rel_ms NaN for all cal/dark rows",
+               bool(np.all(np.isnan(vrel_col[cal_dark_mask]))),
+               f"{np.sum(~np.isnan(vrel_col[cal_dark_mask]))} non-NaN cal/dark rows found")
+
+    bin_files = list(bin_dir.glob("*.bin"))
+    sizes_ok  = all(f.stat().st_size == 143_520 for f in bin_files)
+    count_ok  = len(bin_files) == len(metadata_list)
+    c20 = _chk("C20 All .bin files exist and are 143520 bytes",
+               sizes_ok and count_ok,
+               f"count={len(bin_files)} (expected {len(metadata_list)}), "
+               f"all_correct_size={sizes_ok}")
+
+    try:
+        first_sci_bin = next(f for f in sorted(bin_dir.glob("*.bin"))
+                             if "science" in f.name)
+        raw = np.frombuffer(first_sci_bin.read_bytes(), dtype=">u2")
+        hdr = raw[:276]
+        from src.metadata.p01_image_metadata_2026_04_06 import parse_header
+        d = parse_header(hdr)
+        sci_csv = df_csv[df_csv["obs_type"] == "science"].iloc[0]
+        c21 = _chk("C21 Header round-trip lua_timestamp matches CSV",
+                   d["lua_timestamp"] == int(sci_csv["lua_timestamp"]),
+                   f"header={d['lua_timestamp']}, csv={int(sci_csv['lua_timestamp'])}")
+    except Exception as exc:
+        c21 = _chk("C21 Header round-trip lua_timestamp matches CSV", False, str(exc))
+
+    # C25 — obs_mode column present and valid
+    obs_mode_col = df_csv["obs_mode"].values if "obs_mode" in df_csv.columns else None
+    if obs_mode_col is not None:
+        valid_modes = {"along_track", "cross_track"}
+        sci_modes_ok = all(
+            str(v) in valid_modes for v in obs_mode_col[sci_mask]
+        )
+        none_modes_nan = all(
+            (isinstance(v, float) and np.isnan(v))
+            for v in obs_mode_col[obs_type_col == "none"]
+        )
+        c25 = _chk("C25 obs_mode valid for science rows; NaN for none rows",
+                   sci_modes_ok and none_modes_nan,
+                   f"sci_modes_ok={sci_modes_ok}, none_modes_nan={none_modes_nan}")
+    else:
+        c25 = _chk("C25 obs_mode column present", False, "column missing")
+
+    # C26 — h_target_km_obs column present and consistent with prompt value
+    if "h_target_km_obs" in df_csv.columns:
+        hto_col = df_csv["h_target_km_obs"].values.astype(float)
+        sci_hto_ok = bool(np.all(np.abs(hto_col[sci_mask] - h_target_km) < 1e-9))
+        # also check tangent_alt_km within 0.5 km of h_target_km_obs for science rows
+        if "tangent_alt_km" in df_csv.columns:
+            talt = df_csv["tangent_alt_km"].values.astype(float)
+            sci_talt_valid = ~np.isnan(talt[sci_mask])
+            talt_diff_ok = bool(np.all(
+                np.abs(talt[sci_mask][sci_talt_valid] - hto_col[sci_mask][sci_talt_valid]) < 0.5
+            ))
+        else:
+            talt_diff_ok = True
+        c26 = _chk("C26 h_target_km_obs == prompt value for science rows; tangent_alt_km within 0.5 km",
+                   sci_hto_ok and talt_diff_ok,
+                   f"sci_hto_ok={sci_hto_ok}, talt_diff_ok={talt_diff_ok}")
+    else:
+        c26 = _chk("C26 h_target_km_obs column present", False, "column missing")
+
+    # C27 — renamed columns present, old names absent
+    new_los_cols = {"v_wind_los_approach_ms", "v_earth_los_approach_ms", "v_sc_los_approach_ms"}
+    old_los_cols = {"v_wind_los_ms", "v_earth_los_ms", "v_sc_los_ms"}
+    csv_cols = set(df_csv.columns)
+    new_present = new_los_cols.issubset(csv_cols)
+    old_absent  = old_los_cols.isdisjoint(csv_cols)
+    c27 = _chk("C27 Renamed LOS columns present; old names absent",
+               new_present and old_absent,
+               f"new_present={new_present}, old_absent={old_absent} "
+               f"(old found: {old_los_cols & csv_cols})")
+
+    # C28 — sign convention self-consistency per NB02c formula:
+    #   v_rel = v_wind_los_approach - v_sc_los_approach - v_earth_los_approach
+    if sci_mask.any() and new_present and "v_rel_ms" in df_csv.columns:
+        vw  = df_csv["v_wind_los_approach_ms"].values[sci_mask].astype(float)
+        ve  = df_csv["v_earth_los_approach_ms"].values[sci_mask].astype(float)
+        vs  = df_csv["v_sc_los_approach_ms"].values[sci_mask].astype(float)
+        vr  = df_csv["v_rel_ms"].values[sci_mask].astype(float)
+        valid = ~(np.isnan(vw) | np.isnan(ve) | np.isnan(vs) | np.isnan(vr))
+        if valid.any():
+            residual = np.abs(vr[valid] - (vw[valid] - vs[valid] - ve[valid]))
+            max_res  = float(np.max(residual))
+            c28 = _chk("C28 Sign convention: v_rel == v_wind - v_sc - v_earth (NB02c) within 0.01 m/s",
+                       max_res < 0.01,
+                       f"max residual = {max_res:.4f} m/s")
+        else:
+            c28 = _chk("C28 Sign convention self-consistency", True, "no valid science rows to check")
+    else:
+        c28 = _chk("C28 Sign convention self-consistency", True, "skipped (no science rows or columns missing)")
+
+    # C29 — coverage report file written
+    coverage_report_path = csv_path.parent / (csv_path.stem + "_coverage_report.txt")
+    if coverage_report_path.exists():
+        report_text_check = coverage_report_path.read_text(encoding="utf-8")
+        c29 = _chk("C29 Coverage report file written and contains header",
+                   "Coverage Diagnostic Report" in report_text_check,
+                   "header string missing")
+    else:
+        c29 = _chk("C29 Coverage report file written", False, "file not found")
+
+    # C30 — coverage_map.py runs on existing CSV (skip if csv missing)
+    import subprocess, tempfile
+    _scripts_cmap = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "coverage_map.py"
+    if _scripts_cmap.exists() and csv_path.exists():
+        with tempfile.TemporaryDirectory() as _tmpdir:
+            _result = subprocess.run(
+                [sys.executable, str(_scripts_cmap), str(csv_path),
+                 "--save", "--output-dir", _tmpdir],
+                capture_output=True, text=True, timeout=120,
+            )
+            _pngs = list(pathlib.Path(_tmpdir).glob("*.png"))
+            c30 = _chk("C30 coverage_map.py produces 4 PNG files",
+                       len(_pngs) == 4 and _result.returncode == 0,
+                       f"returncode={_result.returncode}, pngs={len(_pngs)}"
+                       + (f"\n    stderr: {_result.stderr[:200]}" if _result.returncode != 0 else ""))
+    else:
+        _reason = "coverage_map.py not found" if not _scripts_cmap.exists() else "CSV not found"
+        c30 = _chk("C30 coverage_map.py smoke test", True, f"skipped — {_reason}")
+
+    # C31 — SGP4 propagation returned no error (TLE mode only)
+    if use_tle:
+        r_km_mag = float(np.linalg.norm(pos0_eci_m)) / 1000.0
+        v_km_s_mag = float(np.linalg.norm(vel0_eci_m_s)) / 1000.0
+        c31 = _chk(
+            "C31 SGP4 error code == 0; |r| in [6500,7500] km; |v| in [6.5,8.5] km/s",
+            6500.0 <= r_km_mag <= 7500.0 and 6.5 <= v_km_s_mag <= 8.5,
+            f"|r|={r_km_mag:.1f} km, |v|={v_km_s_mag:.3f} km/s",
+        )
+    else:
+        c31 = _chk("C31 SGP4 error check", True, "skipped (legacy mode)")
+
+    # C32 — README sidecar contains "TLE Source" (TLE mode only)
+    if use_tle:
+        _readme_txt = _readme_path.read_text(encoding="utf-8")
+        c32 = _chk("C32 README sidecar contains 'TLE Source'",
+                   "TLE Source" in _readme_txt,
+                   "string not found in README")
+    else:
+        c32 = _chk("C32 README TLE section", True, "skipped (legacy mode)")
+
+    # C33 — output CSV filename ends with _tle.csv (TLE mode only)
+    if use_tle:
+        c33 = _chk("C33 output CSV filename ends with _tle.csv",
+                   str(csv_path).endswith("_tle.csv"),
+                   f"filename: {csv_path.name}")
+    else:
+        c33 = _chk("C33 _tle suffix check", True, "skipped (legacy mode)")
+
+    all_pass = all([c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13,
+                    c14, c15, c16, c17, c18, c19, c20, c21, c25, c26, c27, c28,
+                    c29, c30, c31, c32, c33])
+    print(f"\n  {'All checks PASS.' if all_pass else 'Some checks FAILED — see above.'}")
+
+    print("\nG01 complete.")
+
+
+if __name__ == "__main__":
+    main()

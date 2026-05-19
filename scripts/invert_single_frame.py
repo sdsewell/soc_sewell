@@ -10,6 +10,13 @@ Usage:
     python scripts/invert_single_frame.py <path_to_bin_file> [options]
 
 Spec: H07_wind_vector_retrieval_2026-05-14_v03.md §12 (diagnostic output)
+
+H06 mode (default when --v-rel not supplied):
+  v_rel is recovered from raw pixels via H06 fringe fitting.
+  Requires *_cal*.bin files in the same folder.
+  Builds a master calibration from all available cal frames,
+  then runs process_science_frame() for the science frame.
+  Falls back to --v-rel if no cal frames found or H06 fails.
 """
 
 from __future__ import annotations
@@ -112,6 +119,47 @@ def _find_nearest_dark_frame(lua_timestamp_ms: int, dark_paths: list):
     return best_path, best_dt_ms / 1000.0
 
 
+def _find_cal_frames(science_path: Path) -> list[Path]:
+    """
+    Find *_cal*.bin files in the same folder as the science frame.
+    Returns sorted list of Path objects. Empty list if none found.
+    """
+    return sorted(science_path.parent.glob("*_cal*.bin"))
+
+
+def _build_master_dark_from_folder(science_path: Path, lua_timestamp_ms: int):
+    """
+    Find all *_dark.bin files in the same folder, load them, and return
+    a float32 master dark array (sum of all dark frames) plus the count.
+
+    Returns (master_dark_array, n_dark_frames) or (None, 0) if no darks found.
+    Uses ingest_real_image() to load pixels.
+    """
+    import numpy as _np
+    from src.metadata.p01_image_metadata_2026_04_06 import ingest_real_image as _ingest
+
+    dark_paths = sorted(science_path.parent.glob("*_dark.bin"))
+    if not dark_paths:
+        return None, 0
+
+    master_dark_sum = None
+    n_dark = 0
+    for dark_path in dark_paths:
+        try:
+            _, dark_pixels = _ingest(dark_path)
+            if master_dark_sum is None:
+                master_dark_sum = dark_pixels.astype(_np.float32)
+            else:
+                master_dark_sum += dark_pixels.astype(_np.float32)
+            n_dark += 1
+        except Exception as exc:
+            print(f"  WARNING: Dark frame failed: {dark_path.name}: {exc}")
+
+    if n_dark == 0:
+        return None, 0
+    return master_dark_sum, n_dark
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="WindCube FPI single-frame diagnostic validation tool.",
@@ -120,7 +168,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "path_to_bin_file",
-        help="Path to a *_science.bin (or *_swapped.bin) file",
+        nargs="?",
+        default=None,
+        help="Path to *_science.bin file. If omitted, a file picker dialog opens.",
     )
     parser.add_argument(
         "--h-target-km",
@@ -149,6 +199,27 @@ def _parse_args() -> argparse.Namespace:
         default=10.0,
         metavar="M_S",
         help="Override sigma_v in m/s (default: 10.0)",
+    )
+    parser.add_argument(
+        "--use-h06",
+        action="store_true",
+        default=False,
+        help=(
+            "Use H06 fringe fitting to recover v_rel from raw pixels. "
+            "Requires cal frames in the same folder as the science frame. "
+            "Activated automatically when --v-rel is not supplied."
+        ),
+    )
+    parser.add_argument(
+        "--n-cal",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Maximum number of cal frames to use when building the master "
+            "calibration in H06 mode. Default: 5 (one orbit cadence). "
+            "Use 0 for no limit (processes all cal frames in the folder)."
+        ),
     )
     parser.add_argument(
         "--sidecar",
@@ -195,12 +266,20 @@ def _make_plots(
     geom,
     image,
     derived_mode: str,
-    v_rel,
     v_corrected,
     path: Path,
     save_plots: bool,
+    airglow_result=None,
 ) -> None:
-    """Produce 5-panel diagnostic figure (2 rows × 3 cols, bottom row spans all)."""
+    """Produce diagnostic figure.
+
+    Layout: 3×3 grid.
+      Row 0: world map | LOS velocity budget | direction cosines
+      Row 1-2 col 0-1: raw FPI image (spans 2 rows × 2 cols)
+      Row 1 col 2: H06 fringe profile + model overlay (Panel A)
+      Row 2 col 2: H06 scan chi2 curve (Panel B)
+    Panels A and B are shown only when airglow_result is not None.
+    """
     if not _HAS_MPL:
         print("WARNING: matplotlib not available — skipping plots.")
         return
@@ -213,12 +292,14 @@ def _make_plots(
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
 
-    fig = plt.figure(figsize=(16, 9))
-    gs = GridSpec(2, 3, figure=fig, hspace=0.40, wspace=0.35)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax4 = fig.add_subplot(gs[1, :])
+    fig = plt.figure(figsize=(18, 12))
+    gs = GridSpec(3, 3, figure=fig, hspace=0.45, wspace=0.35)
+    ax1 = fig.add_subplot(gs[0, 0])       # world map
+    ax2 = fig.add_subplot(gs[0, 1])       # LOS velocity budget
+    ax3 = fig.add_subplot(gs[0, 2])       # direction cosines
+    ax4 = fig.add_subplot(gs[1:, :2])     # raw image (spans rows 1-2, cols 0-1)
+    axA = fig.add_subplot(gs[1, 2])       # Panel A: fringe profile + model
+    axB = fig.add_subplot(gs[2, 2])       # Panel B: scan chi2 curve
 
     # ── Panel 1: World map ────────────────────────────────────────────────────
     sc_lat = float(np.degrees(meta.spacecraft_latitude))
@@ -284,8 +365,8 @@ def _make_plots(
     ax3.set_title(f"Direction Cosines  ({derived_mode})")
     ax3.set_ylabel("Cosine value")
 
-    # ── Panel 4: Raw FPI image (spans full bottom row) ────────────────────────
-    im = ax4.imshow(image, cmap="gray", vmin=0, vmax=16383, aspect="auto")
+    # ── Panel 4: Raw FPI image (spans rows 1-2, cols 0-1) ────────────────────
+    im = ax4.imshow(image, cmap="gray", vmin=0, vmax=16383, aspect="equal")
     ax4.set_title(
         f"Raw FPI Image  exp={meta.exp_time/100:.1f}s  T={meta.ccd_temp1:.1f}°C"
     )
@@ -293,6 +374,46 @@ def _make_plots(
     ax4.set_ylabel("Row (px)")
     cb = plt.colorbar(im, ax=ax4, fraction=0.02, pad=0.01)
     cb.set_label("ADU")
+
+    # ── Panel A: H06 fringe profile + best-fit model overlay ─────────────────
+    if airglow_result is not None and airglow_result.profile_r_grid is not None:
+        r_px  = airglow_result.profile_r_grid
+        p_adu = airglow_result.profile_adu
+        m_adu = airglow_result.profile_model
+        axA.plot(r_px, p_adu, color="steelblue", lw=0.9, alpha=0.85,
+                 label="Data (dark-sub)")
+        if m_adu is not None:
+            axA.plot(r_px, m_adu, color="darkorange", lw=1.4, ls="--",
+                     label="H06 model")
+        axA.set_xlabel("Radius (px)")
+        axA.set_ylabel("ADU")
+        chi2_str = f"{airglow_result.chi2_red:.2f}"
+        R_str    = f"{airglow_result.Y_line:.0f}"
+        axA.set_title(f"H06 Fringe Fit  χ²={chi2_str}  Y={R_str}")
+        axA.legend(fontsize=7, loc="upper right")
+        axA.grid(True, alpha=0.2)
+    else:
+        axA.set_visible(False)
+
+    # ── Panel B: H06 scan chi2 curve ─────────────────────────────────────────
+    if airglow_result is not None and airglow_result.scan_v_ms is not None:
+        v_scan  = airglow_result.scan_v_ms
+        c2_scan = airglow_result.scan_chi2
+        axB.plot(v_scan, c2_scan, color="steelblue", lw=0.9)
+        axB.axvline(airglow_result.v_rel_ms, color="red", lw=1.2,
+                    label=f"v_rel={airglow_result.v_rel_ms:+.0f} m/s")
+        if geom is not None:
+            v_prior_val = -(geom.V_sc_LOS + geom.v_earth_LOS)
+            axB.axvline(v_prior_val, color="green", lw=1.2, ls="--",
+                        label=f"v_prior={v_prior_val:+.0f} m/s")
+        ambig_str = str(airglow_result.scan_ambiguous)
+        axB.set_title(f"H06 Scan  scan_ambig={ambig_str}")
+        axB.set_xlabel("v (m/s, Harding conv.)")
+        axB.set_ylabel("χ²/ν")
+        axB.legend(fontsize=7, loc="upper right")
+        axB.grid(True, alpha=0.2)
+    else:
+        axB.set_visible(False)
 
     fig.suptitle(
         f"WindCube FPI Single-Frame Diagnostic — {meta.utc_timestamp}",
@@ -413,26 +534,13 @@ def _run(args: argparse.Namespace, path: Path) -> None:
     else:
         print("WARNING: No dark frame found — skipping dark subtraction")
 
-    # ── Stage 2 — v_rel recovery ──────────────────────────────────────────────
-    v_rel = None
-    sigma_v = args.sigma_v
+    # ── use_h06 activation ────────────────────────────────────────────────────
+    use_h06 = args.use_h06 or (args.v_rel is None)
+    if use_h06 and args.v_rel is not None:
+        print("NOTE: --v-rel supplied — using override, ignoring --use-h06")
+        use_h06 = False
 
-    if _HAS_M06:
-        try:
-            v_rel, sigma_v = _m06_module.fit_fringe(image, meta)
-        except Exception as exc:
-            print(f"WARNING: M06 fringe fit failed: {exc}")
-
-    if v_rel is None and args.v_rel is not None:
-        v_rel = args.v_rel
-        sigma_v = args.sigma_v
-
-    if v_rel is None:
-        print("WARNING: M06 not available and --v-rel not supplied.")
-        print("         Cannot compute v_rel from pixel data.")
-        print("         Re-run with --v-rel <value> to proceed past this stage.")
-
-    # ── Stage 3 — H07 geometry (always runs) ─────────────────────────────────
+    # ── Stage 3 — H07 geometry (always runs; needed before H06) ──────────────
     geom = None
     derived_mode = "unknown"
     try:
@@ -452,6 +560,116 @@ def _run(args: argparse.Namespace, path: Path) -> None:
         )
     except Exception as exc:
         print(f"WARNING: Geometry computation failed: {exc}")
+
+    # ── Stage 2 — v_rel recovery ─────────────────────────────────────────────
+    # Priority order:
+    #   1. H06 fringe fitting (if use_h06=True and cal frames available)
+    #   2. --v-rel override (if supplied)
+    #   3. Not available (print guidance)
+    #
+    # NOTE: geom must be computed before this stage (see Stage 3 above).
+    #       v_los_prior_ms = geom.V_sc_LOS + geom.v_earth_LOS
+
+    v_rel = None
+    sigma_v = args.sigma_v
+    airglow_result = None   # AirglowResult if H06 was run, else None
+
+    if use_h06:
+        cal_frames = _find_cal_frames(path)
+        if not cal_frames:
+            print(
+                "WARNING: H06 requested but no *_cal*.bin files found in "
+                f"{path.parent}\n"
+                "         Falling back to --v-rel if supplied."
+            )
+        else:
+            # Build per-folder master calibration from all available cal frames
+            n_cal_limit = args.n_cal if args.n_cal > 0 else len(cal_frames)
+            print(f"H06 mode: found {len(cal_frames)} cal frame(s) in folder "
+                  f"(using first {n_cal_limit})")
+            try:
+                from windcube.fpi_pipeline import (
+                    process_cal_frame,
+                    average_calibrations,
+                    process_science_frame,
+                )
+                from src.metadata.p01_image_metadata_2026_04_06 import ingest_real_image as _ingest
+
+                # Dark-subtract and invert each cal frame
+                cal_results = []
+                master_dark_arr, n_dark = _build_master_dark_from_folder(
+                    path, meta.lua_timestamp
+                )
+                for cal_path in cal_frames[:n_cal_limit]:
+                    try:
+                        _, cal_pixels = _ingest(cal_path,
+                                                h_target_km_obs=args.h_target_km)
+                        if master_dark_arr is not None and n_dark > 0:
+                            cal_ds = (cal_pixels.astype(np.float32)
+                                      - master_dark_arr / n_dark)
+                        else:
+                            cal_ds = cal_pixels.astype(np.float32)
+                        cal_result = process_cal_frame(cal_ds, r_max_px=110.0)
+                        cal_results.append(cal_result)
+                        print(f"  Cal: {cal_path.name}  "
+                              f"chi2={cal_result.chi2_red:.3f}  "
+                              f"converged={cal_result.converged}")
+                    except Exception as exc:
+                        print(f"  WARNING: Cal frame failed: {cal_path.name}: {exc}")
+
+                if not cal_results:
+                    print("WARNING: All cal frames failed — falling back to --v-rel")
+                else:
+                    master_cal = average_calibrations(cal_results)
+                    print(
+                        f"Master cal: {len(cal_results)} frames averaged  "
+                        f"t_m={master_cal.t_m*1e3:.6f} mm  "
+                        f"epsilon_cal={master_cal.epsilon_cal:.6f}"
+                    )
+
+                    # v_los_prior from geometry (already computed in Stage 3)
+                    # H06 uses Harding recession-positive convention; V_sc_LOS
+                    # is approach-positive so must be negated.
+                    v_los_prior = (-(geom.V_sc_LOS + geom.v_earth_LOS)
+                                   if geom is not None else 0.0)
+
+                    # Dark-subtract science frame
+                    if master_dark_arr is not None and n_dark > 0:
+                        pixels_ds = np.clip(
+                            image.astype(np.float32) - master_dark_arr / n_dark,
+                            0, 16383,
+                        ).astype(np.float32)
+                    else:
+                        pixels_ds = image.astype(np.float32)
+
+                    # H06 inversion
+                    airglow_result = process_science_frame(
+                        pixels_ds      = pixels_ds,
+                        master_cal     = master_cal,
+                        v_los_prior_ms = v_los_prior,
+                        r_max_px       = 110.0,
+                    )
+                    v_rel   = airglow_result.v_rel_ms
+                    sigma_v = airglow_result.sigma_v_ms
+                    print(
+                        f"H06 result: v_rel={v_rel:+.2f} m/s  "
+                        f"sigma_v={sigma_v:.2f} m/s  "
+                        f"chi2={airglow_result.chi2_red:.3f}  "
+                        f"converged={airglow_result.converged}"
+                    )
+            except Exception as exc:
+                print(f"WARNING: H06 pipeline failed: {exc}")
+                print("         Falling back to --v-rel if supplied.")
+
+    # --v-rel override (fallback or explicit)
+    if v_rel is None and args.v_rel is not None:
+        v_rel  = args.v_rel
+        sigma_v = args.sigma_v
+
+    if v_rel is None:
+        print("WARNING: v_rel not available.")
+        print("  H06 requires cal frames in the same folder, OR")
+        print("  supply --v-rel <value> to proceed past this stage.")
 
     # ── Stage 4 — H07 velocity correction ────────────────────────────────────
     v_corrected = None
@@ -509,6 +727,20 @@ def _run(args: argparse.Namespace, path: Path) -> None:
         print(f"  V_sc_LOS    (SC toward TP, m/s)    : {geom.V_sc_LOS:+12.3f}")
         print(f"  v_earth_LOS (Earth rot, m/s)        : {geom.v_earth_LOS:+12.3f}")
 
+        if airglow_result is not None:
+            print()
+            print("[ H06 FRINGE FIT ]")
+            print(f"  chi2_red   : {airglow_result.chi2_red:.4f}")
+            print(f"  converged  : {airglow_result.converged}")
+            print(f"  scan_ambig : {airglow_result.scan_ambiguous}")
+            print(f"  n_bins     : {airglow_result.n_bins}")
+            print(f"  lc_m       : {airglow_result.lc_m*1e9:.7f} nm")
+            print(f"  Y_line     : {airglow_result.Y_line:.2f} ADU")
+            print(f"  B_sci      : {airglow_result.B_sci:.2f} ADU")
+            budget = "✓" if airglow_result.budget_ok else "✗"
+            print(f"  sigma_v    : {airglow_result.sigma_v_ms:.3f} m/s  "
+                  f"{budget} STM budget (≤9.8 m/s)")
+
         if v_rel is not None:
             print(f"  v_rel       (FPI measured, m/s)     : {v_rel:+12.3f}")
             print(f"  sigma_v     (uncertainty, m/s)       :  {sigma_v:11.3f}")
@@ -540,10 +772,10 @@ def _run(args: argparse.Namespace, path: Path) -> None:
             geom=geom,
             image=image,
             derived_mode=derived_mode,
-            v_rel=v_rel,
             v_corrected=v_corrected,
             path=path,
             save_plots=args.save_plots,
+            airglow_result=airglow_result,
         )
 
 
@@ -556,6 +788,27 @@ def main() -> None:
             pass
 
     args = _parse_args()
+
+    # If no path supplied on command line, open a Windows file picker
+    if not args.path_to_bin_file:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        chosen = filedialog.askopenfilename(
+            title="Select a WindCube FPI science .bin file",
+            initialdir=r"C:\Users\sewell\WindCube\G01_outputs",
+            filetypes=[
+                ("WindCube binary", "*.bin"),
+                ("All files", "*.*"),
+            ],
+        )
+        root.destroy()
+        if not chosen:
+            print("No file selected — exiting.")
+            return
+        args.path_to_bin_file = chosen
+
     path = Path(args.path_to_bin_file)
 
     # File existence check

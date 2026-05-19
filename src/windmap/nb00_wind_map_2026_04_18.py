@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from src.constants import (
+from windcube.constants import (
     LAT_RANGE_DEG,
     TP_ALTITUDE_KM,
     WIND_BIAS_BUDGET_MS,
@@ -38,11 +38,13 @@ from src.constants import (
 
 def _add_map_background(ax) -> None:
     """Draw coastlines and lat/lon grid on a plain matplotlib axes."""
-    import geopandas
-    import geodatasets
-
-    land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
-    land.boundary.plot(ax=ax, linewidth=0.5, color="black")
+    try:
+        import geopandas
+        import geodatasets
+        land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+        land.boundary.plot(ax=ax, linewidth=0.5, color="black")
+    except Exception as e:
+        print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
     ax.set_xlim(-180, 180)
     ax.set_ylim(-90, 90)
@@ -351,8 +353,6 @@ class WindMap(ABC):
     ) -> None:
         """Single-panel: streamlines of the vector wind field."""
         import matplotlib.pyplot as plt
-        import geopandas
-        import geodatasets
 
         from src.windmap.nb00_wind_map_2026_04_18 import GridWindMap
         lats = GridWindMap.LAT_GRID
@@ -377,8 +377,13 @@ class WindMap(ABC):
         plt.colorbar(strm.lines, ax=ax, orientation='horizontal',
                      pad=0.05, label='Wind speed (m/s)')
 
-        land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
-        land.boundary.plot(ax=ax, linewidth=0.6, color="gray")
+        try:
+            import geopandas
+            import geodatasets
+            land = geopandas.read_file(geodatasets.get_path("naturalearth.land"))
+            land.boundary.plot(ax=ax, linewidth=0.6, color="gray")
+        except Exception as e:
+            print(f"WARNING: Visualisation skipped ({type(e).__name__}: {e})")
 
         ax.set_xlim(-180, 180)
         ax.set_ylim(-90, 90)
@@ -404,7 +409,7 @@ class WindMap(ABC):
         import matplotlib.pyplot as plt
 
         try:
-            from src.constants import WIND_BIAS_BUDGET_MS as _WBMS
+            from windcube.constants import WIND_BIAS_BUDGET_MS as _WBMS
         except ImportError:
             _WBMS = 9.8
 
@@ -702,7 +707,7 @@ class HWM14WindMap(GridWindMap):
         ap: float = 4.0,
         year: int = 2027,
     ):
-        import hwm14 as _hwm14
+        from pyhwm2014 import hwm14 as _hwm14
 
         self.alt_km = float(alt_km)
         self.day_of_year = int(day_of_year)
@@ -713,7 +718,7 @@ class HWM14WindMap(GridWindMap):
 
         iyd = year * 1000 + day_of_year
         sec = ut_hours * 3600.0
-        ap_array = [ap] * 7
+        ap_vec = np.array([0.0, float(ap)], dtype=np.float32)
 
         vz_grid = np.empty((180, 360), dtype=np.float32)
         vm_grid = np.empty((180, 360), dtype=np.float32)
@@ -721,7 +726,7 @@ class HWM14WindMap(GridWindMap):
         for i, lat in enumerate(self.LAT_GRID):
             for j, lon in enumerate(self.LON_GRID):
                 result = _hwm14.hwm14(
-                    iyd, sec, alt_km, lat, lon, -1, f107a, f107, 0, ap_array
+                    iyd, sec, alt_km, lat, lon, -1.0, f107a, f107, ap_vec
                 )
                 vm_grid[i, j] = result[0]   # HWM14 first output = meridional (northward)
                 vz_grid[i, j] = result[1]   # HWM14 second output = zonal (eastward)

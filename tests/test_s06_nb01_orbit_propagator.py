@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from src.geometry.nb01_orbit_propagator_2026_04_16 import propagate_orbit
-from src.constants import EARTH_GRAV_PARAM_M3_S2, WGS84_A_M, SC_ALTITUDE_KM, SC_ALTITUDE_RANGE_KM
+from windcube.constants import EARTH_GRAV_PARAM_M3_S2, WGS84_A_M, SC_ALTITUDE_KM, SC_ALTITUDE_RANGE_KM
 
 def test_output_schema():
     df = propagate_orbit('2027-01-01T00:00:00', duration_s=100)

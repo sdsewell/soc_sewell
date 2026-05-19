@@ -2,8 +2,8 @@
 # Implements: M01 (S09), M02 (S10), M03 (S12), M04 (S11),
 #             M05 (S13), M06 (S14), M07 (S15), Tolansky
 #
-# Re-export from current dated implementation files per S01 Section 10.
-from src.fpi.airy_forward_model_2026_05_05 import (  # noqa: F401
+# Re-export from fpi_cal_lib (authoritative single-file library, v1.3+).
+from src.fpi.fpi_cal_lib import (  # noqa: F401
     InstrumentParams,
     airy_ideal,
     airy_modified,

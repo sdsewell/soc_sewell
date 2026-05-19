@@ -5,6 +5,11 @@ Purpose: Load an OI 630 nm airglow fringe profile (real or synthetic),
          inversion to recover the line-of-sight wind velocity, and produce
          a diagnostic figure modelled on Harding et al. (2014) Fig. 5.
 
+Library function (added 2026-05-14):
+  run_airglow_inversion(r_grid, profile_adu, sigma_adu, cal,
+                        r_max_px, v_los_prior_ms) -> AirglowResult
+  Callable from windcube/fpi_pipeline.py without tkinter or matplotlib.
+
 ═══════════════════════════════════════════════════════════════════════════════
  INPUTS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -144,6 +149,47 @@ class _CalResult:
     quality_flags: int = 0
 
 
+@dataclass
+class AirglowResult:
+    """
+    Output of a single H06 airglow fringe inversion.
+
+    Produced by run_airglow_inversion(). Consumed by windcube/fpi_pipeline.py
+    and scripts/invert_wind_map.py.
+
+    Sign convention: v_rel_ms follows Harding (2014) — positive = recession
+    from spacecraft (redshift, lambda_c > lambda_0).
+    """
+    # ── Primary science output ───────────────────────────────────────────
+    v_rel_ms:       float   # LOS Doppler velocity [m/s], Harding convention
+    sigma_v_ms:     float   # 1σ velocity uncertainty [m/s]
+
+    # ── Fit parameters ───────────────────────────────────────────────────
+    lc_m:           float   # recovered line-centre wavelength [m]
+    Y_line:         float   # airglow line intensity scale factor [ADU]
+    B_sci:          float   # sky/instrument background [ADU]
+    sigma_lc:       float   # 1σ uncertainty on lc_m [m]
+    sigma_Y:        float   # 1σ uncertainty on Y_line [ADU]
+    sigma_B:        float   # 1σ uncertainty on B_sci [ADU]
+
+    # ── Fit quality ──────────────────────────────────────────────────────
+    chi2_red:       float   # reduced chi-squared (data residuals only)
+    converged:      bool    # True if LM optimiser converged
+    scan_ambiguous: bool    # True if λ_c scan had second minimum within 10%
+    n_bins:         int     # number of profile bins used in fit
+    fsr_oi_m:       float   # FSR used in scan/bounds [m], from cal.t_m
+
+    # ── STM budget ───────────────────────────────────────────────────────
+    budget_ok:      bool    # True if sigma_v_ms <= 9.8 m/s (STM budget)
+
+    # ── Diagnostic arrays (optional) ─────────────────────────────────────────
+    scan_v_ms:      np.ndarray | None = None   # scan velocities [m/s], Harding conv.
+    scan_chi2:      np.ndarray | None = None   # chi2 at each scan point
+    profile_r_grid: np.ndarray | None = None   # bin-centre radii used in fit [px]
+    profile_adu:    np.ndarray | None = None   # dark-subtracted profile [ADU]
+    profile_model:  np.ndarray | None = None   # best-fit model at profile bins [ADU]
+
+
 def load_cal_result(path: pathlib.Path) -> _CalResult:
     """Load H05 calibration result .npy dict and return _CalResult shim."""
     d = np.load(path, allow_pickle=True).item()
@@ -235,10 +281,11 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
     """
     # Compute lc_seed from calibration phase
-    N_int_OI     = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
-    eps_OI_exp   = (2.0 * cal.t_m / OI_WAVELENGTH_AIR_M) % 1.0
-    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp - 1.0)
-    # Sanity: lc_seed_0wind ≈ OI_WAVELENGTH_AIR_M (within a few fm)
+    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
+    N_int_OI     = round(2.0 * cal.t_m / 630.0e-9)
+    eps_OI_exp   = (2.0 * cal.t_m / 630.0e-9) % 1.0
+    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp)
+    # Sanity: lc_seed_0wind ≈ 630.0e-9 m (within a few fm)
     # Shift by the a-priori LOS velocity
     lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
 
@@ -249,8 +296,8 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
              f"(v_prior={v_los_prior_ms:+.0f} m/s, "
              f"eps_OI_exp={eps_OI_exp:.6f})")
-    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}, "
-             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s")
+    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-630.0e-9)/630.0e-9:+.0f}, "
+             f"{SPEED_OF_LIGHT_MS*(lc_hi-630.0e-9)/630.0e-9:+.0f}] m/s")
 
     r_fine   = np.linspace(0.0, r_max, n_fine)
     n_good   = len(r_good)
@@ -289,9 +336,9 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 
     log.info(f"  Scan best: λ_c = {lambda_c_best*1e9:.6f} nm  "
              f"chi2 = {chi2_min:.3f}  "
-             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.1f} m/s")
+             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-630.0e-9)/630.0e-9:+.1f} m/s")
 
-    return lambda_c_best, chi2_min, scan_ambiguous
+    return lambda_c_best, chi2_min, scan_ambiguous, scan, chi2_arr
 def _run_lm(r_good, prof_good, sigma_good, r_max, cal,
             fsr_oi, lc_init, Y_init, B_init, n_fine=500):
     """LM fit over {λ_c, Y_line, B_sci} with soft-bound penalties.
@@ -594,6 +641,166 @@ def make_figure(r2_data, profile, sigma,
 
 
 # ---------------------------------------------------------------------------
+# Public library function
+# ---------------------------------------------------------------------------
+
+def run_airglow_inversion(
+    r_grid: np.ndarray,
+    profile_adu: np.ndarray,
+    sigma_adu: np.ndarray,
+    cal: _CalResult,
+    r_max_px: float = 110.0,
+    v_los_prior_ms: float = 0.0,
+    n_scan: int = 300,
+    n_fine: int = 500,
+) -> AirglowResult:
+    """
+    Run the H06 two-stage airglow fringe inversion.
+
+    Stage 1: Brute-force scan of λ_c over ±0.75 FSR around a phase-seeded
+             starting point. Y_line and B_sci are solved analytically at
+             each scan point.
+    Stage 2: Levenberg-Marquardt refinement over {λ_c, Y_line, B_sci}.
+
+    All instrument parameters (t_m, alpha, R_refl, sigma0, B, I0, I1, I2,
+    epsilon_cal) are fixed from `cal` (output of H05 calibration inversion).
+
+    Parameters
+    ----------
+    r_grid : np.ndarray, shape (N,)
+        Bin-centre radii in pixels. Typically from FringeProfile.r_grid
+        after applying r <= r_max_px selection.
+    profile_adu : np.ndarray, shape (N,)
+        Mean intensity per r²-bin in ADU. From FringeProfile.profile.
+    sigma_adu : np.ndarray, shape (N,)
+        1σ per-bin uncertainty in ADU. From FringeProfile.sigma_profile,
+        with Poisson floor applied (sigma = max(sigma, s_floor)).
+        Must have no NaN or Inf values in good bins.
+    cal : _CalResult
+        Instrument parameters from H05. Load with load_cal_result(path)
+        or supply a MasterCalibration converted to _CalResult.
+    r_max_px : float
+        Outer radius of the fringe pattern [px, 2×2 binned]. Default 110.
+    v_los_prior_ms : float
+        A-priori line-of-sight velocity [m/s]. Supplied by H07 geometry:
+            v_los_prior_ms = V_sc_LOS + v_earth_LOS
+        For cross-track observations pass 0.0 (default).
+        For along-track observations pass the H07-computed value
+        (~±7000 m/s). This seeds the λ_c scan window to the correct FSR
+        bin and prevents alias ambiguity.
+    n_scan : int
+        Number of scan points in Stage 1. Default 300.
+    n_fine : int
+        Number of fine-grid points for Airy model evaluation. Default 500.
+
+    Returns
+    -------
+    AirglowResult
+
+    Raises
+    ------
+    ValueError
+        If r_grid has fewer than 10 usable bins after masking.
+
+    Notes
+    -----
+    The sigma floor applied before calling this function should be:
+        s_floor = max(1.0, median(profile_adu) * 0.005)
+        sigma_adu = np.maximum(sigma_adu, s_floor)
+    This is the caller's responsibility (currently done in main()).
+    """
+    r_max = float(r_max_px)
+
+    # ── FSR from cal.t_m (authoritative fitted gap) ──────────────────────
+    # Bug note: the module-level FSR_OI_M uses ETALON_GAP_M (~20.0006 mm),
+    # which differs from cal.t_m (~20.107 mm) by ~0.5%, causing a 25 m/s
+    # FSR error.  Always compute FSR from cal.t_m here.
+    # Use Harding lambda_0 = 630.0 nm (not NIST air 630.0304 nm).
+    fsr_oi = (630.0e-9) ** 2 / (2.0 * cal.t_m)
+
+    # ── Restrict to r <= r_max ────────────────────────────────────────────
+    in_range    = r_grid <= r_max
+    r_good      = r_grid[in_range]
+    prof_good   = profile_adu[in_range]
+    sigma_good  = sigma_adu[in_range]
+
+    if len(r_good) < 10:
+        raise ValueError(
+            f"Only {len(r_good)} bins within r_max={r_max_px} px. "
+            "Cannot run inversion."
+        )
+
+    # ── Stage 1: λ_c scan ────────────────────────────────────────────────
+    lc_best, _chi2_scan, scan_ambiguous, _scan_lc, _chi2_scan_arr = _lambda_c_scan(
+        r_good, prof_good, sigma_good, r_max, cal, fsr_oi,
+        n_scan=n_scan, n_fine=n_fine,
+        v_los_prior_ms=v_los_prior_ms,
+    )
+    scan_v_ms_arr = SPEED_OF_LIGHT_MS * (_scan_lc - 630.0e-9) / 630.0e-9
+
+    # ── Initial Y_line, B_sci from analytic solve at lc_best ─────────────
+    r_fine    = np.linspace(0.0, r_max, n_fine)
+    airy_f    = airy_modified(r_fine, lc_best,
+                              cal.t_m, cal.R_refl, cal.alpha, 1.0, r_max,
+                              cal.I0, cal.I1, cal.I2,
+                              cal.sigma0, cal.sigma1, cal.sigma2)
+    airy_b    = np.interp(r_good, r_fine, airy_f)
+    airy_max  = float(np.max(airy_b)) if np.max(airy_b) > 0 else 1.0
+    Y_init    = float(np.max(prof_good)) / airy_max
+    B_init    = max(1.0, float(np.percentile(prof_good, 5)) * 0.8)
+
+    # ── Stage 2: LM refinement ───────────────────────────────────────────
+    lm     = _run_lm(r_good, prof_good, sigma_good, r_max, cal,
+                     fsr_oi, lc_best, Y_init, B_init, n_fine=n_fine)
+    lc_m   = float(lm.x[0])
+    Y_line = float(lm.x[1])
+    B_sci  = float(lm.x[2])
+
+    # ── chi² from data residuals only (no penalty rows) ──────────────────
+    model_bins = _airglow_model(r_good, r_max, lc_m, Y_line, B_sci, cal,
+                                n_fine=n_fine)
+    data_r     = (prof_good - model_bins) / sigma_good
+    dof        = max(len(r_good) - 3, 1)
+    chi2_red   = float(np.sum(data_r ** 2)) / dof
+    converged  = bool(lm.success or lm.cost < 1e-10)
+
+    # ── Covariance via FD Jacobian ────────────────────────────────────────
+    stderrs, _cov = _compute_covariance(
+        r_good, prof_good, sigma_good, r_max, cal,
+        fsr_oi, lc_m, Y_line, B_sci, chi2_red, n_fine=n_fine,
+    )
+    sigma_lc, sigma_Y, sigma_B = stderrs
+
+    # ── Derived quantities ────────────────────────────────────────────────
+    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
+    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - 630.0e-9) / 630.0e-9
+    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / 630.0e-9
+    budget_ok  = bool(sigma_v_ms <= 9.8)
+
+    return AirglowResult(
+        v_rel_ms       = v_rel_ms,
+        sigma_v_ms     = sigma_v_ms,
+        lc_m           = lc_m,
+        Y_line         = Y_line,
+        B_sci          = B_sci,
+        sigma_lc       = sigma_lc,
+        sigma_Y        = sigma_Y,
+        sigma_B        = sigma_B,
+        chi2_red       = chi2_red,
+        converged      = converged,
+        scan_ambiguous = scan_ambiguous,
+        n_bins         = len(r_good),
+        fsr_oi_m       = fsr_oi,
+        budget_ok      = budget_ok,
+        scan_v_ms      = scan_v_ms_arr,
+        scan_chi2      = _chi2_scan_arr,
+        profile_r_grid = r_good,
+        profile_adu    = prof_good,
+        profile_model  = model_bins,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -693,64 +900,32 @@ def main():
 
     r_max = float(r_max_px)
 
-    # ---- 5b. FSR from calibration gap (authoritative fitted gap) ----
-    # Bug fix: the module-level FSR_OI_M uses ETALON_GAP_M (D_25C ≈ 20.0006 mm),
-    # which differs from the H05-fitted cal.t_m (≈ 20.107 mm) by ~0.5%, causing a
-    # 25 m/s FSR error.  The old ±1.5 FSR scan only spanned ±7083 m/s, missing
-    # along-track velocities up to ±8000 m/s.  All scan/bound/step calculations
-    # now use fsr_oi derived from cal.t_m.
-    fsr_oi = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * cal.t_m)
-    v_fsr  = SPEED_OF_LIGHT_MS * fsr_oi / OI_WAVELENGTH_AIR_M
-    log.info(f"FSR from cal.t_m={cal.t_m*1e3:.7f} mm: {fsr_oi*1e15:.2f} fm  ({v_fsr:.1f} m/s)")
+    # ---- 6–9. Run inversion (now delegates to library function) ----------
+    result = run_airglow_inversion(
+        r_grid         = r_grid,
+        profile_adu    = profile_adu,
+        sigma_adu      = sigma_adu,
+        cal            = cal,
+        r_max_px       = r_max,
+        v_los_prior_ms = v_los_prior_ms,
+    )
 
-    # ---- 6. Stage 1: λ_c scan ----
-    print(f"\nStage 1 — brute-force λ_c scan (±0.75 FSR around lc_seed, 300 pts)…")
-    print(f"  FSR = {v_fsr:.1f} m/s  v_los_prior = {v_los_prior_ms:+.0f} m/s  window = ±{0.75*v_fsr:.0f} m/s")
-    lc_best, chi2_scan, scan_ambiguous = _lambda_c_scan(
-        r_grid, profile_adu, sigma_adu, r_max, cal, fsr_oi,
-        v_los_prior_ms=v_los_prior_ms)
-
-    # Initial Y_line, B_sci from analytic solve at lc_best
-    r_fine = np.linspace(0.0, r_max, 500)
-    airy_f = airy_modified(r_fine, lc_best,
-                           cal.t_m, cal.R_refl, cal.alpha, 1.0, r_max,
-                           cal.I0, cal.I1, cal.I2,
-                           cal.sigma0, cal.sigma1, cal.sigma2)
-    airy_b    = np.interp(r_grid, r_fine, airy_f)
-    airy_max  = float(np.max(airy_b)) if np.max(airy_b) > 0 else 1.0
-    Y_init    = float(np.max(profile_adu)) / airy_max
-    B_init    = max(1.0, float(np.percentile(profile_adu, 5)) * 0.8)
-
-    # ---- 7. Stage 2: LM refinement ----
-    print("Stage 2 — LM refinement over {λ_c, Y_line, B_sci}…")
-    lm = _run_lm(r_grid, profile_adu, sigma_adu, r_max, cal,
-                 fsr_oi, lc_best, Y_init, B_init)
-
-    lc_m   = float(lm.x[0])
-    Y_line = float(lm.x[1])
-    B_sci  = float(lm.x[2])
-
-    # chi² from data residuals only
-    model_bins = _airglow_model(r_grid, r_max, lc_m, Y_line, B_sci, cal)
-    data_r     = (profile_adu - model_bins) / sigma_adu
-    dof        = max(len(r_grid) - 3, 1)
-    chi2_red   = float(np.sum(data_r**2)) / dof
-    converged  = bool(lm.success or lm.cost < 1e-10)
-
-    # ---- 8. Covariance ----
-    print("Computing covariance (FD Jacobian)…")
-    stderrs, cov = _compute_covariance(
-        r_grid, profile_adu, sigma_adu, r_max, cal,
-        fsr_oi, lc_m, Y_line, B_sci, chi2_red)
-    sigma_lc, sigma_Y, sigma_B = stderrs
-
-    # ---- 9. Derived quantities ----
-    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
-    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / OI_WAVELENGTH_AIR_M
+    lc_m       = result.lc_m
+    Y_line     = result.Y_line
+    B_sci      = result.B_sci
+    sigma_lc   = result.sigma_lc
+    sigma_Y    = result.sigma_Y
+    sigma_B    = result.sigma_B
+    v_rel_ms   = result.v_rel_ms
+    sigma_v_ms = result.sigma_v_ms
+    chi2_red   = result.chi2_red
+    converged  = result.converged
+    scan_ambiguous = result.scan_ambiguous
+    fsr_oi     = result.fsr_oi_m
     forder     = int(round((lc_m - OI_WAVELENGTH_AIR_M) / fsr_oi))
     eps_sci    = (2.0 * lc_m / OI_WAVELENGTH_AIR_M) % 1.0
     delta_eps  = eps_sci - cal.epsilon_cal
-    budget_ok  = sigma_v_ms <= 9.8
+    budget_ok  = result.budget_ok
 
     # ---- 10. Print results ----
     print(f"\n{'='*68}")

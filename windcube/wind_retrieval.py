@@ -34,7 +34,7 @@ import astropy.units as u
 from astropy.coordinates import GCRS, ITRS, CartesianRepresentation
 from astropy.time import Time
 
-from src.constants import EARTH_OMEGA_RAD_S
+from windcube.constants import EARTH_OMEGA_RAD_S
 from windcube.constants import (
     GDOP_MAX,
     H07_BORESIGHT_BODY,

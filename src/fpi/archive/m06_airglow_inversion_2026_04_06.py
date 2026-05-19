@@ -17,7 +17,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from src.fpi import airy_modified
-from src.constants import (
+from windcube.constants import (
     OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
     ETALON_FSR_OI_M,

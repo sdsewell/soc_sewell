@@ -14,7 +14,7 @@ from windcube.constants import (
     OI_WAVELENGTH_AIR_M as OI_WAVELENGTH_M,
     SPEED_OF_LIGHT_MS,
 )
-from src.fpi.m04_airglow_synthesis_2026_04_05 import (
+from src.fpi.archive.m04_airglow_synthesis_2026_04_05 import (
     lambda_c_to_v_rel,
     synthesise_airglow_image,
     v_rel_to_lambda_c,

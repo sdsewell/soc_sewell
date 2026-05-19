@@ -25,7 +25,7 @@ matplotlib.use("Agg")   # non-interactive backend for saving figures
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from src.constants import (
+from windcube.constants import (
     NE_WAVELENGTH_1_M,
     NE_WAVELENGTH_2_M,
     NE_INTENSITY_2,

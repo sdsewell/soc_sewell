@@ -19,7 +19,7 @@ from src.fpi.f01_full_airy_fit_to_neon_image_2026_04_21 import (
 )
 from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_modified, airy_ideal
 from src.fpi.archive.m03_annular_reduction_2026_04_06 import FringeProfile, QualityFlags
-from src.constants import NE_WAVELENGTH_1_M, D_25C_MM, PLATE_SCALE_RPX
+from windcube.constants import NE_WAVELENGTH_1_M, D_25C_MM, PLATE_SCALE_RPX
 
 # ---------------------------------------------------------------------------
 # Canonical true parameters (T01 ground truth, spec §10 T01)

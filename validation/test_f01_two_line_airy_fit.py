@@ -20,7 +20,7 @@ from validation.f01_full_airy_fit_to_neon_image_2026_04_22 import (
     fit_neon_fringe,
 )
 from src.fpi.archive.m01_airy_forward_model_2026_04_05 import airy_ideal, airy_modified
-from src.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M
+from windcube.constants import NE_WAVELENGTH_1_M, NE_WAVELENGTH_2_M
 
 # ---------------------------------------------------------------------------
 # Canonical truth parameters (T01 ground truth, spec §11)

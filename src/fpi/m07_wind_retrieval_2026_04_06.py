@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.constants import LAT_RANGE_DEG, SC_ORBITAL_PERIOD_S
+from windcube.constants import LAT_RANGE_DEG, SC_ORBITAL_PERIOD_S
 
 
 # ---------------------------------------------------------------------------

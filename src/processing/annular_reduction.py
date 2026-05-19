@@ -400,7 +400,7 @@ def _find_and_fit_peaks_r2(
             sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0, median_dr2_px2 * 0.5)
             p0   = [A0, mu0, sig0, B0]
             bounds = (
-                [0.0,    float(r2_w[0]),  0.3 * median_dr2_px2,                     0.0   ],
+                [0.0,    float(r2_w[0]),  0.3 * median_dr2_px2,    -np.inf],
                 [np.inf, float(r2_w[-1]), float(r2_w[-1]) - float(r2_w[0]), np.inf],
             )
             try:

@@ -2,9 +2,17 @@
 """
 invert_wind_map.py — WindCube H07 batch processing driver.
 
-Processes an entire folder of WindCube FPI binary science images,
-accumulates H07 wind solutions into spatiotemporal bins, and writes
-results to a CSV summary file.
+Two v_rel modes:
+
+  CSV mode (--v-rel-csv):
+    v_rel is read from a pre-computed GEN01 CSV. Used for synthetic data
+    validation. All existing --v-rel-csv runs continue to work unchanged.
+
+  H06 mode (default when --v-rel-csv not supplied):
+    v_rel is recovered from raw pixels via the full H06 fringe fitting
+    pipeline. Requires dark and cal frames in the input folder.
+    Uses per-orbit master darks and master calibrations (5 dark + 5 cal
+    frames per orbit, per WINDCUBE-ARCH-01).
 
 Usage:
     python scripts/invert_wind_map.py <input_folder> [options]
@@ -135,6 +143,16 @@ def _parse_args() -> argparse.Namespace:
         default=10.0,
         metavar="M_S",
         help="Constant per-frame sigma_v in m/s when --v-rel-csv is supplied (default: 10.0)",
+    )
+    parser.add_argument(
+        "--use-h06",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the full H06 fringe fitting pipeline to recover v_rel from "
+            "raw pixels. Activated automatically when --v-rel-csv is not "
+            "supplied. Requires cal and dark frames in the input folder."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -308,6 +326,7 @@ def _process_one(
     vrel_lookup,
     args: argparse.Namespace,
     dark_frames: list = None,
+    orbit_group=None,
 ) -> tuple:
     """
     Process a single *_science.bin file through H07.
@@ -320,7 +339,7 @@ def _process_one(
         'not_science'    — img_type != 'science'
         'slew'           — SLEW_IN_PROGRESS flag set
         'vrel_missing'   — lua_timestamp not in v_rel CSV
-        'm06_missing'    — no CSV and no M06 available
+        'cal_missing'    — H06 mode but orbit has no master calibration
         'geometry_error' — process_frame raised ValueError
     """
     import numpy as np
@@ -369,8 +388,67 @@ def _process_one(
         if entry.get("h_target_km_obs") is not None:
             meta.h_target_km_obs = entry["h_target_km_obs"]
     else:
-        # M06 not available and no CSV supplied
-        return None, "m06_missing"
+        # No CSV supplied — use H06 fringe fitting
+        if orbit_group is None or orbit_group.master_cal is None:
+            log.warning(
+                "Skipping %s: no master calibration for this orbit",
+                bin_path.name,
+            )
+            return None, "cal_missing"
+
+        # ── H07 geometry first (needed for v_los_prior_ms) ─────────────
+        from windcube import wind_retrieval
+        try:
+            geom = wind_retrieval.compute_los_geometry(meta)
+        except ValueError as exc:
+            log.warning("Geometry failed for %s: %s", bin_path.name, exc)
+            return None, "geometry_error"
+
+        # H06 uses Harding recession-positive convention; V_sc_LOS is
+        # approach-positive so must be negated.
+        v_los_prior_ms = -(geom.V_sc_LOS + geom.v_earth_LOS)
+
+        # ── Dark subtraction using per-orbit master dark ────────────────
+        if orbit_group.master_dark is not None:
+            n_dark = len(orbit_group.dark_frames)
+            pixels_ds = (
+                pixels.astype(np.float32)
+                - orbit_group.master_dark / n_dark
+            )
+            pixels_ds = np.clip(pixels_ds, 0, 16383).astype(np.float32)
+        else:
+            log.warning(
+                "No master dark for orbit %d — processing %s without "
+                "dark subtraction",
+                orbit_group.orbit_number, bin_path.name,
+            )
+            pixels_ds = pixels.astype(np.float32)
+
+        # ── H06 fringe fitting via fpi_pipeline ────────────────────────
+        from windcube.fpi_pipeline import process_science_frame
+        try:
+            airglow = process_science_frame(
+                pixels_ds      = pixels_ds,
+                master_cal     = orbit_group.master_cal,
+                v_los_prior_ms = v_los_prior_ms,
+                r_max_px       = 110.0,
+                cx_seed        = None,
+                cy_seed        = None,
+            )
+        except Exception as exc:
+            log.warning(
+                "H06 inversion failed for %s: %s", bin_path.name, exc
+            )
+            return None, "geometry_error"
+
+        v_rel  = airglow.v_rel_ms
+        sigma_v = airglow.sigma_v_ms
+        log.info(
+            "H06  %-40s  v_rel=%+.1f  sigma_v=%.1f  chi2=%.2f  "
+            "converged=%s",
+            bin_path.name, v_rel, sigma_v,
+            airglow.chi2_red, airglow.converged,
+        )
 
     # Step 2a2 — Dark subtraction (nearest dark frame within 1 orbit)
     _ONE_ORBIT_MS = 6_000_000
@@ -518,6 +596,7 @@ def _write_summary(
             f"  v_rel not available   : {n_vrel_missing} frames"
             f"  (M06 missing or not in CSV)"
         ),
+        f"  No master calibration  : {skip_counts.get('cal_missing', 0)} frames",
         f"  Geometry error        : {skip_counts.get('geometry_error', 0)} frames",
         "-" * 64,
         (
@@ -571,6 +650,44 @@ def _write_summary(
 
 
 # ---------------------------------------------------------------------------
+# H06 schedule builder
+# ---------------------------------------------------------------------------
+
+
+def _build_schedule(input_folder: Path, args: argparse.Namespace):
+    """
+    Build the per-orbit calibration schedule using cal_scheduler.
+
+    Called once at startup in H06 mode. Processes all dark and cal
+    frames in input_folder. Returns OrbitSchedule.
+
+    Prints progress from build_orbit_schedule() directly.
+    On failure, prints error and calls sys.exit(1).
+    """
+    from windcube.cal_scheduler import build_orbit_schedule
+    try:
+        schedule = build_orbit_schedule(
+            input_folder,
+            r_max_px        = 110.0,
+            h_target_km_obs = args.h_target_km,
+            process_cals    = True,
+        )
+    except Exception as exc:
+        print(f"ERROR: Failed to build calibration schedule: {exc}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Warn about orbits with missing calibration
+    if schedule.n_cal_missing > 0:
+        print(
+            f"WARNING: {schedule.n_cal_missing}/{schedule.n_orbits} orbits "
+            "have no master calibration — science frames in those orbits "
+            "will be skipped."
+        )
+    return schedule
+
+
+# ---------------------------------------------------------------------------
 # n_days file-list filter
 # ---------------------------------------------------------------------------
 
@@ -613,6 +730,11 @@ def main() -> None:
 
     args = _parse_args()
 
+    use_h06 = args.use_h06 or (args.v_rel_csv is None)
+    if use_h06 and args.v_rel_csv:
+        print("NOTE: --v-rel-csv supplied — using CSV path, ignoring --use-h06")
+        use_h06 = False
+
     logging.basicConfig(
         format="%(levelname)s %(name)s: %(message)s",
         level=logging.INFO if args.verbose else logging.WARNING,
@@ -654,6 +776,16 @@ def main() -> None:
     else:
         log.warning("No dark frames found in %s — skipping dark subtraction", input_folder)
 
+    # ── Step 0c — Build calibration schedule (H06 mode only) ──────────────────
+    schedule = None
+    if use_h06:
+        print("H06 mode: building per-orbit calibration schedule...")
+        schedule = _build_schedule(input_folder, args)
+        print(
+            f"Schedule: {schedule.n_orbits} orbits, "
+            f"{schedule.n_science} science frames"
+        )
+
     # ── Step 1 — Load v_rel lookup ─────────────────────────────────────────────
     vrel_lookup = None
     if args.v_rel_csv:
@@ -672,7 +804,10 @@ def main() -> None:
     obs_list = []
     skip_counts: dict = {}
 
-    if args.max_workers > 1:
+    if args.max_workers > 1 and schedule is not None:
+        print("H06 mode: parallel processing not supported — using serial")
+
+    if args.max_workers > 1 and schedule is None:
         log.warning(
             "max_workers=%d: astropy thread-safety not verified — "
             "use --max-workers 1 for production runs.",
@@ -698,7 +833,20 @@ def main() -> None:
     else:
         n_skipped_so_far = 0
         for i, bin_path in enumerate(bin_files, 1):
-            obs, reason = _process_one(bin_path, vrel_lookup, args, dark_frames=dark_frames)
+            # Resolve orbit group for H06 mode
+            og = None
+            if schedule is not None:
+                for og_candidate in schedule.orbits:
+                    if any(fr.path == bin_path
+                           for fr in og_candidate.science_frames):
+                        og = og_candidate
+                        break
+
+            obs, reason = _process_one(
+                bin_path, vrel_lookup, args,
+                dark_frames=dark_frames,
+                orbit_group=og,
+            )
             if obs is not None:
                 obs_list.append(obs)
             else:
