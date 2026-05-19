@@ -1832,7 +1832,7 @@ def _plot_all_fringe_diagnostics_r2(
     fig.suptitle(
         f"All-Fringe Fit Diagnostics (r² domain)  —  {n_peaks} peaks  |  "
         f"median r² bin width = {median_dr2_px2:.3f} px²  |  "
-        f"fit_half_window = {fit_half_window} (HWHM-based asymmetric window per peak)",
+        f"windows from _R2_WINDOWS",
         fontsize=10, fontweight="bold",
     )
 
@@ -1842,26 +1842,13 @@ def _plot_all_fringe_diagnostics_r2(
 
         bin_idx = pf.peak_idx
 
-        # HWHM-based asymmetric window — matches _find_and_fit_peaks_r2
-        valley_L, valley_R = _find_valley_bounds(
-            fp.profile, bin_idx, search_hw=fit_half_window
-        )
-        hwhm_L, hwhm_R = _measure_hwhm(
-            fp.profile, bin_idx, valley_L, valley_R
-        )
-        hw_L = max(6, min(int(np.round(0.8 * hwhm_L)), fit_half_window))
-        hw_R = max(6, min(int(np.round(0.8 * hwhm_R)), fit_half_window))
-        lo   = max(0, bin_idx - hw_L)
-        hi   = min(len(fp.r2_grid) - 1, bin_idx + hw_R)
-
-        # ── User-specified window overrides (r² domain) ──────────────────────
-        if k in _R2_WINDOWS:
-            _r2_lo, _r2_hi = _R2_WINDOWS[k]
-            lo = int(np.searchsorted(fp.r2_grid, _r2_lo, side="left"))
-            hi = int(np.searchsorted(fp.r2_grid, _r2_hi, side="right")) - 1
-            lo = max(0, lo)
-            hi = min(len(fp.r2_grid) - 1, hi)
-        # ── End user-specified overrides ──────────────────────────────────────
+        if k not in _R2_WINDOWS:
+            continue
+        r2_lo_w, r2_hi_w = _R2_WINDOWS[k]
+        lo = int(np.searchsorted(fp.r2_grid, r2_lo_w, side="left"))
+        hi = int(np.searchsorted(fp.r2_grid, r2_hi_w, side="right")) - 1
+        lo = max(0, lo)
+        hi = min(len(fp.r2_grid) - 1, hi)
 
         win     = np.arange(lo, hi + 1)
         usable  = ~fp.masked[win] & np.isfinite(fp.sigma_profile[win])
@@ -1926,7 +1913,7 @@ def _plot_all_fringe_diagnostics_r2(
 
         # ── Title ────────────────────────────────────────────────────────────
         lam_str = "640.2" if k % 2 == 0 else "638.3"
-        hw_str  = f"({hw_L},{hw_R})"
+        hw_str  = f"[{r2_lo_w:.0f},{r2_hi_w:.0f}]"
         if fit_ok:
             r_derived = float(np.sqrt(r2_fit)) if r2_fit > 0 else float("nan")
             chi2_str  = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "nan"
@@ -3591,14 +3578,13 @@ def fit_peaks(
 
         bin_idx = p.peak_idx
 
-        # HWHM-based asymmetric window (same logic as _find_and_fit_peaks_r2)
-        valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
-        hwhm_L, hwhm_R    = _measure_hwhm(profile, bin_idx, valley_L, valley_R)
-        hw_L = min(max(6, int(np.round(0.8 * hwhm_L))), fit_half_window)
-        hw_R = min(max(6, int(np.round(0.8 * hwhm_R))), fit_half_window)
-
-        lo  = max(0, bin_idx - hw_L)
-        hi  = min(len(r2_grid) - 1, bin_idx + hw_R)
+        if i_pk not in _R2_WINDOWS:
+            continue   # no user window defined — skip refit
+        r2_lo_w, r2_hi_w = _R2_WINDOWS[i_pk]
+        lo = int(np.searchsorted(r2_grid, r2_lo_w, side="left"))
+        hi = int(np.searchsorted(r2_grid, r2_hi_w, side="right")) - 1
+        lo = max(0, lo)
+        hi = min(len(r2_grid) - 1, hi)
         win = np.arange(lo, hi + 1)
         use = good_all[win] & np.isfinite(sig_prof[win]) & (sig_prof[win] > 0)
         win_use = win[use]

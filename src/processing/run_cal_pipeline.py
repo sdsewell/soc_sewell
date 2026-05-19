@@ -46,6 +46,7 @@ from src.fpi.fpi_cal_lib import (  # noqa: E402
     OrbitCalResult,
     _variance_cost,
     _model_components,
+    _R2_WINDOWS as _FIT_WINDOWS,
     make_master_dark,
     dark_subtract,
     find_centre,
@@ -889,13 +890,6 @@ def _figure_s3b(
     sig_all  = fp.sigma_profile
     good_all = ~fp.masked
 
-    # ── Derive actual fit window half-width from bin spacing ─────────────────
-    # This mirrors fpi_cal_lib.fit_peaks(fit_half_window=56) exactly.
-    r2_good      = r2_all[good_all]
-    r2_bin_size  = float(np.median(np.diff(r2_good))) if len(r2_good) > 1 else 8.0
-    FIT_HW_BINS  = 56              # must match fpi_cal_lib.fit_peaks() default
-    fit_half_r2  = FIT_HW_BINS * r2_bin_size   # px² either side of peak
-
     # ── Half same-family FSR — governs display window ─────────────────────────
     r2_peaks = np.array([p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))
                          else p.r2_raw_px2 for p in peaks])
@@ -915,8 +909,12 @@ def _figure_s3b(
         peak_r2 = p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))                   else p.r2_raw_px2
 
         # ── Display window (wide — shows full peak shape) ─────────────────
-        r2_lo    = peak_r2 - disp_hw
-        r2_hi    = peak_r2 + disp_hw
+        if i in _FIT_WINDOWS:
+            r2_lo = _FIT_WINDOWS[i][0] - 50.0
+            r2_hi = _FIT_WINDOWS[i][1] + 50.0
+        else:
+            r2_lo = peak_r2 - disp_hw
+            r2_hi = peak_r2 + disp_hw
         mask_win = (r2_all >= r2_lo) & (r2_all <= r2_hi) & good_all
         r2_win   = r2_all[mask_win]
         pr_win   = prof_all[mask_win]
@@ -925,7 +923,12 @@ def _figure_s3b(
 
         # ── Background: flank minima inside the fit window ───────────────
         # Reconstruct same B0 logic as fpi_cal_lib pass-2 refit
-        fit_mask = (r2_all >= p.r2_raw_px2 - fit_half_r2) &                    (r2_all <= p.r2_raw_px2 + fit_half_r2) & good_all
+        if i in _FIT_WINDOWS:
+            fit_mask = (r2_all >= _FIT_WINDOWS[i][0]) & \
+                       (r2_all <= _FIT_WINDOWS[i][1]) & good_all
+        else:
+            fit_mask = (r2_all >= p.r2_raw_px2 - disp_hw * 0.5) & \
+                       (r2_all <= p.r2_raw_px2 + disp_hw * 0.5) & good_all
         fit_idx  = np.where(fit_mask)[0]
         if len(fit_idx) >= 4:
             fw = prof_all[fit_idx]
@@ -938,10 +941,15 @@ def _figure_s3b(
         ax.set_facecolor("#d4edda" if p.fit_ok else "#f8d7da")
 
         # ── Green fit window shading ──────────────────────────────────────
-        ax.axvspan(p.r2_raw_px2 - fit_half_r2,
-                   p.r2_raw_px2 + fit_half_r2,
-                   alpha=0.22, color="limegreen", zorder=0,
-                   label="Fit window")
+        if i in _FIT_WINDOWS:
+            ax.axvspan(_FIT_WINDOWS[i][0], _FIT_WINDOWS[i][1],
+                       alpha=0.22, color="limegreen", zorder=0,
+                       label="Fit window")
+        else:
+            ax.axvspan(p.r2_raw_px2 - disp_hw * 0.5,
+                       p.r2_raw_px2 + disp_hw * 0.5,
+                       alpha=0.22, color="limegreen", zorder=0,
+                       label="Fit window")
 
         # ── Data with error bars ──────────────────────────────────────────
         if valid.any():
@@ -952,7 +960,8 @@ def _figure_s3b(
         r2_fine = np.linspace(r2_lo, r2_hi, 200)
 
         # ── Initial guess (centred on fitted position, width from fit) ────
-        w_guess = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2))                   else fit_half_r2 / 3.0
+        w_guess = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2)) \
+                   else (r2_hi - r2_lo) / 6.0
         A_guess = p.amplitude_adu if p.fit_ok else float(
             np.max(pr_win) - B_draw if len(pr_win) else 100)
         guess_curve = _gauss(r2_fine, A_guess, p.r2_raw_px2, w_guess, B_draw)
