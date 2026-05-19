@@ -1435,15 +1435,7 @@ def main() -> None:
     # ── Stage 4: Tolansky two-line WLS ───────────────────────────────────────
     stage_banner(4, "Tolansky two-line WLS fit")
 
-    # Ask for ring pairs before starting
-    n_valid_peaks = next(
-        (len(pa) for pa in peak_arrays if pa is not None), 20
-    )
-    n_pairs = ask_integer(
-        "Number of ring pairs (one per neon line) for Tolansky WLS:",
-        "Tolansky ring pairs",
-        default=n_valid_peaks // 2,
-    )
+    n_pairs = 10
     print(f"  Using n_pairs = {n_pairs}")
 
     tol_results: list = []
