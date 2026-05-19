@@ -752,7 +752,8 @@ def _figure_s2(
         ax.set_ylabel("Mean intensity  (ADU)", fontsize=10)
         ax.set_title(
             f"{stem}  —  radial profile vs r²  ({n_bins}/{len(fp.r2_grid)} bins)  |  "
-            f"r_max = {fp.r_max_px:.0f} px",
+            f"r_max = {fp.r_max_px:.0f} px  |  "
+            f"cx = {fp.cx:.3f} px  cy = {fp.cy:.3f} px",
             fontsize=9,
         )
         ax.legend(fontsize=8)
