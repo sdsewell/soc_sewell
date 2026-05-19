@@ -832,9 +832,9 @@ _R2_WINDOWS: dict[int, tuple[float, float]] = {
     10: (  6175,   6675),   # P10 640.2 nm  ctr≈6441
     11: (  6825,   7250),   # P11 638.3 nm  ctr≈7021
     12: (  7400,   7900),   # P12 640.2 nm  ctr≈7672
-    13: (  8150,   8300),   # P13 638.3 nm  ctr≈8247
+    13: (  8147,   8347),   # P13 638.3 nm  ctr≈8247
     14: (  8625,   9125),   # P14 640.2 nm  ctr≈8902
-    15: (  9400,   9600),   # P15 638.3 nm  ctr≈9472
+    15: (  9372,   9572),   # P15 638.3 nm  ctr≈9472
     16: (  9850,  10375),   # P16 640.2 nm  ctr≈10132
     17: ( 10600,  10800),   # P17 638.3 nm  ctr≈10698
     18: ( 11075,  11600),   # P18 640.2 nm  ctr≈11363
@@ -2837,7 +2837,7 @@ def plot_tolansky_result(
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           edgecolor=GRAY, alpha=0.85))
 
-    src_name = (pathlib.Path(r.source_path).name
+    src_name = (str(pathlib.Path(r.source_path))
                 if r.source_path else "source file not recorded")
     fig.suptitle(
         "Tolansky Two-Line Analysis  "
