@@ -819,7 +819,7 @@ def _gaussian(r: np.ndarray, A: float, mu: float, sig: float, B: float) -> np.nd
 
 
 _R2_WINDOWS: dict[int, tuple[float, float]] = {
-     0: (    50,    550),   # P0  640.2 nm  ctr≈287
+     0: (    187,    387),   # P0  640.2 nm  ctr≈287
      1: (   650,   1150),   # P1  638.3 nm  ctr≈900
      2: (  1250,   1775),   # P2  640.2 nm  ctr≈1518
      3: (  1875,   2375),   # P3  638.3 nm  ctr≈2122
