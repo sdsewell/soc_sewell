@@ -762,87 +762,111 @@ def _figure_s2(
     _save_and_show(fig, save_path)
 
 
-# ── Figure S3a — Profile with peaks marked (per frame) ───────────────────────
+# ── Table S3a — Peak fit centres across all frames ────────────────────────────
 
-def _figure_s3a(
-    fps: list,
+def _table_s3a(
     peaks_list: list,
     peak_arrs: list,
     stems: list[str],
     save_path: pathlib.Path,
 ) -> None:
     """
-    One row per cal frame. Matches annular_reduction.py style:
-    - ±2σ SEM shaded band behind profile
-    - Red vertical lines at each peak centroid
-    - Gaussian fit overlaid at each peak in family colour
-    - Title shows peak count and status
+    Matplotlib table replacing the old peak-detection profile figure.
+
+    Rows = peaks (up to 20).  Columns = one per cal frame, plus a final
+    'Mean ± SE' column.  Each cell shows r²_fit ± σ_r²_fit (px²).
     """
-    n = len(fps)
-    fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
-    fig.suptitle("Stage 3a — Peak Detection", fontsize=12, fontweight="bold")
+    n_frames = len(peaks_list)
+    n_peaks  = max((len(pks) for pks in peaks_list if pks is not None), default=0)
+    if n_peaks == 0:
+        return
 
-    for row, (fp, peaks, peak_arr, stem) in enumerate(
-        zip(fps, peaks_list, peak_arrs, stems)
-    ):
-        ax = axes[row, 0]
-        good = ~fp.masked
-        r2   = fp.r2_grid[good]
-        prof = fp.profile[good]
-        sig  = fp.sigma_profile[good]
-        sig  = np.where(sig > 0, sig, np.nan)
+    r2_arr  = np.full((n_peaks, n_frames), float("nan"))
+    sig_arr = np.full((n_peaks, n_frames), float("nan"))
 
-        bg_level = float(np.percentile(prof, 10))
+    for j, (pks, pa) in enumerate(zip(peaks_list, peak_arrs)):
+        if pks is None or pa is None:
+            continue
+        for i, p in enumerate(pks):
+            if i >= n_peaks:
+                break
+            if np.isfinite(p.r2_fit_px2):
+                r2_arr[i, j]  = p.r2_fit_px2
+            if np.isfinite(p.sigma_r2_fit_px2):
+                sig_arr[i, j] = p.sigma_r2_fit_px2
 
-        # Shaded SEM bands
-        ax.fill_between(r2, prof - 2*sig, prof + 2*sig,
-                        alpha=0.20, color="steelblue")
-        ax.fill_between(r2, prof - sig, prof + sig,
-                        alpha=0.35, color="steelblue")
-        # Profile line
-        ax.plot(r2, prof, color="steelblue", linewidth=0.8,
-                marker="o", markersize=2, zorder=3, label="Profile")
-
-        seen_labels: set = set()
-        for i, p in enumerate(peaks):
-            line_id  = peak_arr[i, 9]
-            color    = "royalblue" if line_id == 0.0 else "darkorange"
-            lam_str  = f"{_LAM_A_NM:.1f} nm" if line_id == 0.0 else f"{_LAM_B_NM:.1f} nm"
-
-            # Red vertical centroid line
-            ax.axvline(p.r2_fit_px2 if (p.fit_ok and np.isfinite(p.r2_fit_px2))
-                       else p.r2_raw_px2,
-                       color="red", linewidth=0.8, linestyle="-", alpha=0.6)
-
-            # Dashed family colour line at raw position
-            lbl = lam_str if lam_str not in seen_labels else None
-            ax.axvline(p.r2_raw_px2, color=color, linewidth=0.6,
-                       linestyle="--", alpha=0.5, label=lbl)
-            if lbl:
-                seen_labels.add(lam_str)
-
-            # Gaussian fit overlay
-            if p.fit_ok and np.isfinite(p.r2_fit_px2) and np.isfinite(p.width_r2_px2):
-                r2_span = np.linspace(
-                    p.r2_fit_px2 - 3 * p.width_r2_px2,
-                    p.r2_fit_px2 + 3 * p.width_r2_px2,
-                    80,
-                )
-                gauss = p.amplitude_adu * np.exp(
-                    -0.5 * ((r2_span - p.r2_fit_px2) / p.width_r2_px2) ** 2
-                )
-                ax.plot(r2_span, gauss + bg_level, color=color,
-                        linewidth=1.2, alpha=0.85, zorder=4)
-
-        n_ok   = sum(1 for p in peaks if p.fit_ok)
-        ax.set_xlabel("r²  (px²)", fontsize=9)
-        ax.set_ylabel("Intensity  (ADU)", fontsize=9)
-        ax.set_title(
-            f"{stem} — radial profile with detected peaks  |  "
-            f"{n_ok}/{len(peaks)} fits OK",
-            fontsize=9,
+    with np.errstate(all="ignore"):
+        n_valid = np.sum(np.isfinite(r2_arr), axis=1)
+        r2_mean = np.nanmean(r2_arr, axis=1)
+        r2_sem  = np.where(
+            n_valid > 1,
+            np.nanstd(r2_arr, axis=1, ddof=1) / np.sqrt(np.maximum(n_valid, 1)),
+            float("nan"),
         )
-        ax.legend(fontsize=8)
+
+    col_headers = [s[:12] for s in stems] + ["Mean ± SE"]
+
+    row_labels = []
+    cell_data  = []
+    for i in range(n_peaks):
+        lam_str = "?"
+        for pa in peak_arrs:
+            if pa is not None and i < len(pa):
+                lam_str = f"{_LAM_A_NM:.1f}" if pa[i, 9] == 0.0 else f"{_LAM_B_NM:.1f}"
+                break
+        row_labels.append(f"P{i}  {lam_str} nm")
+
+        row = []
+        for j in range(n_frames):
+            r2v, sv = r2_arr[i, j], sig_arr[i, j]
+            if np.isfinite(r2v) and np.isfinite(sv):
+                row.append(f"{r2v:.2f} ± {sv:.2f}")
+            elif np.isfinite(r2v):
+                row.append(f"{r2v:.2f}")
+            else:
+                row.append("—")
+        if np.isfinite(r2_mean[i]) and np.isfinite(r2_sem[i]):
+            row.append(f"{r2_mean[i]:.2f} ± {r2_sem[i]:.2f}")
+        elif np.isfinite(r2_mean[i]):
+            row.append(f"{r2_mean[i]:.2f}")
+        else:
+            row.append("—")
+        cell_data.append(row)
+
+    n_cols  = n_frames + 1
+    fig_w   = max(8.0, 2.2 * n_cols + 1.8)
+    fig_h   = max(4.0, 0.42 * n_peaks + 1.4)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off")
+    fig.suptitle(
+        "Stage 3a — Peak Fit Centres  r² (px²) ± 1σ",
+        fontsize=11, fontweight="bold",
+    )
+
+    tbl = ax.table(
+        cellText=cell_data,
+        rowLabels=row_labels,
+        colLabels=col_headers,
+        loc="center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8)
+    tbl.scale(1, 1.9)
+
+    for (ri, ci), cell in tbl.get_celld().items():
+        if ri == 0:
+            cell.set_facecolor("#4472C4")
+            cell.set_text_props(color="white", fontweight="bold")
+        elif ci == -1:
+            cell.set_facecolor("#D6DCE4")
+            cell.set_text_props(fontweight="bold")
+        elif ci == n_frames:
+            cell.set_facecolor("#E2EFDA")
+        elif ri % 2 == 0:
+            cell.set_facecolor("#F2F2F2")
+        else:
+            cell.set_facecolor("white")
 
     fig.tight_layout()
     _save_and_show(fig, save_path)
@@ -897,9 +921,6 @@ def _figure_s3b(
     half_fsr = float(np.median(same_fam_diffs)) / 2.0 if len(same_fam_diffs) else 300.0
     disp_hw  = half_fsr * 0.48          # display window: ±48% of half-FSR
 
-    def _gauss(x, A, mu, sig, B):
-        return A * np.exp(-0.5 * ((x - mu) / sig) ** 2) + B
-
     for i, p in enumerate(peaks):
         ax = axes_flat[i]
         line_id   = peak_arr[i, 9]
@@ -920,22 +941,6 @@ def _figure_s3b(
         pr_win   = prof_all[mask_win]
         sg_win   = sig_all[mask_win]
         valid    = np.isfinite(sg_win) & (sg_win > 0)
-
-        # ── Background: flank minima inside the fit window ───────────────
-        # Reconstruct same B0 logic as fpi_cal_lib pass-2 refit
-        if i in _FIT_WINDOWS:
-            fit_mask = (r2_all >= _FIT_WINDOWS[i][0]) & \
-                       (r2_all <= _FIT_WINDOWS[i][1]) & good_all
-        else:
-            fit_mask = (r2_all >= p.r2_raw_px2 - disp_hw * 0.5) & \
-                       (r2_all <= p.r2_raw_px2 + disp_hw * 0.5) & good_all
-        fit_idx  = np.where(fit_mask)[0]
-        if len(fit_idx) >= 4:
-            fw = prof_all[fit_idx]
-            q  = max(1, len(fw) // 4)
-            B_draw = float(min(np.min(fw[:q]), np.min(fw[-q:])))
-        else:
-            B_draw = float(np.percentile(pr_win, 10)) if len(pr_win) else 0.0
 
         # Panel background colour
         ax.set_facecolor("#d4edda" if p.fit_ok else "#f8d7da")
@@ -958,15 +963,6 @@ def _figure_s3b(
                         linewidth=0.5, zorder=2, label="Data")
 
         r2_fine = np.linspace(r2_lo, r2_hi, 200)
-
-        # ── Initial guess (centred on fitted position, width from fit) ────
-        w_guess = p.width_r2_px2 if (p.fit_ok and np.isfinite(p.width_r2_px2)) \
-                   else (r2_hi - r2_lo) / 6.0
-        A_guess = p.amplitude_adu if p.fit_ok else float(
-            np.max(pr_win) - B_draw if len(pr_win) else 100)
-        guess_curve = _gauss(r2_fine, A_guess, p.r2_raw_px2, w_guess, B_draw)
-        ax.plot(r2_fine, guess_curve, "--", color="gold",
-                linewidth=1.0, label="Guess", zorder=3)
 
         # ── Parabolic fit (top 50% of data, clipped to y >= DC floor) ────
         coeffs_p = errs_p = None
@@ -1001,12 +997,8 @@ def _figure_s3b(
             ax.axvline(r2f, color="red", lw=1.2, ls="-", zorder=6,
                        label=f"centroid r²={r2f:.1f}")
 
-        ax.set_title(
-            f"Peak {i}  λ={lam_str} nm\n"
-            f"r²={r2f:.1f} ± {sr2:.2f}  χ²={chi2:.2f}",
-            fontsize=7,
-        )
-        # ── Infobox with 1-sigma parabola uncertainties ───────────────────
+        ax.set_title(f"Peak {i}  λ={lam_str} nm", fontsize=7)
+        # ── Infobox with 1-sigma parabola uncertainties (centred) ────────
         if coeffs_p is not None and errs_p is not None:
             param_txt = (
                 f"A={coeffs_p[0]:.4f}±{errs_p[0]:.4f}\n"
@@ -1020,9 +1012,9 @@ def _figure_s3b(
                 f"r²={r2f:.2f}±{sr2:.2f} px²\n"
                 f"χ²={chi2:.2f}"
             )
-        ax.text(0.97, 0.04, param_txt,
+        ax.text(0.5, 0.5, param_txt,
                 transform=ax.transAxes, fontsize=5.5,
-                verticalalignment="bottom", horizontalalignment="right",
+                verticalalignment="center", horizontalalignment="center",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           alpha=0.75, edgecolor="gray"))
 
@@ -1425,17 +1417,17 @@ def main() -> None:
             peak_arrays.append(result[1])
             peaks_list.append(result[0])
 
-    # Combined S3a figure — all frames in one column-per-row layout
+    # Combined S3a table — peak fit centres across all frames
     def _s3a_combined():
         valid = [
-            (fp, pks, pa, path.stem)
-            for fp, pks, pa, path in zip(profiles, peaks_list, peak_arrays, cal_paths)
-            if fp is not None and pks is not None and pa is not None
+            (pks, pa, path.stem)
+            for pks, pa, path in zip(peaks_list, peak_arrays, cal_paths)
+            if pks is not None and pa is not None
         ]
         if valid:
-            fps_v, pks_v, pas_v, stems_v = zip(*valid)
-            _figure_s3a(
-                list(fps_v), list(pks_v), list(pas_v), list(stems_v),
+            pks_v, pas_v, stems_v = zip(*valid)
+            _table_s3a(
+                list(pks_v), list(pas_v), list(stems_v),
                 cal_dir / "S3a_combined.png",
             )
     run_with_error_handling(3, _s3a_combined)
