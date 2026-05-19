@@ -1447,8 +1447,6 @@ def main() -> None:
     print(f"  Using n_pairs = {n_pairs}")
 
     tol_results: list = []
-    _s4_first = [True]  # show the first Tolansky figure interactively; save the rest
-
     for peak_arr, path in zip(peak_arrays, cal_paths):
         if peak_arr is None:
             tol_results.append(None)
@@ -1473,9 +1471,7 @@ def main() -> None:
             tol_fig_path = path.parent / f"{stem}_fig_S4.png"
             fig = plot_tolansky_result(tol, save_path=tol_fig_path)
             print(f"  Saved: {tol_fig_path.name}")
-            if _s4_first[0]:
-                plt.show(block=True)
-                _s4_first[0] = False
+            plt.show(block=True)
             plt.close(fig)
             return tol
 
