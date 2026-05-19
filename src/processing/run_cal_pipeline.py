@@ -968,33 +968,58 @@ def _figure_s3b(
         ax.plot(r2_fine, guess_curve, "--", color="gold",
                 linewidth=1.0, label="Guess", zorder=3)
 
-        # ── LM fit curve (uses B_draw reconstructed from fit window) ─────
-        if p.fit_ok and np.isfinite(p.r2_fit_px2) and np.isfinite(p.width_r2_px2):
-            fit_curve = _gauss(r2_fine,
-                               p.amplitude_adu, p.r2_fit_px2,
-                               p.width_r2_px2,  B_draw)
-            ax.plot(r2_fine, fit_curve, color=fit_color, linewidth=1.5,
-                    label="Fit", zorder=4)
+        # ── Parabolic fit (top 50% of data, clipped to y >= DC floor) ────
+        coeffs_p = errs_p = None
+        if valid.any() and valid.sum() >= 3:
+            y_all   = pr_win[valid]
+            thresh_p = float(np.min(y_all)) + 0.5 * (float(np.max(y_all)) - float(np.min(y_all)))
+            mask_top = y_all >= thresh_p
+            xm, ym   = r2_win[valid][mask_top], y_all[mask_top]
+            if len(xm) >= 3:
+                try:
+                    coeffs_p, cov_p = np.polyfit(xm, ym, 2, cov=True)
+                    errs_p = np.sqrt(np.diag(cov_p))
+                except np.linalg.LinAlgError:
+                    coeffs_p = np.polyfit(xm, ym, 2)
+                    errs_p = np.full(3, float("nan"))
+                if coeffs_p[0] < 0:
+                    y_floor_p   = coeffs_p[2]
+                    poly_vals_p = np.polyval(coeffs_p, r2_fine)
+                    mask_above  = poly_vals_p >= y_floor_p
+                    if mask_above.any():
+                        ax.plot(r2_fine[mask_above], poly_vals_p[mask_above],
+                                color=fit_color, linewidth=1.5, zorder=4,
+                                label="Parabola + offset")
 
         # ── Annotate fit parameters ───────────────────────────────────────
         r2f  = p.r2_fit_px2        if np.isfinite(p.r2_fit_px2)        else float("nan")
         sr2  = p.sigma_r2_fit_px2  if np.isfinite(p.sigma_r2_fit_px2)  else float("nan")
-        wid  = p.width_r2_px2      if np.isfinite(p.width_r2_px2)      else float("nan")
-        amp  = p.amplitude_adu
         chi2 = p.reduced_chi2      if np.isfinite(p.reduced_chi2)      else float("nan")
+
+        # ── Vertical red line at centroid ─────────────────────────────────
+        if np.isfinite(r2f):
+            ax.axvline(r2f, color="red", lw=1.2, ls="-", zorder=6,
+                       label=f"centroid r²={r2f:.1f}")
 
         ax.set_title(
             f"Peak {i}  λ={lam_str} nm\n"
             f"r²={r2f:.1f} ± {sr2:.2f}  χ²={chi2:.2f}",
             fontsize=7,
         )
-        # Parameter box in lower right
-        param_txt = (
-            f"A = {amp:.0f} ADU\n"
-            f"μ = {r2f:.1f} px²\n"
-            f"σ = {wid:.1f} px²\n"
-            f"B = {B_draw:.0f} ADU"
-        )
+        # ── Infobox with 1-sigma parabola uncertainties ───────────────────
+        if coeffs_p is not None and errs_p is not None:
+            param_txt = (
+                f"A={coeffs_p[0]:.4f}±{errs_p[0]:.4f}\n"
+                f"B={coeffs_p[1]:.2f}±{errs_p[1]:.2f}\n"
+                f"C={coeffs_p[2]:.0f}±{errs_p[2]:.0f} ADU\n"
+                f"r²={r2f:.2f}±{sr2:.2f} px²\n"
+                f"χ²={chi2:.2f}"
+            )
+        else:
+            param_txt = (
+                f"r²={r2f:.2f}±{sr2:.2f} px²\n"
+                f"χ²={chi2:.2f}"
+            )
         ax.text(0.97, 0.04, param_txt,
                 transform=ax.transAxes, fontsize=5.5,
                 verticalalignment="bottom", horizontalalignment="right",

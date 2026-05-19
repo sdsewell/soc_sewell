@@ -1879,9 +1879,10 @@ def _plot_all_fringe_diagnostics_r2(
             ax.errorbar(r2_w, p_w, yerr=sem_w,
                         fmt="o", color="steelblue", markersize=4,
                         ecolor="cornflowerblue", elinewidth=1.0, capsize=2,
-                        zorder=3)
+                        zorder=3, label="Data")
 
         # Parabolic fit curve — recompute polynomial for display (orange solid)
+        coeffs = errs = None
         if para_ok and win_use.size >= 3:
             y_min_w  = float(np.min(p_w))
             y_max_w  = float(np.max(p_w))
@@ -1889,27 +1890,46 @@ def _plot_all_fringe_diagnostics_r2(
             mask_top = p_w >= thresh
             xm, ym   = r2_w[mask_top], p_w[mask_top]
             if len(xm) >= 3:
-                coeffs = np.polyfit(xm, ym, 2)
+                try:
+                    coeffs, cov = np.polyfit(xm, ym, 2, cov=True)
+                    errs = np.sqrt(np.diag(cov))
+                except np.linalg.LinAlgError:
+                    coeffs = np.polyfit(xm, ym, 2)
+                    errs = np.full(3, float("nan"))
                 if coeffs[0] < 0:
-                    ax.plot(r2_fine, np.polyval(coeffs, r2_fine),
-                            color="darkorange", lw=1.8, zorder=4)
+                    y_floor   = coeffs[2]
+                    poly_vals = np.polyval(coeffs, r2_fine)
+                    mask_above = poly_vals >= y_floor
+                    if mask_above.any():
+                        ax.plot(r2_fine[mask_above], poly_vals[mask_above],
+                                color="darkorange", lw=1.8, zorder=4,
+                                label="Parabola + offset")
 
-        # Gaussian curve — dashed blue, only if gauss_ok
-        if gauss_ok and win_use.size > 0:
-            B_est   = float(np.percentile(p_w, 20))
-            y_gauss = _gaussian(r2_fine, pf.amplitude_adu, r2_fit,
-                                pf.width_r2_px2, B_est)
-            ax.plot(r2_fine, y_gauss, color="steelblue", lw=1.2, ls="--", zorder=2)
-
-        # Raw detection (gray dashed) and fitted centroid (orange solid + band)
+        # Raw detection (gray dashed) and fitted centroid (red solid + band)
         ax.axvline(pf.r2_raw_px2, color="gray", lw=0.9, ls="--", alpha=0.6)
         if fit_ok:
-            ax.axvline(r2_fit, color="darkorange", lw=1.0, ls="-", alpha=0.9, zorder=5)
+            ax.axvline(r2_fit, color="red", lw=1.2, ls="-", zorder=6,
+                       label=f"centroid r²={r2_fit:.1f}")
             if np.isfinite(sigma_r2_fit):
                 ax.axvspan(r2_fit - sigma_r2_fit, r2_fit + sigma_r2_fit,
                            alpha=0.15, color="darkorange", zorder=1)
 
         ax.set_xlim(max(0.0, r2_lo_plot), r2_hi_plot)
+
+        # ── Infobox with 1-sigma parabola uncertainties ───────────────────────
+        if coeffs is not None and errs is not None:
+            info_txt = (
+                f"A={coeffs[0]:.4f}±{errs[0]:.4f}\n"
+                f"B={coeffs[1]:.2f}±{errs[1]:.2f}\n"
+                f"C={coeffs[2]:.0f}±{errs[2]:.0f} ADU\n"
+                f"r²={r2_fit:.2f}±{sigma_r2_fit:.2f} px²\n"
+                f"χ²={reduced_chi2:.2f}"
+            )
+            ax.text(0.97, 0.04, info_txt,
+                    transform=ax.transAxes, fontsize=5.5,
+                    verticalalignment="bottom", horizontalalignment="right",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                              alpha=0.75, edgecolor="gray"))
 
         # ── Title ────────────────────────────────────────────────────────────
         lam_str = "640.2" if k % 2 == 0 else "638.3"
@@ -1938,6 +1958,7 @@ def _plot_all_fringe_diagnostics_r2(
         ax.tick_params(labelsize=6.5)
         ax.set_xlabel("r² [px²]", fontsize=7)
         ax.set_ylabel("ADU", fontsize=7)
+        ax.legend(fontsize=5.5, loc="upper left")
 
     for idx in range(n_peaks, n_rows * n_cols):
         r, c = divmod(idx, n_cols)
