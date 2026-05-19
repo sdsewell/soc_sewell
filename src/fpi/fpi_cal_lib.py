@@ -2623,6 +2623,7 @@ def to_m05_priors(result: TolanskyResult) -> dict:
 def plot_tolansky_result(
     result: TolanskyResult,
     save_path=None,
+    subtitle: str = "",
 ):
     """
     Four-panel diagnostic figure for the S13a two-line Tolansky analysis.
@@ -2837,16 +2838,17 @@ def plot_tolansky_result(
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           edgecolor=GRAY, alpha=0.85))
 
-    src_name = (str(pathlib.Path(r.source_path))
-                if r.source_path else "source file not recorded")
+    src_label = (subtitle or
+                 (str(pathlib.Path(r.source_path)) if r.source_path else ""))
     fig.suptitle(
         "Tolansky Two-Line Analysis  "
         f"(λ_a = {r.lam_a_nm:.4f} nm,  λ_b = {r.lam_b_nm:.4f} nm)",
         color=BLACK, fontsize=13, fontweight="bold", y=0.99,
     )
-    fig.text(0.5, 0.965, src_name,
-             ha="center", va="top", fontsize=9,
-             color=GRAY, fontfamily="monospace")
+    if src_label:
+        fig.text(0.5, 0.965, src_label,
+                 ha="center", va="top", fontsize=9,
+                 color=GRAY, fontfamily="monospace")
 
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")

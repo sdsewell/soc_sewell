@@ -1469,7 +1469,8 @@ def main() -> None:
                   f"ε_a={tol.eps_a:.6f}")
 
             tol_fig_path = path.parent / f"{stem}_fig_S4.png"
-            fig = plot_tolansky_result(tol, save_path=tol_fig_path)
+            fig = plot_tolansky_result(tol, save_path=tol_fig_path,
+                                       subtitle=str(path))
             print(f"  Saved: {tol_fig_path.name}")
             plt.show(block=True)
             plt.close(fig)
