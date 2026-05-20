@@ -94,20 +94,21 @@ _KNOWN_FRAME_SIZES = [(260, 276), (528, 552)]
 
 def load_raw(path: str):
     """
-    Load the header row and image pixel region from a big-endian FPI binary.
-    Frame dimensions are read from header words 0 (n_rows_frame) and 1 (n_cols_frame),
-    so both 2×2 binned (260×276) and 1×1 unbinned (528×552) files are supported.
+    Load the header row and image pixel region from a little-endian FPI binary
+    (raw, un-swapped format).  Frame dimensions are read from header words 0
+    (n_rows_frame) and 1 (n_cols_frame), so both 2×2 binned (260×276) and
+    1×1 unbinned (528×552) files are supported.
 
     If the header dimensions are corrupt or missing, the function falls back to
     the known frame size that matches the file size exactly.
 
     Returns
     -------
-    header_be : ndarray (n_cols_frame,) uint16  — full header row, big-endian decoded
-    image     : ndarray (n_rows_frame-1, n_cols_frame) uint16 — pixel data
+    header : ndarray (n_cols_frame,) uint16  — full header row, decoded
+    image  : ndarray (n_rows_frame-1, n_cols_frame) uint16 — pixel data
     """
     with open(path, "rb") as f:
-        first_words = np.frombuffer(f.read(4), dtype=">u2")
+        first_words = np.frombuffer(f.read(4), dtype="<u2")
     n_rows_frame = int(first_words[0])
     n_cols_frame = int(first_words[1])
 
@@ -129,7 +130,7 @@ def load_raw(path: str):
                 f"expected {expected} for a {n_rows_frame}×{n_cols_frame} uint16 image, "
                 f"and size does not match any known frame geometry."
             )
-    raw = np.frombuffer(open(path, "rb").read(), dtype=">u2")
+    raw = np.frombuffer(open(path, "rb").read(), dtype="<u2")
     return raw[:n_cols_frame].copy(), raw[n_cols_frame:].reshape(n_rows_frame - 1, n_cols_frame)
 
 
@@ -457,8 +458,13 @@ def _build_figure(
         f"WindCube FPI Metadata (from binary header row) — {filename}",
         fontsize=11, fontweight="bold", pad=8,
     )
-    fig.suptitle(f"WindCube FPI — {filename}", fontsize=12, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    cr, cc = fringe_center
+    fig.suptitle(
+        f"WindCube FPI — {filename}\n"
+        f"ROI half-width: {roi_half} px  |  Centre: cx = {cc}, cy = {cr}",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
 
 
@@ -495,29 +501,14 @@ def main() -> None:
     print(f"Image type  : {metadata['img_type']}")
 
     # ── Detect binning and set defaults ───────────────────────────────────
-    n_rows, n_cols = image.shape
+    _, n_cols = image.shape
     unbinned        = (n_cols >= 500)          # 552 cols → 1×1; 276 cols → 2×2
     roi_half_default   = 216 if unbinned else 130
     #fringe_center_default = (n_rows // 2, n_cols // 2)
     fringe_center_default = (144,144)
     print(f"Binning       : {'1×1 unbinned' if unbinned else '2×2 binned'}")
 
-    # ── Prompt for ROI half-size ───────────────────────────────────────────
-    _raw = input(
-        f"ROI half-size        [px,  default {roi_half_default:3d}       ] : "
-    ).strip()
-    if _raw:
-        try:
-            roi_half = int(_raw)
-            if not (10 <= roi_half <= min(n_rows, n_cols) // 2):
-                print(f"  Out of range — using default {roi_half_default}.")
-                roi_half = roi_half_default
-        except ValueError:
-            print(f"  Invalid input — using default {roi_half_default}.")
-            roi_half = roi_half_default
-    else:
-        roi_half = roi_half_default
-
+    roi_half = roi_half_default
     print(f"ROI half-size : {roi_half} px  ({roi_half * 2}×{roi_half * 2} ROI)")
 
     # ── Pre-compute metadata table dimensions (shared by both figures) ───────
@@ -547,34 +538,15 @@ def main() -> None:
                         col_labels, cell_text, row_heights_in, table_h_in,
                         roi_half)
 
-    print("\nClick on the FULL-FRAME IMAGE panel (top-left) to mark the coarse")
-    print("fringe centre.  Press Enter to accept the default centre.")
-    coords = plt.ginput(1, timeout=0)
-    plt.close(fig)
-
-    if coords:
-        cx_coarse = float(np.clip(coords[0][0], 0, n_cols - 1))
-        cy_coarse = float(np.clip(coords[0][1], 0, n_rows - 1))
-    else:
-        cx_coarse = float(fringe_center_default[1])
-        cy_coarse = float(fringe_center_default[0])
-
-    print(f"Coarse fringe centre  : cx = {cx_coarse:.1f} px,  cy = {cy_coarse:.1f} px")
-
-    # ── Figure 2: updated ROI centred on user-selected coarse centre ──────
-    fringe_center_coarse = (int(round(cy_coarse)), int(round(cx_coarse)))
-    roi = extract_roi(image, fringe_center_coarse, roi_half)
-    print(f"Updated ROI           : {roi.shape[0]} rows × {roi.shape[1]} cols  "
-          f"centred at row={fringe_center_coarse[0]}, col={fringe_center_coarse[1]}")
-
-    fig = _build_figure(image, roi, fringe_center_coarse, filename,
-                        col_labels, cell_text, row_heights_in, table_h_in,
-                        roi_half)
-    plt.show()
-
     # ── Save outputs alongside the source binary ──────────────────────────
     src = pathlib.Path(bin_file)
     stem = src.stem.replace("_L0", "")
+
+    png_path = src.with_name(stem + "_load_image.png")
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    print(f"Figure saved    : {png_path}")
+
+    plt.show()
 
     raw_path = src.with_name(stem + "_raw_L0.npy")
     np.save(raw_path, image)
