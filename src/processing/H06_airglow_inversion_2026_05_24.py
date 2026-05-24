@@ -292,7 +292,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
     """
     # Compute lc_seed from calibration phase (epsilon_cal from H05).
-    # Harding (2014) convention: lambda_0 = 630.0 nm.
+    # Uses OI_WAVELENGTH_AIR_M (630.0304 nm, NIST) — same as H03 synthesis.
     #
     # BUG FIX (2026-05-24): the previous formula
     #   eps_OI_exp = (2*t/lam) % 1
@@ -310,7 +310,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     # This places the scan window centred on the actual zero-wind OI fringe
     # position, so a ±0.75 FSR window reliably captures cross-track winds
     # of ±500 m/s and along-track winds when v_los_prior_ms is supplied.
-    N_int_OI      = round(2.0 * cal.t_m / 630.0e-9)
+    N_int_OI      = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
     lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + cal.epsilon_cal)
     # Shift by the a-priori LOS velocity
     lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
@@ -322,8 +322,8 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
              f"(v_prior={v_los_prior_ms:+.0f} m/s, "
              f"eps_cal={cal.epsilon_cal:.6f})")
-    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-630.0e-9)/630.0e-9:+.0f}, "
-             f"{SPEED_OF_LIGHT_MS*(lc_hi-630.0e-9)/630.0e-9:+.0f}] m/s")
+    log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}, "
+             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s")
 
     r_fine   = np.linspace(0.0, r_max, n_fine)
     n_good   = len(r_good)
@@ -362,7 +362,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 
     log.info(f"  Scan best: λ_c = {lambda_c_best*1e9:.6f} nm  "
              f"chi2 = {chi2_min:.3f}  "
-             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-630.0e-9)/630.0e-9:+.1f} m/s")
+             f"v_rel ≈ {SPEED_OF_LIGHT_MS*(lambda_c_best-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.1f} m/s")
 
     return lambda_c_best, chi2_min, scan_ambiguous, scan, chi2_arr
 def _run_lm(r_good, prof_good, sigma_good, r_max, cal,
@@ -741,8 +741,8 @@ def run_airglow_inversion(
     # Bug note: the module-level FSR_OI_M uses ETALON_GAP_M (~20.0006 mm),
     # which differs from cal.t_m (~20.107 mm) by ~0.5%, causing a 25 m/s
     # FSR error.  Always compute FSR from cal.t_m here.
-    # Use Harding lambda_0 = 630.0 nm (not NIST air 630.0304 nm).
-    fsr_oi = (630.0e-9) ** 2 / (2.0 * cal.t_m)
+    # FSR uses OI_WAVELENGTH_AIR_M (630.0304 nm) — consistent with H03.
+    fsr_oi = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * cal.t_m)
 
     # ── Restrict to r <= r_max ────────────────────────────────────────────
     in_range    = r_grid <= r_max
@@ -762,7 +762,7 @@ def run_airglow_inversion(
         n_scan=n_scan, n_fine=n_fine,
         v_los_prior_ms=v_los_prior_ms,
     )
-    scan_v_ms_arr = SPEED_OF_LIGHT_MS * (_scan_lc - 630.0e-9) / 630.0e-9
+    scan_v_ms_arr = SPEED_OF_LIGHT_MS * (_scan_lc - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
 
     # ── Initial Y_line, B_sci from analytic solve at lc_best ─────────────
     r_fine    = np.linspace(0.0, r_max, n_fine)
@@ -798,9 +798,9 @@ def run_airglow_inversion(
     sigma_lc, sigma_Y, sigma_B = stderrs
 
     # ── Derived quantities ────────────────────────────────────────────────
-    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
-    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - 630.0e-9) / 630.0e-9
-    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / 630.0e-9
+    # Uses OI_WAVELENGTH_AIR_M (630.0304 nm) — consistent with H03 synthesis.
+    v_rel_ms   = SPEED_OF_LIGHT_MS * (lc_m - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
+    sigma_v_ms = SPEED_OF_LIGHT_MS * sigma_lc / OI_WAVELENGTH_AIR_M
     budget_ok  = bool(sigma_v_ms <= 9.8)
 
     return AirglowResult(
@@ -985,6 +985,12 @@ def main():
         converged=converged, scan_ambiguous=scan_ambiguous,
         cal=cal, fsr_oi=fsr_oi,
         source_name=prof_path.name, source_path=str(prof_path))
+
+    # ---- 12. Save figure ----
+    fig_path = prof_path.with_name(prof_path.stem + "_h06_inversion.png")
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"\n  Figure saved → {fig_path}")
+
     plt.show()
 
 
