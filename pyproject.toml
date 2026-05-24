@@ -13,3 +13,4 @@ include = ["src*"]
 
 [tool.pytest.ini_options]
 norecursedirs = ["tests/archive", ".git", ".venv"]
+pythonpath = ["."]
