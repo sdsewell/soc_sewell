@@ -14,6 +14,7 @@
 | S11  | M04         | impl   | passing  | 2026-04-06    |
 | S12  | M03         | PASS   | 6/7      | 2026-05-13    |
 | M03-add | m03_airglow_synthesis_2026_05_24 | IMPLEMENTED | 7/7 | 2026-05-24 |
+| M06-add | m06_airglow_inversion_2026_05_24 | IMPLEMENTED | 8/8 | 2026-05-24 |
 | S13  | Tolansky    | impl   | passing  | 2026-04-06    |
 | S13a | tolansky_2line_2026-05-05 | impl | 7/7 | 2026-05-05 |
 | S13b | tolansky_1line_2026-05-05 | impl | 6/6 | 2026-05-05 |
