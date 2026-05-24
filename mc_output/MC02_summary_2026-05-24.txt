@@ -1,0 +1,32 @@
+WindCube MC02 Monte Carlo Simulation Summary
+============================================
+Run date         : 2026-05-24 21:43:17 UTC
+CAL01 git hash   : 282988ab24bd
+MC01 git hash    : 8d9848729a6b
+RNG seed         : 42
+
+Simulation 1 (Uncertainty Estimates)
+  N trials             : 10,000
+  N converged          : 10,000  (100.0%)
+  Mean σ_v             : 19.25 m/s   [Harding: ~1.8 m/s]
+  Mean σ_T             : 57.6 K     [Harding: ~6.5 K]
+  Fraction within 1σ v : 0.646       [expect 0.683]
+  Fraction within 1σ T : 0.259       [expect 0.683]
+  Blue/red axis ratio v: 1.013       [expect ~1.00]
+  Blue/red axis ratio T: 3.946       [expect ~1.00]
+
+Simulation 2 (Biases Over Wind and Temperature)
+  N trials             : 1,000
+  N converged          : 998  (99.8%)
+  Median v bias        : 4.956 m/s   [Harding: ~0.4 m/s]
+  Median T bias        : 126.11 K
+  Max |v bias| binned  : 9.83 m/s
+  Max |T bias| binned  : 696.2 K
+
+Simulation 3 (Biases Over SNR)
+  N trials             : 10,000
+  N converged          : 9,744  (97.4%)
+  Median v bias (all)  : 1.801 m/s
+  Median T bias (all)  : 37.84 K
+  Convergence SNR < 1  : 75.9%
+  Convergence SNR > 3  : 99.9%
