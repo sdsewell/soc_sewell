@@ -72,7 +72,7 @@ Library function (added 2026-05-14):
      passed explicitly to _lambda_c_scan, _run_lm, _compute_covariance, and
      make_figure.  The module-level FSR_OI_M is retained only as a placeholder.
    - Scan redesigned: phase-seeded ±0.75 FSR window around lc_seed derived from
-     eps_OI_expected = (2×cal.t_m/λ_OI) mod 1.  Single FSR bin in scan window
+     lc_seed = 2×cal.t_m / (N_int_OI + cal.epsilon_cal).  Single FSR bin in scan window
      eliminates alias degeneracy.  New v_los_prior_ms parameter for along-track.
    - n_scan = 300 (same; grid is now denser within the narrower window).
 
@@ -274,8 +274,8 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     The correct approach is to RESTRICT the scan to a single FSR bin, chosen
     using the calibration phase:
 
-        eps_OI_expected = (2 × cal.t_m / λ_OI) mod 1
-        lc_seed = 2 × cal.t_m / (N_int_OI + eps_OI_expected)  ≈ λ_OI
+        lc_seed = 2 × cal.t_m / (N_int_OI + cal.epsilon_cal)
+        (epsilon_cal is the fractional interference order fitted by H05)
 
     where N_int_OI = round(2 × cal.t_m / λ_OI).  This is the λ_c value at which
     the model Airy fringe (using cal.t_m) peaks at the same fractional phase
@@ -291,12 +291,27 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
     """
-    # Compute lc_seed from calibration phase
-    # Harding (2014) convention: lambda_0 = 630.0 nm (not NIST air 630.0304 nm)
-    N_int_OI     = round(2.0 * cal.t_m / 630.0e-9)
-    eps_OI_exp   = (2.0 * cal.t_m / 630.0e-9) % 1.0
-    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + eps_OI_exp)
-    # Sanity: lc_seed_0wind ≈ 630.0e-9 m (within a few fm)
+    # Compute lc_seed from calibration phase (epsilon_cal from H05).
+    # Harding (2014) convention: lambda_0 = 630.0 nm.
+    #
+    # BUG FIX (2026-05-24): the previous formula
+    #   eps_OI_exp = (2*t/lam) % 1
+    #   lc_seed    = 2*t / (N_int + eps_OI_exp)
+    # is a tautology: N_int + eps_OI_exp == 2*t/lam exactly, so
+    # lc_seed always collapses to lam_0 regardless of t.  It throws
+    # away all phase information and places the scan window at 630.0 nm
+    # instead of the true zero-wind fringe position.
+    #
+    # The correct seed uses cal.epsilon_cal — the fractional interference
+    # order at the pattern centre, fitted by H05 from the neon calibration:
+    #
+    #   lc_seed_0wind = 2 * cal.t_m / (N_int_OI + cal.epsilon_cal)
+    #
+    # This places the scan window centred on the actual zero-wind OI fringe
+    # position, so a ±0.75 FSR window reliably captures cross-track winds
+    # of ±500 m/s and along-track winds when v_los_prior_ms is supplied.
+    N_int_OI      = round(2.0 * cal.t_m / 630.0e-9)
+    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + cal.epsilon_cal)
     # Shift by the a-priori LOS velocity
     lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
 
@@ -306,7 +321,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 
     log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
              f"(v_prior={v_los_prior_ms:+.0f} m/s, "
-             f"eps_OI_exp={eps_OI_exp:.6f})")
+             f"eps_cal={cal.epsilon_cal:.6f})")
     log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-630.0e-9)/630.0e-9:+.0f}, "
              f"{SPEED_OF_LIGHT_MS*(lc_hi-630.0e-9)/630.0e-9:+.0f}] m/s")
 
@@ -970,11 +985,6 @@ def main():
         converged=converged, scan_ambiguous=scan_ambiguous,
         cal=cal, fsr_oi=fsr_oi,
         source_name=prof_path.name, source_path=str(prof_path))
-
-    fig_path = prof_path.parent / f"{prof_path.stem}_h06_inversion.png"
-    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
-    print(f"\nFigure saved: {fig_path}")
-
     plt.show()
 
 
