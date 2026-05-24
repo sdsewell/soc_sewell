@@ -88,7 +88,7 @@ print()
 print(SEP)
 print("SECTION 5 — Intercept _lambda_c_scan: what cal.t_m does it see?")
 print(SEP)
-import src.processing.H06_airglow_inversion_2026_05_14 as _h06mod
+import src.processing.archive.H06_airglow_inversion_2026_05_14 as _h06mod
 
 _original_scan = _h06mod._lambda_c_scan
 

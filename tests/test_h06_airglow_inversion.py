@@ -286,7 +286,7 @@ def test_sigma_v_within_stm_budget(synthetic_cal_result):
 def test_run_airglow_inversion_returns_airglowresult():
     """T1: run_airglow_inversion returns AirglowResult with expected fields."""
     import numpy as np
-    from src.processing.H06_airglow_inversion_2026_05_14 import (
+    from src.processing.archive.H06_airglow_inversion_2026_05_14 import (
         run_airglow_inversion, AirglowResult, _CalResult
     )
 
@@ -329,7 +329,7 @@ def test_run_airglow_inversion_raises_on_too_few_bins():
     """T2: ValueError raised when fewer than 10 bins within r_max."""
     import numpy as np
     import pytest
-    from src.processing.H06_airglow_inversion_2026_05_14 import (
+    from src.processing.archive.H06_airglow_inversion_2026_05_14 import (
         run_airglow_inversion, _CalResult
     )
     cal = _CalResult(t_m=20.106e-3, alpha=1.6071e-4, R_refl=0.53,

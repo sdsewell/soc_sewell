@@ -75,7 +75,7 @@ print(f"eps_OI from h06cal.t_m = {eps2:.9f}  (should be ~0.276)")
 print("\n\n" + "=" * 60)
 print("DIRECT run_airglow_inversion CALL")
 print("=" * 60)
-from src.processing.H06_airglow_inversion_2026_05_14 import run_airglow_inversion
+from src.processing.archive.H06_airglow_inversion_2026_05_14 import run_airglow_inversion
 
 # Build a synthetic profile that looks like a science fringe
 r_grid = np.linspace(1.0, 110.0, 500)
