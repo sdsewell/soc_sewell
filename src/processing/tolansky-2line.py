@@ -1222,9 +1222,22 @@ if __name__ == "__main__":
     import tkinter as tk
     from tkinter import filedialog
 
-    # ── Load canonical S13a implementation ────────────────────────────────────
-    _fpi_path = (pathlib.Path(__file__).resolve().parent.parent
-                 / "fpi" / "tolansky_2026-05-13.py")
+# ── Load canonical S13a implementation ────────────────────────────────────
+    _fpi_dir = pathlib.Path(__file__).resolve().parent.parent / "fpi"
+
+    # Try plain name first, then dated variants (tolansky_YYYY-MM-DD.py)
+    _fpi_path = _fpi_dir / "tolansky.py"
+    if not _fpi_path.exists():
+        _candidates = sorted(_fpi_dir.glob("tolansky*.py"))
+        if not _candidates:
+            raise FileNotFoundError(
+                f"No tolansky*.py implementation found in {_fpi_dir}"
+            )
+        _fpi_path = _candidates[-1]
+        print(f"  Note: using implementation → {_fpi_path.name}")
+    else:
+        print(f"  Using implementation → {_fpi_path.name}")
+
     _s13a_spec = importlib.util.spec_from_file_location(
         "tolansky_2line_s13a", str(_fpi_path)
     )

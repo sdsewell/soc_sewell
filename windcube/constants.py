@@ -7,8 +7,8 @@ here rather than hardcoding.
 Sources:
   OI_WAVELENGTH_NM    : NIST ASD (https://physics.nist.gov/PhysRefData/ASD/lines_form.html)
   OI_WAVELENGTH_VAC_NM: derived via Edlén (1966) air-to-vacuum formula
-  ALPHA_RAD_PX        : S13a two-line neon Tolansky fit (2x2 binned, 2026-05-06)
-  D_TOLANSKY_MM       : S13a two-line neon Tolansky fit (Benoit, 2026-05-06)
+  ALPHA_RAD_PX        : S13a two-line neon Tolansky fit (2x2 binned, 2026-05-24)
+  D_TOLANSKY_MM       : S13a two-line neon Tolansky fit (Benoit, 2026-05-24)
   ICOS_GAP_MM         : ICOS mechanical spacer measurement
   D_25C_MM            : ICOS_GAP_MM minus Pat & Nir pre-load compression
   D_PRELOAD_NM        : Pat & Nir clamping compression (Zerodur spacer)
@@ -30,10 +30,10 @@ import math
 # ---------------------------------------------------------------------------
 
 # Etalon / optics
-ETALON_GAP_M        : float = 20.1071e-3    # m  — S13a Tolansky Benoit (2026-05-06); 1σ = 0.0002 mm
+ETALON_GAP_M        : float = 20.10695e-3   # m  — S13a Tolansky Benoit (2026-05-24); 1σ = 0.0002 mm
 ETALON_N            : float = 1.0           # —  — refractive index of etalon gap (air)
 ETALON_R_INSTRUMENT : float = 0.53         # —  — effective reflectivity (FlatSat)
-# ALPHA_RAD_PX defined below in opto-mechanical section (1.6085e-4 rad/px)
+# ALPHA_RAD_PX defined below in opto-mechanical section (1.608163e-4 rad/px)
 
 # CCD / FOV
 CCD_PIXELS_UNBINNED : int   = 512           # px — physical pixels per side (CCD97)
@@ -93,17 +93,18 @@ NE_WAVELENGTH_2_VAC_NM: float = 638.47560  # nm, vacuum (NIST ASD; ±0.00005 nm)
 # ---------------------------------------------------------------------------
 
 # Etalon plate spacing recovered by S13a two-line Tolansky fit (Benoit method) [mm]
-# d = 20.1071 ± 0.0002 mm  (1σ),  2σ = 0.0004 mm   (2026-05-06)
+# d = 20.10695 ± 0.0002 mm  (1σ),  2σ = 0.0004 mm   (2026-05-24)
+# Previous value: 20.1071 mm  (2026-05-06)
 # NOTE: disagrees with D_25C_MM (mechanical prior) by ~99 µm; discrepancy unresolved.
 # All pipeline code must use ICOS_GAP_MM / D_25C_MM for N_int resolution only.
-D_TOLANSKY_MM:       float = 20.1071
+D_TOLANSKY_MM:       float = 20.10695
 SIGMA_D_TOLANSKY_MM: float = 0.0002   # 1σ [mm]
 
 # Plate scale (2x2 binned) recovered by S13a two-line Tolansky fit [rad/px]
-# alpha = 1.6085e-4 ± 1.3478e-8 rad/px  (1σ),  2σ = 2.6955e-8   (2026-05-06)
-# Old value 1.6071e-4 rad/px superseded.
-ALPHA_RAD_PX:       float = 1.6085e-4
-SIGMA_ALPHA_RAD_PX: float = 1.3478e-8   # 1σ [rad/px]
+# alpha = 1.608163e-4 ± 1.23e-8 rad/px  (1σ),  2σ = 2.45e-8   (2026-05-24)
+# Previous value: 1.6085e-4 ± 1.3478e-8 rad/px  (2026-05-06)
+ALPHA_RAD_PX:       float = 1.608163e-4
+SIGMA_ALPHA_RAD_PX: float = 1.23e-8   # 1σ [rad/px]
 
 # FlatSat effective etalon reflectivity (dimensionless)
 R_REFL: float = 0.53
@@ -164,10 +165,10 @@ EM_GAIN: float = 1.0                       # dimensionless
 # Nominal science frame integration time.
 INTEGRATION_TIME_S: float = 10.0           # seconds
 
-# Plate scale (2×2 binned).  Authoritative Tolansky value from S13a (2026-05-06).
+# Plate scale (2×2 binned).  Authoritative Tolansky value from S13a (2026-05-24).
 # Reproduced here so NB03 can compute pixel solid angle without
 # importing from M01 (which would create a circular Tier dependency).
-ALPHA_RAD_PER_PX: float = 1.6085e-4        # rad / binned pixel
+ALPHA_RAD_PER_PX: float = 1.608163e-4      # rad / binned pixel
 
 # Orbital and observation geometry defaults
 ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit
@@ -177,6 +178,7 @@ VER_LAYER_TOP_M:    float = 490_000.0     # m, upper bound of emission layer for
 # --- Observation regime velocity bounds (H03) ---
 # Cross-track (even orbits): thermospheric wind projected onto LOS
 V_REL_CROSSTRACK_MAX_MS  =  1000.0   # m/s; symmetric: valid range [-1000, +1000]
+
 # Along-track (odd orbits): spacecraft orbital velocity + wind projected onto LOS
 V_REL_ALONGTRACK_MIN_MS  = -8000.0   # m/s; lower bound (maximum blueshift)
 V_REL_ALONGTRACK_MAX_MS  = -6000.0   # m/s; upper bound (minimum blueshift)
