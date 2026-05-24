@@ -110,9 +110,20 @@ import numpy as np
 from scipy.optimize import least_squares
 
 # ---------------------------------------------------------------------------
-# Make repo root importable
+# Make repo root importable — search upward for the repo root marker
+# rather than counting directory levels (robust to running from archive/).
 # ---------------------------------------------------------------------------
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+def _find_repo_root(start: pathlib.Path) -> pathlib.Path:
+    """Walk up from start until we find a directory containing 'windcube/'."""
+    for parent in [start, *start.parents]:
+        if (parent / "windcube").is_dir():
+            return parent
+    raise RuntimeError(
+        f"Could not find repo root (no 'windcube/' directory) "
+        f"searching upward from {start}"
+    )
+
+REPO_ROOT = _find_repo_root(pathlib.Path(__file__).resolve().parent)
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.fpi.airy_forward_model_2026_05_05 import airy_modified   # noqa
