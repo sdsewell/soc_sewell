@@ -37,6 +37,7 @@
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
 | CAL01 | fpi_cal_lib + run_cal_pipeline | PASS (all S0–S6 complete) | 10/10 | 2026-05-18 |
+| MC01 | mc01_fpi_mc_engine | IMPLEMENTED | 10/10 | 2026-05-24 |
 
 ## Known pre-existing test failures (not introduced by current work)
 
