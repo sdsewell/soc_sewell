@@ -970,6 +970,11 @@ def main():
         converged=converged, scan_ambiguous=scan_ambiguous,
         cal=cal, fsr_oi=fsr_oi,
         source_name=prof_path.name, source_path=str(prof_path))
+
+    fig_path = prof_path.parent / f"{prof_path.stem}_h06_inversion.png"
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"\nFigure saved: {fig_path}")
+
     plt.show()
 
 
