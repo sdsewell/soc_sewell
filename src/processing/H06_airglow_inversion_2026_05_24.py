@@ -890,10 +890,18 @@ def run_airglow_inversion(
 
 def main():
 
+    # Default directories for file browsers
+    _DIR_CAL     = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\data_real")
+    _DIR_PROFILE = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\data_synthetic")
+    # Fall back to home directory if the preferred folder does not exist
+    _init_cal     = str(_DIR_CAL)     if _DIR_CAL.exists()     else str(pathlib.Path.home())
+    _init_profile = str(_DIR_PROFILE) if _DIR_PROFILE.exists() else str(pathlib.Path.home())
+
     # ---- 1. Select H05 calibration result (first — seeds all instrument params) ----
     _tk = tk.Tk(); _tk.withdraw()
     cal_path = filedialog.askopenfilename(
         title="Select H05 calibration result file (*_cal_result.npy)",
+        initialdir=_init_cal,
         filetypes=[("NumPy arrays", "*.npy"), ("All files", "*.*")],
         parent=_tk)
     _tk.destroy()
@@ -904,10 +912,9 @@ def main():
 
     # ---- 2. Select airglow profile ----
     _tk2 = tk.Tk(); _tk2.withdraw()
-    # Open file browser in the same directory as the cal file
     prof_path = filedialog.askopenfilename(
         title="Select airglow fringe profile (.npy, tabulated vs r²)",
-        initialdir=str(cal_path.parent),
+        initialdir=_init_profile,
         filetypes=[("NumPy arrays", "*.npy"), ("All files", "*.*")],
         parent=_tk2)
     _tk2.destroy()
