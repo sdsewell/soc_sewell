@@ -40,7 +40,7 @@ Library function (added 2026-05-14):
   Temperature broadening is excluded (delta-function OI source).
 
   Inversion stages:
-    Stage 1 — Phase-seeded scan of λ_c over ±0.75 FSR around lc_seed (300 pts)
+    Stage 1 — Phase-seeded scan of λ_c over ±0.49 FSR around lc_seed (300 pts)
               Analytic solve for Y_line, B_sci at each scan point.
               Covers both cross-track (offset=0) and along-track (offset=−1,−2).
     Stage 2 — LM refinement over {λ_c, Y_line, B_sci} from scan minimum.
@@ -71,7 +71,7 @@ Library function (added 2026-05-14):
    - fsr_oi is now computed from cal.t_m inside the inversion function and
      passed explicitly to _lambda_c_scan, _run_lm, _compute_covariance, and
      make_figure.  The module-level FSR_OI_M is retained only as a placeholder.
-   - Scan redesigned: phase-seeded ±0.75 FSR window around lc_seed derived from
+   - Scan redesigned: phase-seeded ±0.49 FSR window around lc_seed derived from
      lc_seed = 2×cal.t_m / (N_int_OI + cal.epsilon_cal).  Single FSR bin in scan window
      eliminates alias degeneracy.  New v_los_prior_ms parameter for along-track.
    - n_scan = 300 (same; grid is now denser within the narrower window).
@@ -260,7 +260,7 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
                    fsr_oi, n_scan=300, n_fine=500,
                    v_los_prior_ms=0.0):
     """
-    Scan λ_c over ±0.75 FSR around lc_seed, where lc_seed is derived from the
+    Scan λ_c over ±0.49 FSR around lc_seed (strictly < 1 FSR wide),
     calibration phase and an optional a-priori LOS velocity.
 
     DISAMBIGUATION STRATEGY
@@ -285,45 +285,46 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
     satellite-atmosphere relative motion (~km/s), which is known from orbit.
     Pass that estimate as v_los_prior_ms to shift lc_seed accordingly.
 
-    Scan half-width: ±0.75 FSR (≈ ±3523 m/s).  This covers:
-      • Cross-track winds:  |Δv| ≤ ~500 m/s  (well within window)
-      • Along-track:       |Δv − v_los_prior| ≤ ~3000 m/s  (thermospheric component)
+    Scan half-width: ±0.49 FSR (≈ ±2301 m/s), strictly < 1 FSR wide.
+    This guarantees exactly one alias in the window.  The seed is snapped
+    to the nearest FSR bin to v_los_prior, so the window covers:
+      • Cross-track winds:  |Δv| ≤ ~500 m/s  (seed snapped to nearest FSR)
+      • Along-track:       |Δv − v_los_prior| ≤ ~2300 m/s  (thermospheric component)
 
     Returns (lambda_c_best, chi2_min, scan_ambiguous_flag).
     """
     # Compute lc_seed from calibration phase (epsilon_cal from H05).
     # Uses OI_WAVELENGTH_AIR_M (630.0304 nm, NIST) — same as H03 synthesis.
     #
-    # BUG FIX (2026-05-24): the previous formula
-    #   eps_OI_exp = (2*t/lam) % 1
-    #   lc_seed    = 2*t / (N_int + eps_OI_exp)
-    # is a tautology: N_int + eps_OI_exp == 2*t/lam exactly, so
-    # lc_seed always collapses to lam_0 regardless of t.  It throws
-    # away all phase information and places the scan window at 630.0 nm
-    # instead of the true zero-wind fringe position.
+    # SEED STRATEGY (2026-05-25):
+    # Step 1: find the zero-wind fringe position from the H05 calibration:
+    #   lc_0wind = 2*t / (N_int + eps_cal)
+    # Step 2: find the FSR bin whose centre is closest to v_los_prior:
+    #   lc_prior = lam0 * (1 + v_los_prior/c)
+    #   n_offset = round((lc_prior - lc_0wind) / FSR)
+    #   lc_seed  = lc_0wind + n_offset * FSR
+    # Step 3: scan ±0.49 FSR around lc_seed (strictly < 1 FSR wide).
     #
-    # The correct seed uses cal.epsilon_cal — the fractional interference
-    # order at the pattern centre, fitted by H05 from the neon calibration:
-    #
-    #   lc_seed_0wind = 2 * cal.t_m / (N_int_OI + cal.epsilon_cal)
-    #
-    # This places the scan window centred on the actual zero-wind OI fringe
-    # position, so a ±0.75 FSR window reliably captures cross-track winds
-    # of ±500 m/s and along-track winds when v_los_prior_ms is supplied.
+    # This guarantees exactly ONE alias in the window regardless of where
+    # the true wind falls.  The previous ±0.75 FSR window was 1.5 FSR wide
+    # and could contain two aliases when the target was near the window edge
+    # (e.g. +350 m/s with seed at -3041 m/s: both +350 and -4347 were inside).
     N_int_OI      = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
-    lc_seed_0wind = 2.0 * cal.t_m / (N_int_OI + cal.epsilon_cal)
-    # Shift by the a-priori LOS velocity
-    lc_seed = lc_seed_0wind * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
+    lc_0wind      = 2.0 * cal.t_m / (N_int_OI + cal.epsilon_cal)
+    lc_prior      = OI_WAVELENGTH_AIR_M * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
+    n_fsr_offset  = round((lc_prior - lc_0wind) / fsr_oi)
+    lc_seed       = lc_0wind + n_fsr_offset * fsr_oi
+    v_seed_ms     = SPEED_OF_LIGHT_MS * (lc_seed - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
 
-    lc_lo = lc_seed - 0.75 * fsr_oi
-    lc_hi = lc_seed + 0.75 * fsr_oi
+    lc_lo = lc_seed - 0.49 * fsr_oi
+    lc_hi = lc_seed + 0.49 * fsr_oi
     scan  = np.linspace(lc_lo, lc_hi, n_scan)
 
-    log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm "
-             f"(v_prior={v_los_prior_ms:+.0f} m/s, "
-             f"eps_cal={cal.epsilon_cal:.6f})")
+    log.info(f"  lc_seed = {lc_seed*1e9:.7f} nm  v_seed = {v_seed_ms:+.1f} m/s"
+             f"  (n_fsr_offset={n_fsr_offset}, v_prior={v_los_prior_ms:+.0f} m/s)")
     log.info(f"  scan [{SPEED_OF_LIGHT_MS*(lc_lo-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}, "
-             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s")
+             f"{SPEED_OF_LIGHT_MS*(lc_hi-OI_WAVELENGTH_AIR_M)/OI_WAVELENGTH_AIR_M:+.0f}] m/s"
+             f"  (window = 0.98 FSR)")
 
     r_fine   = np.linspace(0.0, r_max, n_fine)
     n_good   = len(r_good)
@@ -368,13 +369,13 @@ def _lambda_c_scan(r_good, prof_good, sigma_good, r_max, cal,
 def _run_lm(r_good, prof_good, sigma_good, r_max, cal,
             fsr_oi, lc_init, Y_init, B_init, n_fine=500):
     """LM fit over {λ_c, Y_line, B_sci} with soft-bound penalties.
-    Bounds are ±0.75 FSR around lc_init (= scan best-fit), matching the scan window.
+    Bounds are ±0.49 FSR around lc_init (= scan best-fit), matching the scan window.
     """
     # Bounds match the scan window; lc_seed is passed via lc_init
     # (which is the scan best-fit from _lambda_c_scan).
-    # Use +- 0.75 FSR around lc_init to keep LM inside the selected FSR bin.
-    lc_lo = lc_init - 0.75 * fsr_oi
-    lc_hi = lc_init + 0.75 * fsr_oi
+    # Use +-0.49 FSR around lc_init — matches scan window, keeps LM in the correct FSR bin.
+    lc_lo = lc_init - 0.49 * fsr_oi
+    lc_hi = lc_init + 0.49 * fsr_oi
     Y_lo  = 0.0;  Y_hi  = 1e8
     B_lo  = 0.0;  B_hi  = float(np.min(prof_good)) * 2.0 if np.min(prof_good) > 0 else 1e6
 
@@ -743,7 +744,7 @@ def run_airglow_inversion(
     """
     Run the H06 two-stage airglow fringe inversion.
 
-    Stage 1: Brute-force scan of λ_c over ±0.75 FSR around a phase-seeded
+    Stage 1: Brute-force scan of λ_c over ±0.49 FSR around a phase-seeded
              starting point. Y_line and B_sci are solved analytically at
              each scan point.
     Stage 2: Levenberg-Marquardt refinement over {λ_c, Y_line, B_sci}.
