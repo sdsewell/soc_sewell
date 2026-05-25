@@ -528,14 +528,16 @@ def make_figure(r2_data, profile, sigma,
     budget_ok = sigma_v_ms <= 9.8
     budget_str = f"{'✓' if budget_ok else '✗'} STM budget (≤9.8 m/s)"
 
-    fig = plt.figure(figsize=(14, 11.5))
-    gs  = gridspec.GridSpec(3, 1, height_ratios=[3, 1.5, 2.5],
+    fig = plt.figure(figsize=(14, 13.5))
+    gs  = gridspec.GridSpec(4, 1, height_ratios=[3, 1.5, 2.5, 1.6],
                             hspace=0.08, top=0.90, bottom=0.03,
                             left=0.09, right=0.97)
     ax_fit = fig.add_subplot(gs[0])
     ax_res = fig.add_subplot(gs[1], sharex=ax_fit)
     ax_tbl = fig.add_subplot(gs[2])
     ax_tbl.axis("off")
+    ax_eqn = fig.add_subplot(gs[3])
+    ax_eqn.axis("off")
 
     # ---- Top panel ----
     ax_fit.errorbar(r2_data, profile, yerr=sigma, fmt="none",
