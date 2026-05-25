@@ -673,29 +673,29 @@ def make_figure(r2_data, profile, sigma,
     _col_val  = "#1a5e2a"
     _col_note = "#555555"
 
-    # Each equation: symbolic label on left, substituted values on right
-    _eqs = [
-        (
-            r"$m_0 = 2t\,/\,\lambda_0$",
-            (r"$= 2 \times$" + f" {cal.t_m*1e3:.7f} mm"
-             r" $/$" + f" {OI_WAVELENGTH_AIR_M*1e9:.4f} nm"
-             f"  $= {_m0:.4f}$"
-             f"  $({_N_int}$ integer $+\\; {cal.epsilon_cal:.6f}$ fractional$)$"),
-        ),
-        (
-            r"$\lambda_c^{(0)} = 2t\,/\,(N_{\mathrm{int}} + arepsilon_{\mathrm{cal}})$",
-            (f"$= 2 \\times {cal.t_m*1e3:.7f}$ mm"
-             f" $/ ({_N_int} + {cal.epsilon_cal:.6f})$"
-             f"  $= {_lc0wind*1e9:.7f}$ nm  [zero-wind seed]"),
-        ),
-        (
-            r"$v_{\mathrm{rel}} = c\,(\lambda_c - \lambda_0)\,/\,\lambda_0$",
-            (f"$= {SPEED_OF_LIGHT_MS:.5e}$ m/s"
-             f" $\\times ({lc_m*1e9:.7f} - {OI_WAVELENGTH_AIR_M*1e9:.4f})$ nm"
-             f" $/ {OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm"
-             f"  $= {v_rel_ms:+.3f}$ m/s"),
-        ),
-    ]
+    # Each equation: symbolic label (LHS) and substituted values (RHS).
+    # All strings are plain (not raw) so \-escapes work in both f-string
+    # and regular string contexts without splitting across lines.
+    _eq1_lhs = r"$m_0 = 2t / \lambda_0$"
+    _eq1_rhs = (r"$= 2 \times$" + f" {cal.t_m*1e3:.7f} mm / {OI_WAVELENGTH_AIR_M*1e9:.4f} nm"
+                f"  $= {_m0:.4f}$"
+                f"  $({_N_int}$ integer $ + {cal.epsilon_cal:.6f}$ fractional$)$")
+
+    _eq2_lhs = (r"$\lambda_c^{(0)} = $"
+                r"$2t\,/\,(N_{\mathrm{int}} + \varepsilon_{\mathrm{cal}})$")
+    _eq2_rhs = (f"$= 2 \\times {cal.t_m*1e3:.7f}$ mm"
+                f" $/ ({_N_int} + {cal.epsilon_cal:.6f})$"
+                f"  $= {_lc0wind*1e9:.7f}$ nm  [zero-wind seed]")
+
+    _eq3_lhs = r"$v_{\mathrm{rel}} = c\,(\lambda_c - \lambda_0)\,/\,\lambda_0$"
+    _eq3_rhs = (f"$= {SPEED_OF_LIGHT_MS:.5e}$ m/s"
+                f" $\\times ({lc_m*1e9:.7f} - {OI_WAVELENGTH_AIR_M*1e9:.4f})$ nm"
+                f" $/\\; {OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm"
+                f"  $= {v_rel_ms:+.3f}$ m/s")
+
+    _eqs = [(_eq1_lhs, _eq1_rhs),
+            (_eq2_lhs, _eq2_rhs),
+            (_eq3_lhs, _eq3_rhs)]
 
     _row_y = [0.93, 0.60, 0.27]
     for _y, (_lhs, _rhs) in zip(_row_y, _eqs):
