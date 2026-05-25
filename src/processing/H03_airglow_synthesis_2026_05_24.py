@@ -449,11 +449,18 @@ def main():
 
     _tk = tk.Tk(); _tk.withdraw()
 
+    # Default directories for file browsers
+    _DIR_CAL  = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\data_real")
+    _DIR_SAVE = pathlib.Path(r"C:\Users\sewell\Documents\GitHub\data_synthetic")
+    _init_cal  = str(_DIR_CAL)  if _DIR_CAL.exists()  else str(pathlib.Path.home())
+    _init_save = str(_DIR_SAVE) if _DIR_SAVE.exists() else str(pathlib.Path.home())
+
     # ---- Step 0: Load H05 calibration result to seed defaults ----
     cal = None
     if load_cal_result is not None:
         cal_path_str = filedialog.askopenfilename(
             title="Select H05 calibration result file (*_cal_result.npy)",
+            initialdir=_init_cal,
             filetypes=[("NumPy arrays", "*.npy"), ("All files", "*.*")],
             parent=_tk,
         )
@@ -555,7 +562,9 @@ def main():
 
     if do_save:
         save_dir = filedialog.askdirectory(
-            title="Choose save directory", parent=_tk3)
+            title="Choose save directory",
+            initialdir=_init_save,
+            parent=_tk3)
         _tk3.destroy()
 
         if save_dir:
