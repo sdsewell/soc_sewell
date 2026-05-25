@@ -515,6 +515,10 @@ def make_figure(r2_data, profile, sigma,
                 sigma_lc, sigma_Y, sigma_B,
                 chi2_red, n_bins, converged, scan_ambiguous,
                 cal: _CalResult, fsr_oi: float,
+                v_los_prior_ms: float = 0.0,
+                obs_mode: str = None,
+                prior_source: str = "unknown",
+                n_fsr_offset: int = 0,
                 source_name: str = "", source_path: str = "") -> plt.Figure:
 
     r2_fine       = r_fine ** 2
@@ -556,12 +560,18 @@ def make_figure(r2_data, profile, sigma,
     amb_str  = "  SCAN_AMBIGUOUS" if scan_ambiguous else ""
     col_budget = "darkgreen" if budget_ok else "darkred"
 
+    _mode_str   = obs_mode if obs_mode else "unknown"
+    _seed_str   = (f"v_prior = {v_los_prior_ms:+.0f} m/s  "
+                   f"n_fsr_offset = {n_fsr_offset:+d}  "
+                   f"obs_mode = {_mode_str}  "
+                   f"[{prior_source}]")
     ax_fit.text(0.02, 0.97,
         f"χ²/ν = {chi2_red:.3f}   {conv_str}{amb_str}\n"
         f"v_rel = {v_rel_ms:+.2f} ± {sigma_v_ms:.2f} m/s   "
         f"fringe_order_offset = {forder}\n"
         f"λ_c = {lc_m*1e9:.7f} nm   {_fmt_unc(sigma_lc*1e15, 'fm')}\n"
-        f"σ_v = {sigma_v_ms:.3f} m/s   {budget_str}",
+        f"σ_v = {sigma_v_ms:.3f} m/s   {budget_str}\n"
+        f"{_seed_str}",
         transform=ax_fit.transAxes, va="top", ha="left", fontsize=8.5,
         fontfamily="monospace",
         bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
@@ -707,12 +717,17 @@ def make_figure(r2_data, profile, sigma,
                     transform=ax_eqn.transAxes, va="top", ha="left",
                     fontsize=9.5, color=_col_val)
 
+    _prior_mode_str = obs_mode if obs_mode else "unknown"
     _legend = (
         f"  $t={cal.t_m*1e3:.7f}$ mm [H05]     "
         f"$\\lambda_0={OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm (NIST OI rest)     "
         f"$N_{{\\mathrm{{int}}}}={_N_int}$ (round($2t/\\lambda_0$), H05)     "
         f"$\\varepsilon_{{\\mathrm{{cal}}}}={cal.epsilon_cal:.6f}$ [H05]     "
-        f"$\\lambda_c={lc_m*1e9:.7f}$ nm [fitted]"
+        f"$\\lambda_c={lc_m*1e9:.7f}$ nm [fitted]\n"
+        f"  Seed: $v_{{\\mathrm{{prior}}}}={v_los_prior_ms:+.0f}$ m/s     "
+        f"$n_{{\\mathrm{{FSR\\ offset}}}}={n_fsr_offset:+d}$     "
+        f"obs_mode={_prior_mode_str}     "
+        f"source: {prior_source}"
     )
     ax_eqn.text(0.01, 0.01, _legend,
                 transform=ax_eqn.transAxes, va="bottom", ha="left",
@@ -934,20 +949,51 @@ def main():
         parent=_tk3) or 110.0
     _tk3.destroy()
 
-    # ---- 3b. a-priori LOS velocity (for along-track disambiguation) ----
-    # For cross-track observations pass 0 (default).
-    # For along-track, enter the satellite-atmosphere relative LOS velocity
-    # (orbit geometry, negative for receding source), e.g. -6000 m/s.
-    _tk3b = tk.Tk(); _tk3b.withdraw()
-    v_los_prior_ms = simpledialog.askfloat(
-        "A-priori LOS velocity",
-        "A-priori line-of-sight velocity (m/s).\n"
-        "Cross-track: enter 0.\n"
-        "Along-track: enter estimated satellite\u2013atmosphere LOS velocity (e.g. \u22126000).",
-        initialvalue=0.0, minvalue=-20000.0, maxvalue=20000.0,
-        parent=_tk3b) or 0.0
-    _tk3b.destroy()
-    print(f"  v_los_prior = {v_los_prior_ms:+.0f} m/s")
+    # ---- 3b. a-priori LOS velocity — auto-load from _meta.npy sidecar ----
+    # H03 saves a companion <stem>_meta.npy alongside every profile.
+    # If found, v_rel_ms and observation_mode are read from it and used
+    # directly as the prior — no dialog needed.
+    # If not found (e.g. real data), fall back to the manual dialog.
+    _stem        = prof_path.stem
+    _meta_path   = prof_path.with_name(
+        _stem.replace("_airglow_profile_vs_r2", "")
+             .replace("_profile_vs_r2", "")
+             .replace("_profile_vs_r",  "") + "_meta.npy")
+
+    _prior_source  = "unknown"
+    _obs_mode_meta = None
+    v_los_prior_ms = 0.0
+
+    if _meta_path.exists():
+        try:
+            _meta = np.load(_meta_path, allow_pickle=True).item()
+            v_los_prior_ms = float(_meta.get("v_rel_ms", 0.0))
+            _obs_mode_meta = _meta.get("observation_mode", None)
+            _prior_source  = f"_meta.npy ({_meta_path.name})"
+            print(f"  v_los_prior  = {v_los_prior_ms:+.0f} m/s  (from {_prior_source})")
+            print(f"  obs_mode     = {_obs_mode_meta}")
+        except Exception as _e:
+            print(f"  WARNING: could not read {_meta_path.name}: {_e}")
+            print("  Falling back to manual v_los_prior dialog.")
+            _meta_path = None
+    else:
+        print(f"  No _meta.npy sidecar found ({_meta_path.name}) — using dialog.")
+        _meta_path = None
+
+    if _meta_path is None:
+        _prior_source = "user dialog"
+        _obs_mode_meta = None
+        _tk3b = tk.Tk(); _tk3b.withdraw()
+        v_los_prior_ms = simpledialog.askfloat(
+            "A-priori LOS velocity",
+            "No _meta.npy sidecar found.\n"
+            "Enter a-priori line-of-sight velocity (m/s).\n"
+            "Cross-track: enter 0.\n"
+            "Along-track: enter estimated satellite\u2013atmosphere LOS velocity (e.g. \u22126000).",
+            initialvalue=0.0, minvalue=-20000.0, maxvalue=20000.0,
+            parent=_tk3b) or 0.0
+        _tk3b.destroy()
+        print(f"  v_los_prior = {v_los_prior_ms:+.0f} m/s  (manual)")
 
     # ---- 4. Load calibration result ----
     cal = load_cal_result(cal_path)
@@ -1044,6 +1090,11 @@ def main():
     r_fine_plot = np.linspace(0.0, r_max, 2000)
     model_fine  = _airglow_model_fine(r_fine_plot, lc_m, Y_line, B_sci, cal)
 
+    # Compute n_fsr_offset for figure annotation
+    _lc_0wind     = 2.0 * cal.t_m / (round(2.0*cal.t_m/OI_WAVELENGTH_AIR_M) + cal.epsilon_cal)
+    _lc_prior_fig = OI_WAVELENGTH_AIR_M * (1.0 + v_los_prior_ms / SPEED_OF_LIGHT_MS)
+    _n_fsr_off    = round((_lc_prior_fig - _lc_0wind) / fsr_oi)
+
     fig = make_figure(
         r2_data=r_grid**2, profile=profile_adu, sigma=sigma_adu,
         r_fine=r_fine_plot, model_fine=model_fine,
@@ -1052,6 +1103,8 @@ def main():
         chi2_red=chi2_red, n_bins=len(r_grid),
         converged=converged, scan_ambiguous=scan_ambiguous,
         cal=cal, fsr_oi=fsr_oi,
+        v_los_prior_ms=v_los_prior_ms, obs_mode=_obs_mode_meta,
+        prior_source=_prior_source, n_fsr_offset=_n_fsr_off,
         source_name=prof_path.name, source_path=str(prof_path))
 
     # ---- 12. Save figure ----
