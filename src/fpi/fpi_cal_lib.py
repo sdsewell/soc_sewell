@@ -28,18 +28,18 @@ from scipy.optimize import curve_fit, least_squares, minimize
 from scipy.signal import find_peaks
 
 from windcube.constants import (
-    ETALON_GAP_M,
-    ETALON_N,
-    ETALON_R_INSTRUMENT,
-    ALPHA_RAD_PX,
-    R_MAX_PX,
-    OI_WAVELENGTH_AIR_M,
-    NE_WAVELENGTH_1_AIR_M,
-    NE_WAVELENGTH_2_AIR_M,
-    NE_INTENSITY_1,
-    NE_INTENSITY_2,
-    SPEED_OF_LIGHT_MS,
+    ETALON_N,             # refractive index of gap (= 1.0, air)
+    OI_WAVELENGTH_AIR_M,  # OI 630.0304 nm rest wavelength (NIST)
+    NE_WAVELENGTH_1_AIR_M,  # Ne 640.2248 nm strong line (Burns 1950)
+    NE_WAVELENGTH_2_AIR_M,  # Ne 638.2991 nm weak line  (Burns 1950)
+    NE_INTENSITY_1,       # neon line intensity ratio (= 1.0)
+    NE_INTENSITY_2,       # neon line intensity ratio (measured by H05)
+    SPEED_OF_LIGHT_MS,    # exact SI value
 )
+# NOTE: ETALON_GAP_M, ETALON_R_INSTRUMENT, ALPHA_RAD_PX, R_MAX_PX are
+# intentionally NOT imported here.  Instrument values (t, alpha, R) are
+# always supplied via the Tolansky seed chain at runtime; importing them
+# from constants would give a false impression they are used as defaults.
 
 
 # ===========================================================================
