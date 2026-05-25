@@ -709,7 +709,7 @@ def make_figure(r2_data, profile, sigma,
     _legend = (
         f"  $t={cal.t_m*1e3:.7f}$ mm [H05]     "
         f"$\\lambda_0={OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm (NIST OI rest)     "
-        f"$N_{{\\mathrm{{int}}}}={_N_int}$ (ICOS)     "
+        f"$N_{{\\mathrm{{int}}}}={_N_int}$ (round($2t/\\lambda_0$), H05)     "
         f"$\\varepsilon_{{\\mathrm{{cal}}}}={cal.epsilon_cal:.6f}$ [H05]     "
         f"$\\lambda_c={lc_m*1e9:.7f}$ nm [fitted]"
     )
