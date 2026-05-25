@@ -663,6 +663,64 @@ def make_figure(r2_data, profile, sigma,
         r"$\quad[\tilde{A}=\mathrm{Airy}\times I(r)\circledast\mathcal{G}(\sigma_0)]$"
         r"$\quad\lambda_c = \lambda_0(1+v_\mathrm{rel}/c)$",
         ha="center", va="top", fontsize=9, color="#1a1a2e")
+    # ---- Equation panel ----
+    _N_int    = round(2.0 * cal.t_m / OI_WAVELENGTH_AIR_M)
+    _m0       = 2.0 * cal.t_m / OI_WAVELENGTH_AIR_M
+    _lc0wind  = 2.0 * cal.t_m / (_N_int + cal.epsilon_cal)
+    _col_hdr  = "#1a1a6e"
+    _col_val  = "#1a5e2a"
+    _col_note = "#555555"
+
+    # Each equation: symbolic label on left, substituted values on right
+    _eqs = [
+        (
+            r"$m_0 = 2t\,/\,\lambda_0$",
+            (r"$= 2 \times$" + f" {cal.t_m*1e3:.7f} mm"
+             r" $/$" + f" {OI_WAVELENGTH_AIR_M*1e9:.4f} nm"
+             f"  $= {_m0:.4f}$"
+             f"  $({_N_int}$ integer $+\\; {cal.epsilon_cal:.6f}$ fractional$)$"),
+        ),
+        (
+            r"$\lambda_c^{(0)} = 2t\,/\,(N_{\mathrm{int}} + arepsilon_{\mathrm{cal}})$",
+            (f"$= 2 \\times {cal.t_m*1e3:.7f}$ mm"
+             f" $/ ({_N_int} + {cal.epsilon_cal:.6f})$"
+             f"  $= {_lc0wind*1e9:.7f}$ nm  [zero-wind seed]"),
+        ),
+        (
+            r"$v_{\mathrm{rel}} = c\,(\lambda_c - \lambda_0)\,/\,\lambda_0$",
+            (f"$= {SPEED_OF_LIGHT_MS:.5e}$ m/s"
+             f" $\\times ({lc_m*1e9:.7f} - {OI_WAVELENGTH_AIR_M*1e9:.4f})$ nm"
+             f" $/ {OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm"
+             f"  $= {v_rel_ms:+.3f}$ m/s"),
+        ),
+    ]
+
+    _row_y = [0.93, 0.60, 0.27]
+    for _y, (_lhs, _rhs) in zip(_row_y, _eqs):
+        ax_eqn.text(0.01, _y, _lhs,
+                    transform=ax_eqn.transAxes, va="top", ha="left",
+                    fontsize=10.5, color=_col_hdr)
+        ax_eqn.text(0.30, _y, _rhs,
+                    transform=ax_eqn.transAxes, va="top", ha="left",
+                    fontsize=9.5, color=_col_val)
+
+    _legend = (
+        f"  $t={cal.t_m*1e3:.7f}$ mm [H05]     "
+        f"$\\lambda_0={OI_WAVELENGTH_AIR_M*1e9:.4f}$ nm (NIST OI rest)     "
+        f"$N_{{\\mathrm{{int}}}}={_N_int}$ (ICOS)     "
+        f"$\\varepsilon_{{\\mathrm{{cal}}}}={cal.epsilon_cal:.6f}$ [H05]     "
+        f"$\\lambda_c={lc_m*1e9:.7f}$ nm [fitted]"
+    )
+    ax_eqn.text(0.01, 0.01, _legend,
+                transform=ax_eqn.transAxes, va="bottom", ha="left",
+                fontsize=8.5, color=_col_note)
+    ax_eqn.set_title("Key equations — substituted values",
+                     fontsize=8.5, loc="left", pad=3,
+                     color="dimgrey", fontstyle="italic")
+    for _sp in ax_eqn.spines.values():
+        _sp.set_edgecolor("#c0c8d8")
+    ax_eqn.set_facecolor("#f8f9fc")
+
     return fig
 
 
