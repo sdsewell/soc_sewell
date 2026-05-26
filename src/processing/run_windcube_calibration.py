@@ -63,8 +63,24 @@ import matplotlib.ticker as ticker
 # ---------------------------------------------------------------------------
 # fpi_cal_lib imports
 # All physics lives in the library; this script is UX + orchestration only.
+#
+# Repo layout (script lives at soc_sewell/src/fpi/run_windcube_calibration.py):
+#   soc_sewell/            ← repo root (parents[3])
+#     windcube/            ← fpi_cal_lib.py is here; also the windcube package
+#     src/fpi/             ← this file
+#
+# We need two entries on sys.path:
+#   soc_sewell/windcube/   → bare  'import fpi_cal_lib'  resolves
+#   soc_sewell/            → 'from windcube.constants import ...' resolves
+#                             (fpi_cal_lib uses this internally)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+_THIS_FILE = pathlib.Path(__file__).resolve()
+_REPO_ROOT = _THIS_FILE.parents[3]          # soc_sewell/
+_WINDCUBE  = _REPO_ROOT / 'windcube'         # soc_sewell/windcube/
+for _p in (_WINDCUBE, _REPO_ROOT):
+    _s = str(_p)
+    if _s not in sys.path:
+        sys.path.insert(0, _s)
 
 from fpi_cal_lib import (
     # Section A — Centre finder
