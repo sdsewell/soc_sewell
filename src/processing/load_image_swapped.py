@@ -29,7 +29,7 @@ big-endian float64 or construct as a LE uint64.
 
   Words  0      : rows            uint16  (total rows incl. header row)
   Word   1      : cols            uint16
-  Word   2      : exp_time        uint16  (centiseconds)
+  Word   2      : exp_time        uint16  (milliseconds)
   Word   3      : exp_unit        uint16
   Words  4-7    : ccd_temp1       float64 (°C)
   Words  8-11   : lua_timestamp   uint64  (ms, Unix epoch)
@@ -314,8 +314,8 @@ def _plot_hist(ax, image: np.ndarray, title: str) -> None:
 _FIELD_META = {
     "rows":                  ("Rows",                   "pixels",      None),
     "cols":                  ("Cols",                   "pixels",      None),
-    "exp_time":              ("Exposure time",           "cs",
-                              lambda v: f"{v} cs  ({v / 100:.2f} s)"),
+    "exp_time":              ("Exposure time",           "ms",
+                              lambda v: f"{v} ms  ({v / 1000:.2f} s)"),
     "exp_unit":              ("Exposure unit",           "register",    None),
     "ccd_temp1":             ("CCD temperature",         "°C",          None),
     "lua_timestamp":         ("Lua timestamp",           "ms (Unix)",   None),
@@ -495,7 +495,7 @@ def main() -> None:
     print(f"Pixel range : {image.min()} – {image.max()}  ADU")
     print(f"Mean ± std  : {image.mean():.1f} ± {image.std():.1f}  ADU")
     print(f"UTC         : {metadata['utc_timestamp']}")
-    print(f"Exp time    : {metadata['exp_time']} cs = {metadata['exp_time']/100:.2f} s")
+    print(f"Exp time    : {metadata['exp_time']} ms = {metadata['exp_time']/1000:.2f} s")
     print(f"CCD temp    : {metadata['ccd_temp1']} °C")
     print(f"Image type  : {metadata['img_type']}")
 
