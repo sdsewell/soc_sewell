@@ -1,0 +1,1016 @@
+"""
+Module:      m06_airglow_inversion_2026_05_24.py
+Spec:        docs/specs/H06_airglow_inversion_2026-05-05.md
+             specs/M06_airglow_inversion_addendum_2026-05-24.md
+Author:      Claude Code
+Generated:   2026-05-24
+Last tested: 2026-05-24
+Project:     WindCube FPI Pipeline — NCAR/HAO
+Repo:        soc_sewell
+
+Changes from m06_airglow_inversion_2026_05_05.py (addendum 2026-05-24):
+  - AirglowFitResult: added T_est_K, sigma_T_K, two_sigma_T_K, delta_lambda_m
+    optional fields (all None when use_temperature=False).
+  - AirglowFitFlags: added DELTA_LAMBDA_AT_BOUND = 0x200.
+  - fit_airglow_fringe(): added use_temperature=False parameter.
+    use_temperature=False path is bit-identical to existing behaviour.
+  - New public:  temperature_from_delta_lambda()
+  - New private: _airglow_model_thermal(), _run_airglow_lm_thermal(),
+                 _compute_jacobian_thermal(), _compute_uncertainties_thermal()
+  Required by MC01/MC02 Monte Carlo engine.
+"""
+
+import logging
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import numpy as np
+from scipy.optimize import least_squares
+
+from src.fpi import airy_modified
+from windcube.constants import (
+    OI_WAVELENGTH_AIR_M,
+    SPEED_OF_LIGHT_MS,
+    ETALON_GAP_M,
+    BOLTZMANN_J_PER_K,
+    OXYGEN_MASS_KG,
+)
+
+log = logging.getLogger(__name__)
+
+# FSR at the OI 630 nm line — computed inline per H06 §4
+FSR_OI_M = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * ETALON_GAP_M)   # ≈ 9.871e-12 m
+
+
+# ---------------------------------------------------------------------------
+# Quality-flag bitmask
+# ---------------------------------------------------------------------------
+
+class AirglowFitFlags:
+    """Bitmask quality flags for AirglowFitResult. Uses bits 4+ per S04."""
+    GOOD                 = 0x000
+    FIT_FAILED           = 0x001   # global S04 flag — LM did not converge
+    CHI2_HIGH            = 0x002   # global S04 flag — chi2 > 3.0
+    CHI2_VERY_HIGH       = 0x004   # global S04 flag — chi2 > 10.0
+    CHI2_LOW             = 0x008   # global S04 flag — chi2 < 0.5
+    SCAN_AMBIGUOUS       = 0x010   # brute-force scan has two minima < 10% apart
+    LAMBDA_C_AT_BOUND    = 0x020   # lambda_c hit its bound (possible FSR jump)
+    STDERR_NONE          = 0x040   # any stderr is None (singular covariance)
+    LOW_SNR              = 0x080   # estimated SNR < 1.0 (Y_line / B_sci < 1)
+    CAL_QUALITY_DEGRADED = 0x100   # CalibrationResult had non-GOOD quality flags
+    DELTA_LAMBDA_AT_BOUND = 0x200  # Δλ is at or outside physical range [100K, 3000K]
+
+
+# ---------------------------------------------------------------------------
+# Output dataclass
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AirglowFitResult:
+    """
+    Output of H06 airglow inversion.
+    Passed to M07 (wind retrieval) for LOS-to-vector decomposition.
+    """
+    # Primary output — line centre and wind
+    lambda_c_m:           float
+    sigma_lambda_c_m:     float
+    two_sigma_lambda_c_m: float   # exactly 2 × sigma_lambda_c_m  (S04)
+
+    v_rel_ms:             float
+    sigma_v_rel_ms:       float
+    two_sigma_v_rel_ms:   float   # exactly 2 × sigma_v_rel_ms    (S04)
+
+    # Other fitted parameters (diagnostics)
+    Y_line:           float
+    sigma_Y_line:     float
+    two_sigma_Y_line: float
+
+    B_sci:            float
+    sigma_B_sci:      float
+    two_sigma_B_sci:  float
+
+    # Fit quality
+    chi2_reduced:   float
+    n_bins_used:    int
+    n_params_free:  int     # 3 for delta-function path; 4 when use_temperature=True
+    converged:      bool
+    quality_flags:  int
+
+    # Phase relationship to calibration (diagnostic)
+    epsilon_sci:    float   # (2 × lambda_c_m / OI_WAVELENGTH_AIR_M) mod 1
+    delta_epsilon:  float   # epsilon_sci − epsilon_cal
+
+    # Input traceability
+    calibration_t_m:         float
+    calibration_epsilon_cal: float
+
+    # LM scan diagnostics
+    lambda_c_scan_init_m: float   # λ_c at start of brute-force scan
+    lambda_c_lm_init_m:   float   # λ_c passed to LM after scan
+
+    # Temperature retrieval (None when use_temperature=False)
+    T_est_K:          Optional[float] = None
+    sigma_T_K:        Optional[float] = None
+    two_sigma_T_K:    Optional[float] = None
+    delta_lambda_m:   Optional[float] = None   # fitted Δλ (diagnostic)
+
+
+# ---------------------------------------------------------------------------
+# Temperature conversion — public API (Harding Eq. 12 inverted)
+# ---------------------------------------------------------------------------
+
+def temperature_from_delta_lambda(
+    delta_lambda_m: float,
+    lambda0_m: float = None,
+) -> float:
+    """
+    Harding Eq. 12 inverted: temperature from fitted line half-width.
+
+        T = m * c² * (Δλ / λ₀)² / k
+
+    Parameters
+    ----------
+    delta_lambda_m : fitted Doppler line half-width, metres
+    lambda0_m      : rest wavelength, metres.
+                     Default: OI_WAVELENGTH_AIR_M from windcube/constants.py.
+
+    Returns
+    -------
+    T_K : float, Kelvin
+    """
+    if lambda0_m is None:
+        lambda0_m = OI_WAVELENGTH_AIR_M
+    ratio = (delta_lambda_m * SPEED_OF_LIGHT_MS) / lambda0_m
+    return OXYGEN_MASS_KG * ratio ** 2 / BOLTZMANN_J_PER_K
+
+
+# ---------------------------------------------------------------------------
+# Forward model helpers
+# ---------------------------------------------------------------------------
+
+def _airglow_model_fine(r_fine: np.ndarray, lambda_c_m: float,
+                        Y_line: float, B_sci: float, cal) -> np.ndarray:
+    """
+    Delta-function airglow fringe at lambda_c_m on a fine uniform-r grid.
+
+    Parameters
+    ----------
+    r_fine     : fine uniform-r grid, pixels
+    lambda_c_m : Doppler-shifted line centre, metres
+    Y_line     : line intensity scale factor
+    B_sci      : science frame CCD bias, ADU
+    cal        : CalibrationResult — all 10 instrument parameters fixed
+
+    Returns model profile on r_fine (before bin-averaging).
+    """
+    r_max = float(r_fine[-1])
+    airy = airy_modified(
+        r_fine, lambda_c_m,
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+        r_max=r_max,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+    )
+    return Y_line * airy + B_sci
+
+
+def _airglow_model_thermal(
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    delta_lambda_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+    L_invert: int = 101,
+    n_fsr: float = 5.0,
+) -> np.ndarray:
+    """
+    Thermally broadened airglow fringe model on a fine r grid.
+
+    Implements Harding Eq. 15 discrete spectral integral:
+        S(r_i) ≈ Σ_j Ã(r_i, λ_j) Y(λ_j) Δλ + B
+
+    where Y(λ) is the Gaussian source from M03._gaussian_source_spectrum().
+    Uses L_invert=101 spectral bins (anti-inverse-crime: synthesise at 300,
+    invert at 101, per Harding §3).
+
+    Parameters
+    ----------
+    r_fine         : fine uniform-r grid, shape (n_fine,)
+    lambda_c_m     : Doppler-shifted line centre, metres
+    delta_lambda_m : Doppler line half-width (1/e), metres
+    Y_line         : line amplitude scale factor
+    B_sci          : CCD bias, ADU
+    cal            : CalibrationResult — all instrument parameters fixed
+    L_invert       : spectral bins for inversion (default 101, per Harding §3)
+    n_fsr          : number of FSRs to span in spectral grid (default 5.0)
+
+    Returns
+    -------
+    model : ndarray shape (n_fine,)
+    """
+    r_max  = float(r_fine[-1])
+    FSR_m  = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * cal.t_m)
+    lam_lo = lambda_c_m - (n_fsr / 2.0) * FSR_m
+    lam_hi = lambda_c_m + (n_fsr / 2.0) * FSR_m
+    lam_grid = np.linspace(lam_lo, lam_hi, L_invert)
+
+    # Normalised Gaussian weights so that sum_j(w_j) = 1 and the integral
+    # of the source spectrum equals Y_line — the same convention used by
+    # synthesise_airglow_image().  This keeps Y_line on the same amplitude
+    # scale as the 3-parameter delta-function model, enabling reliable
+    # seeding of the 4-parameter TRF from the 3-parameter result.
+    gauss_w = np.exp(-0.5 * ((lam_grid - lambda_c_m) / delta_lambda_m) ** 2)
+    sum_gauss = float(np.sum(gauss_w))
+    if sum_gauss > 0:
+        gauss_w = gauss_w / sum_gauss   # normalised: sum(gauss_w) = 1
+
+    # model = Y_line * Σ_j A(r, λ_j) w_j + B_sci
+    model = np.zeros_like(r_fine)
+    for j, lam_j in enumerate(lam_grid):
+        airy_j = airy_modified(
+            r_fine, lam_j,
+            t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+            r_max=r_max,
+            I0=cal.I0, I1=cal.I1, I2=cal.I2,
+            sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        )
+        model += airy_j * gauss_w[j]
+    return Y_line * model + B_sci
+
+
+def _bin_average(model_fine: np.ndarray, r_fine: np.ndarray,
+                 r_bins: np.ndarray) -> np.ndarray:
+    """
+    Linearly interpolate model_fine (on r_fine) to r_bins.
+
+    Equivalent to bin-averaging if r_fine is dense enough (≥ 500 pts).
+    Matches H05's strategy: evaluate on fine grid, then np.interp to M03
+    bin-centre radii.
+    """
+    return np.interp(r_bins, r_fine, model_fine)
+
+
+def _build_fine_grid(r_max: float, n_fine: int = 500) -> np.ndarray:
+    """Return uniform r grid [0, r_max] with n_fine points."""
+    return np.linspace(0.0, r_max, n_fine)
+
+
+# ---------------------------------------------------------------------------
+# Brute-force scan for λ_c initialisation
+# ---------------------------------------------------------------------------
+
+def _lambda_c_scan(
+    r_good: np.ndarray,
+    profile_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r2_good: np.ndarray,
+    r_max: float,
+    cal,
+    n_scan: int = 200,
+    n_fine: int = 500,
+) -> Tuple[float, float, int]:
+    """
+    Scan lambda_c over one FSR to find the best initial guess.
+
+    At each of n_scan evenly-spaced lambda_c values across
+    [OI_WAVELENGTH_AIR_M ± FSR_OI_M/2], analytically solves for Y_line and
+    B_sci (linear given fixed lambda_c) and records chi2.
+
+    Returns
+    -------
+    lambda_c_best : float — λ_c with minimum chi2
+    chi2_min      : float
+    scan_flags    : int   — AirglowFitFlags.SCAN_AMBIGUOUS if second-best
+                           chi2 is within 10% of minimum
+    """
+    lc_lo = OI_WAVELENGTH_AIR_M - 0.5 * FSR_OI_M
+    lc_hi = OI_WAVELENGTH_AIR_M + 0.5 * FSR_OI_M
+    scan_grid = np.linspace(lc_lo, lc_hi, n_scan)
+
+    r_fine = _build_fine_grid(r_max, n_fine)
+    n_good = len(r_good)
+
+    chi2_arr = np.full(n_scan, np.inf)
+
+    for k, lc in enumerate(scan_grid):
+        # Build Airy profile on fine grid, interpolate to r_good
+        airy_fine = airy_modified(
+            r_fine, lc,
+            t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+            r_max=r_max,
+            I0=cal.I0, I1=cal.I1, I2=cal.I2,
+            sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        )
+        airy_bins = np.interp(r_good, r_fine, airy_fine)   # shape (n_good,)
+
+        # Analytic least-squares: model = Y_line * airy_bins + B_sci
+        # X = [airy_bins, ones], solve X @ [Y_line, B_sci]^T
+        w = 1.0 / sigma_good                               # shape (n_good,)
+        A = np.column_stack([airy_bins * w, w])            # (n_good, 2)
+        b = profile_good * w                               # (n_good,)
+        # Normal equations: (A^T A) p = A^T b
+        AtA = A.T @ A
+        Atb = A.T @ b
+        try:
+            p_lsq = np.linalg.solve(AtA, Atb)
+        except np.linalg.LinAlgError:
+            continue
+
+        Y_line_k, B_sci_k = p_lsq
+        model_k = Y_line_k * airy_bins + B_sci_k
+        resid_k = (profile_good - model_k) / sigma_good
+        chi2_arr[k] = float(np.sum(resid_k ** 2)) / max(n_good - 2, 1)
+
+    # Best and second-best
+    best_idx = int(np.argmin(chi2_arr))
+    chi2_min = float(chi2_arr[best_idx])
+    lambda_c_best = float(scan_grid[best_idx])
+
+    # SCAN_AMBIGUOUS: any other point within 10% of best chi2
+    scan_flags = AirglowFitFlags.GOOD
+    alt_mask = np.ones(n_scan, dtype=bool)
+    alt_mask[best_idx] = False
+    chi2_alt = chi2_arr[alt_mask]
+    if len(chi2_alt) > 0 and np.nanmin(chi2_alt) < chi2_min * 1.10:
+        scan_flags |= AirglowFitFlags.SCAN_AMBIGUOUS
+        log.warning(
+            f"SCAN_AMBIGUOUS: second-best chi2 within 10% of minimum "
+            f"({np.nanmin(chi2_alt):.4f} vs {chi2_min:.4f})"
+        )
+
+    return lambda_c_best, chi2_min, scan_flags
+
+
+# ---------------------------------------------------------------------------
+# LM fits
+# ---------------------------------------------------------------------------
+
+def _run_airglow_lm(
+    r_good: np.ndarray,
+    profile_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_max: float,
+    cal,
+    lambda_c_init_m: float,
+    Y_line_init: float,
+    B_sci_init: float,
+    n_fine: int = 500,
+):
+    """
+    Run LM fit over {lambda_c_m, Y_line, B_sci}.
+
+    Uses scipy.optimize.least_squares(method='lm').
+    Soft-bound penalty residuals (one per free parameter) fire linearly
+    outside the effective bounds from H06 §5.
+    """
+    # Bounds
+    lambda_lo = OI_WAVELENGTH_AIR_M - 1.5 * FSR_OI_M
+    lambda_hi = OI_WAVELENGTH_AIR_M + 1.5 * FSR_OI_M
+    Y_lo,  Y_hi  = 0.0, np.inf        # effectively unbounded above
+    B_lo          = 0.0
+    B_hi          = float(np.min(profile_good)) * 1.5 if np.min(profile_good) > 0 else 1e6
+
+    # Clamp B_hi to avoid inf
+    if not np.isfinite(B_hi) or B_hi <= 0:
+        B_hi = float(np.max(profile_good))
+
+    lo_arr     = np.array([lambda_lo, Y_lo,  B_lo])
+    hi_arr     = np.array([lambda_hi, Y_hi,  B_hi])
+    # For soft-bound penalty scale: 1% of range (use large value for unbounded)
+    hi_finite  = np.where(np.isfinite(hi_arr), hi_arr, lo_arr + 1e3)
+    range_arr  = hi_finite - lo_arr + 1e-30
+    pen_sigma  = range_arr * 0.01
+
+    r_fine = _build_fine_grid(r_max, n_fine)
+    p0 = np.array([lambda_c_init_m, Y_line_init, B_sci_init])
+
+    def _residuals(p):
+        lc, Y, B = p
+        model_fine = _airglow_model_fine(r_fine, lc, Y, B, cal)
+        model_bins = _bin_average(model_fine, r_fine, r_good)
+        data_r = (profile_good - model_bins) / sigma_good
+
+        # Soft-bound penalties
+        below = np.maximum(0.0, lo_arr - p) / pen_sigma
+        above = np.maximum(0.0, p - hi_arr) / pen_sigma
+        penalty = below + above
+        return np.append(data_r, penalty)
+
+    result = least_squares(
+        _residuals, p0, method='lm',
+        ftol=1e-12, xtol=1e-12, gtol=1e-12,
+        max_nfev=50_000,
+    )
+    return result
+
+
+def _run_airglow_lm_thermal(
+    r_good: np.ndarray,
+    profile_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_max: float,
+    cal,
+    lambda_c_init_m: float,
+    delta_lambda_init_m: float,
+    Y_line_init: float,
+    B_sci_init: float,
+    n_fine: int = 500,
+    L_invert: int = 101,
+):
+    """
+    TRF fit over {lambda_c_m, delta_lambda_m, Y_line, B_sci} with hard bounds.
+
+    Hard bounds (enforced by trust-region-reflective method):
+      lambda_c_m     : OI_WAVELENGTH_AIR_M ± 1.5 × FSR_OI_M
+      delta_lambda_m : [delta_lambda_from_temperature(100K),
+                        delta_lambda_from_temperature(3000K)]
+      Y_line         : [0, inf)
+      B_sci          : [0, min(profile)*1.5]
+
+    Using TRF rather than LM so that scipy enforces the bounds exactly.
+    When the optimizer converges at a bound, delta_lambda_fit == bound exactly,
+    making DELTA_LAMBDA_AT_BOUND detection reliable.
+    """
+    from src.fpi.m03_airglow_synthesis_2026_05_24 import delta_lambda_from_temperature
+
+    lambda_lo = OI_WAVELENGTH_AIR_M - 1.5 * FSR_OI_M
+    lambda_hi = OI_WAVELENGTH_AIR_M + 1.5 * FSR_OI_M
+    dlam_lo   = delta_lambda_from_temperature(100.0)
+    dlam_hi   = delta_lambda_from_temperature(3000.0)
+    B_lo = 0.0
+    B_hi = float(np.min(profile_good)) * 1.5 if np.min(profile_good) > 0 else 1e6
+    if not np.isfinite(B_hi) or B_hi <= 0:
+        B_hi = float(np.max(profile_good))
+
+    lb = [lambda_lo, dlam_lo, 0.0, B_lo]
+    ub = [lambda_hi, dlam_hi, np.inf, B_hi]
+
+    # Clamp initial guess into bounds
+    p0 = np.array([lambda_c_init_m, delta_lambda_init_m, Y_line_init, B_sci_init])
+    p0 = np.clip(p0, lb, [lambda_hi, dlam_hi, 1e15, B_hi])
+
+    r_fine = _build_fine_grid(r_max, n_fine)
+
+    def _residuals(p):
+        lc, dl, Y, B = p
+        model_fine = _airglow_model_thermal(r_fine, lc, dl, Y, B, cal, L_invert)
+        model_bins = _bin_average(model_fine, r_fine, r_good)
+        return (profile_good - model_bins) / sigma_good
+
+    def _jac(p):
+        lc, dl, Y, B = p
+        return _compute_jacobian_thermal(
+            r_good, sigma_good, r_fine,
+            lc, dl, Y, B, cal,
+            L_invert=L_invert,
+        )
+
+    result = least_squares(
+        _residuals, p0, method='trf',
+        jac=_jac,
+        bounds=(lb, ub),
+        ftol=1e-12, xtol=1e-12, gtol=1e-12,
+        max_nfev=100_000,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Covariance and uncertainties
+# ---------------------------------------------------------------------------
+
+def _compute_jacobian_analytical(
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+) -> np.ndarray:
+    """
+    Compute analytical Jacobian of weighted residuals w.r.t. [lambda_c, Y_line, B_sci].
+
+    Uses a physically motivated step for lambda_c (FSR_OI_M/1000 ≈ 1e-17 m ≈ 4.7 m/s)
+    to avoid the near-zero numerical derivative that arises when scipy's LM uses
+    a relative step h ≈ sqrt(eps) × lambda_c ≈ 1 FSR.
+
+    Columns:
+        0 — d(residuals)/d(lambda_c)   via finite difference (step = FSR_OI_M/1000)
+        1 — d(residuals)/d(Y_line)     = -airy(r)/sigma  (analytic)
+        2 — d(residuals)/d(B_sci)      = -1/sigma         (analytic)
+
+    Sign convention: residuals = (data - model) / sigma, so
+        J_ij = -∂model_i / ∂p_j / sigma_i
+    """
+    step_lc = FSR_OI_M / 1000.0   # ≈ 9.9e-18 m → ≈ 4.7 m/s
+
+    # Finite-difference column for lambda_c
+    model_hi = _bin_average(
+        _airglow_model_fine(r_fine, lambda_c_m + step_lc, Y_line, B_sci, cal),
+        r_fine, r_good,
+    )
+    model_lo = _bin_average(
+        _airglow_model_fine(r_fine, lambda_c_m - step_lc, Y_line, B_sci, cal),
+        r_fine, r_good,
+    )
+    d_dlambda = (model_hi - model_lo) / (2.0 * step_lc)   # ∂model/∂lambda_c
+
+    # Analytic columns for Y_line and B_sci
+    airy_fine = airy_modified(
+        r_fine, lambda_c_m,
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+        r_max=float(r_fine[-1]),
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+    )
+    airy_bins = np.interp(r_good, r_fine, airy_fine)   # ∂model/∂Y_line
+
+    # J_ij = -∂model_i/∂p_j / sigma_i   (sign: residual = (data-model)/sigma)
+    J = np.column_stack([
+        -d_dlambda / sigma_good,   # d(residual)/d(lambda_c)
+        -airy_bins / sigma_good,   # d(residual)/d(Y_line)
+        -np.ones(len(r_good)) / sigma_good,  # d(residual)/d(B_sci)
+    ])
+    return J
+
+
+def _compute_jacobian_thermal(
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    delta_lambda_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+    L_invert: int = 101,
+    n_fsr: float = 5.0,
+) -> np.ndarray:
+    """
+    Jacobian of weighted residuals w.r.t. [lambda_c, delta_lambda, Y_line, B_sci].
+
+    Columns:
+        0 — d(residuals)/d(lambda_c)     via FD (step = FSR_OI_M/1000)
+        1 — d(residuals)/d(delta_lambda) via FD (step = delta_lambda_m * 0.01)
+        2 — d(residuals)/d(Y_line)       analytic spectral sum
+        3 — d(residuals)/d(B_sci)        = -1/sigma (analytic)
+    """
+    step_lc = FSR_OI_M / 1000.0
+    step_dl = delta_lambda_m * 0.01
+
+    # lambda_c FD column
+    model_hi_lc = _bin_average(
+        _airglow_model_thermal(r_fine, lambda_c_m + step_lc, delta_lambda_m, Y_line, B_sci, cal, L_invert, n_fsr),
+        r_fine, r_good,
+    )
+    model_lo_lc = _bin_average(
+        _airglow_model_thermal(r_fine, lambda_c_m - step_lc, delta_lambda_m, Y_line, B_sci, cal, L_invert, n_fsr),
+        r_fine, r_good,
+    )
+    d_dlambda = (model_hi_lc - model_lo_lc) / (2.0 * step_lc)
+
+    # delta_lambda FD column
+    dl_hi = max(delta_lambda_m + step_dl, 1e-15)
+    dl_lo = max(delta_lambda_m - step_dl, 1e-15)
+    model_hi_dl = _bin_average(
+        _airglow_model_thermal(r_fine, lambda_c_m, dl_hi, Y_line, B_sci, cal, L_invert, n_fsr),
+        r_fine, r_good,
+    )
+    model_lo_dl = _bin_average(
+        _airglow_model_thermal(r_fine, lambda_c_m, dl_lo, Y_line, B_sci, cal, L_invert, n_fsr),
+        r_fine, r_good,
+    )
+    d_ddelta = (model_hi_dl - model_lo_dl) / (dl_hi - dl_lo)
+
+    # Y_line analytic column: d_model/d_Y_line = Σ_j airy_j * w_j
+    # where w_j = gauss_j / sum_gauss (normalised weights, no d_lam).
+    r_max    = float(r_fine[-1])
+    FSR_m    = OI_WAVELENGTH_AIR_M ** 2 / (2.0 * cal.t_m)
+    lam_lo   = lambda_c_m - (n_fsr / 2.0) * FSR_m
+    lam_hi   = lambda_c_m + (n_fsr / 2.0) * FSR_m
+    lam_grid = np.linspace(lam_lo, lam_hi, L_invert)
+    gauss_w  = np.exp(-0.5 * ((lam_grid - lambda_c_m) / delta_lambda_m) ** 2)
+    sum_gauss = float(np.sum(gauss_w))
+    if sum_gauss > 0:
+        gauss_w = gauss_w / sum_gauss
+
+    d_model_dY_fine = np.zeros_like(r_fine)
+    for j, lam_j in enumerate(lam_grid):
+        airy_j = airy_modified(
+            r_fine, lam_j,
+            t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+            r_max=r_max,
+            I0=cal.I0, I1=cal.I1, I2=cal.I2,
+            sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+        )
+        d_model_dY_fine += airy_j * gauss_w[j]
+    d_Y_col = np.interp(r_good, r_fine, d_model_dY_fine)
+
+    J = np.column_stack([
+        -d_dlambda / sigma_good,
+        -d_ddelta  / sigma_good,
+        -d_Y_col   / sigma_good,
+        -np.ones(len(r_good)) / sigma_good,
+    ])
+    return J
+
+
+def _compute_uncertainties(
+    lm_result,
+    n_good: int,
+    chi2_red: float,
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Compute covariance and 1σ stderrs using an analytically recomputed Jacobian.
+
+    The LM Jacobian for lambda_c is unreliable because scipy's default relative
+    step h ≈ sqrt(eps) × lambda_c ≈ 1 FSR averages out the fringe sensitivity.
+    We replace it with a finite-difference Jacobian using step = FSR_OI_M/1000 ≈ 4.7 m/s.
+
+    Returns
+    -------
+    sigma   : ndarray shape (3,)  — stderrs for [lambda_c, Y_line, B_sci]
+    cov     : ndarray shape (3,3) — covariance matrix
+    flags   : int                 — AirglowFitFlags.STDERR_NONE if singular
+    """
+    flags = AirglowFitFlags.GOOD
+
+    # Recompute Jacobian with physically appropriate step sizes
+    J = _compute_jacobian_analytical(
+        r_good, sigma_good, r_fine,
+        lambda_c_m, Y_line, B_sci, cal,
+    )
+
+    n_params = 3
+    s2 = chi2_red
+
+    JTJ = J.T @ J
+    try:
+        cond = np.linalg.cond(JTJ)
+        if cond < 1e14:
+            JTJ_inv = np.linalg.inv(JTJ)
+        else:
+            JTJ_inv = np.linalg.pinv(JTJ, rcond=1e-10)
+            flags |= AirglowFitFlags.STDERR_NONE
+            log.warning(f"JTJ near-singular (cond={cond:.2e}): using pseudoinverse")
+        cov    = s2 * JTJ_inv
+        sigmas = np.sqrt(np.maximum(np.diag(cov), 0.0))
+        if not np.all(np.isfinite(sigmas)):
+            raise np.linalg.LinAlgError("non-finite after pinv")
+    except (np.linalg.LinAlgError, ValueError):
+        sigmas = np.full(n_params, np.inf)
+        cov    = np.full((n_params, n_params), np.inf)
+        flags |= AirglowFitFlags.STDERR_NONE
+
+    return sigmas, cov, flags
+
+
+def _compute_uncertainties_thermal(
+    lm_result,
+    n_good: int,
+    chi2_red: float,
+    r_good: np.ndarray,
+    sigma_good: np.ndarray,
+    r_fine: np.ndarray,
+    lambda_c_m: float,
+    delta_lambda_m: float,
+    Y_line: float,
+    B_sci: float,
+    cal,
+    L_invert: int = 101,
+    n_fsr: float = 5.0,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Compute covariance and 1σ stderrs for the 4-parameter thermal fit.
+
+    Returns
+    -------
+    sigmas : ndarray shape (4,) — stderrs for [lambda_c, delta_lambda, Y_line, B_sci]
+    cov    : ndarray shape (4,4)
+    flags  : int
+    """
+    flags = AirglowFitFlags.GOOD
+    n_params = 4
+    s2 = chi2_red
+
+    J = _compute_jacobian_thermal(
+        r_good, sigma_good, r_fine,
+        lambda_c_m, delta_lambda_m, Y_line, B_sci, cal,
+        L_invert, n_fsr,
+    )
+
+    JTJ = J.T @ J
+    try:
+        cond = np.linalg.cond(JTJ)
+        if cond < 1e14:
+            JTJ_inv = np.linalg.inv(JTJ)
+        else:
+            JTJ_inv = np.linalg.pinv(JTJ, rcond=1e-10)
+            flags |= AirglowFitFlags.STDERR_NONE
+            log.warning(f"Thermal JTJ near-singular (cond={cond:.2e}): using pseudoinverse")
+        cov    = s2 * JTJ_inv
+        sigmas = np.sqrt(np.maximum(np.diag(cov), 0.0))
+        if not np.all(np.isfinite(sigmas)):
+            raise np.linalg.LinAlgError("non-finite after pinv")
+    except (np.linalg.LinAlgError, ValueError):
+        sigmas = np.full(n_params, np.inf)
+        cov    = np.full((n_params, n_params), np.inf)
+        flags |= AirglowFitFlags.STDERR_NONE
+
+    return sigmas, cov, flags
+
+
+# ---------------------------------------------------------------------------
+# Top-level API
+# ---------------------------------------------------------------------------
+
+def fit_airglow_fringe(
+    profile,
+    cal,
+    n_fine: int = 500,
+    use_temperature: bool = False,
+) -> AirglowFitResult:
+    """
+    Invert an OI 630 nm science FringeProfile to recover v_rel.
+
+    Parameters
+    ----------
+    profile : FringeProfile
+        From M03 reduce_science_frame(). Must have dark subtraction applied.
+    cal : CalibrationResult
+        From H05 fit_calibration_fringe(). All 10 instrument parameters
+        are used as fixed constants.
+    n_fine : int
+        Points in the fine uniform-r grid for forward model. Default 500.
+    use_temperature : bool
+        If True, add Δλ as a 4th free parameter and retrieve temperature.
+        If False (default), behaviour is bit-identical to existing implementation.
+
+    Returns
+    -------
+    AirglowFitResult
+
+    Raises
+    ------
+    ValueError
+        If profile.quality_flags & CENTRE_FAILED, or fewer than 10 good bins.
+    RuntimeError
+        If parameter stderrs are non-finite after pseudoinverse fallback.
+    """
+    from src.fpi.archive.m03_annular_reduction_2026_04_06 import QualityFlags
+
+    # ---- Step 0: Validate inputs ----
+    if profile.quality_flags & QualityFlags.CENTRE_FAILED:
+        raise ValueError("FringeProfile has CENTRE_FAILED flag — cannot invert")
+
+    good_mask = (
+        ~profile.masked
+        & np.isfinite(profile.sigma_profile)
+        & (profile.sigma_profile > 0)
+        & np.isfinite(profile.profile)
+    )
+    n_good = int(np.sum(good_mask))
+    if n_good < 10:
+        raise ValueError(f"Only {n_good} unmasked bins — need ≥ 10")
+
+    result_flags = AirglowFitFlags.GOOD
+    if cal.quality_flags != 0:
+        result_flags |= AirglowFitFlags.CAL_QUALITY_DEGRADED
+
+    # Extract good bins
+    r_good       = profile.r_grid[good_mask]
+    r2_good      = profile.r2_grid[good_mask]
+    profile_good = profile.profile[good_mask]
+    sigma_raw    = profile.sigma_profile[good_mask].copy()
+    r_max        = float(profile.r_max_px)
+
+    # ---- Sigma floor (same as H05: 0.5% of median signal) ----
+    median_signal = float(np.median(profile_good))
+    sigma_floor   = max(1.0, median_signal * 0.005)
+    sigma_good    = np.maximum(sigma_raw, sigma_floor)
+
+    # ---- Step 1: Brute-force scan for λ_c ----
+    lc_start = float(OI_WAVELENGTH_AIR_M)   # scan centred at rest wavelength
+    lambda_c_best, chi2_scan, scan_flags = _lambda_c_scan(
+        r_good, profile_good, sigma_good, r2_good, r_max, cal,
+        n_scan=211, n_fine=n_fine,
+    )
+    result_flags |= scan_flags
+
+    # ---- Initial estimates for Y_line and B_sci ----
+    r_fine = _build_fine_grid(r_max, n_fine)
+    airy_fine_init = airy_modified(
+        r_fine, lambda_c_best,
+        t=cal.t_m, R_refl=cal.R_refl, alpha=cal.alpha, n=1.0,
+        r_max=r_max,
+        I0=cal.I0, I1=cal.I1, I2=cal.I2,
+        sigma0=cal.sigma0, sigma1=cal.sigma1, sigma2=cal.sigma2,
+    )
+    airy_bins_init = np.interp(r_good, r_fine, airy_fine_init)
+    airy_max = float(np.max(airy_bins_init)) if np.max(airy_bins_init) > 0 else 1.0
+    Y_line_init = float(np.max(profile_good)) / airy_max
+    B_sci_init  = float(np.min(profile_good)) * 0.8
+
+    # Ensure B_sci_init > 0
+    if B_sci_init <= 0:
+        B_sci_init = max(1.0, float(np.percentile(profile_good, 5)))
+
+    # ---- Step 2: LM fit ----
+    lm_result = _run_airglow_lm(
+        r_good, profile_good, sigma_good, r_max, cal,
+        lambda_c_init_m=lambda_c_best,
+        Y_line_init=Y_line_init,
+        B_sci_init=B_sci_init,
+        n_fine=n_fine,
+    )
+
+    lambda_c_m = float(lm_result.x[0])
+    Y_line     = float(lm_result.x[1])
+    B_sci      = float(lm_result.x[2])
+
+    # ---- Chi2 from data residuals only (exclude penalty rows) ----
+    model_final_fine = _airglow_model_fine(r_fine, lambda_c_m, Y_line, B_sci, cal)
+    model_final_bins = _bin_average(model_final_fine, r_fine, r_good)
+    data_resid       = (profile_good - model_final_bins) / sigma_good
+    dof              = max(n_good - 3, 1)
+    chi2_sum         = float(np.sum(data_resid ** 2))
+    chi2_red         = chi2_sum / dof
+
+    # ---- Step 3: Covariance and stderrs ----
+    sigmas, cov, unc_flags = _compute_uncertainties(
+        lm_result, n_good, chi2_red,
+        r_good, sigma_good, r_fine,
+        lambda_c_m, Y_line, B_sci, cal,
+    )
+    result_flags |= unc_flags
+
+    if not np.all(np.isfinite(sigmas)):
+        result_flags |= AirglowFitFlags.STDERR_NONE
+        raise RuntimeError(
+            "H06 covariance failure: parameter stderrs are non-finite "
+            "even after pseudoinverse fallback."
+        )
+
+    sigma_lambda_c_m, sigma_Y_line, sigma_B_sci = sigmas
+
+    # ---- Step 4: Doppler wind and phase ----
+    v_rel_ms       = SPEED_OF_LIGHT_MS * (lambda_c_m - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
+    sigma_v_rel_ms = SPEED_OF_LIGHT_MS * sigma_lambda_c_m / OI_WAVELENGTH_AIR_M
+
+    epsilon_sci   = float((2.0 * lambda_c_m / OI_WAVELENGTH_AIR_M) % 1.0)
+    delta_epsilon = epsilon_sci - float(cal.epsilon_cal)
+
+    # ---- Step 5: Temperature retrieval if requested ----
+    T_est_K          = None
+    sigma_T_K        = None
+    two_sigma_T_K    = None
+    delta_lambda_fit_m = None
+    lm_final         = lm_result
+    n_params_free_out = 3
+
+    if use_temperature:
+        from src.fpi.m03_airglow_synthesis_2026_05_24 import delta_lambda_from_temperature
+
+        # Seed Δλ from T=1000 K (Harding §3)
+        delta_lambda_init = delta_lambda_from_temperature(1000.0)
+
+        lm_thermal = _run_airglow_lm_thermal(
+            r_good, profile_good, sigma_good, r_max, cal,
+            lambda_c_init_m     = lambda_c_m,   # seeded from 3-param result
+            delta_lambda_init_m = delta_lambda_init,
+            Y_line_init         = Y_line,
+            B_sci_init          = B_sci,
+            n_fine              = n_fine,
+            L_invert            = 101,
+        )
+
+        lambda_c_m         = float(lm_thermal.x[0])
+        delta_lambda_fit_m = float(lm_thermal.x[1])
+        Y_line             = float(lm_thermal.x[2])
+        B_sci              = float(lm_thermal.x[3])
+
+        # Recompute chi2 with thermal model (analogous to step 2)
+        model_th_fine = _airglow_model_thermal(
+            r_fine, lambda_c_m, delta_lambda_fit_m, Y_line, B_sci, cal
+        )
+        model_th_bins = _bin_average(model_th_fine, r_fine, r_good)
+        data_resid_th = (profile_good - model_th_bins) / sigma_good
+        dof_th        = max(n_good - 4, 1)
+        chi2_red      = float(np.sum(data_resid_th ** 2)) / dof_th
+
+        # Recompute uncertainties with thermal Jacobian (analogous to step 3)
+        sigmas_th, cov_th, unc_th_flags = _compute_uncertainties_thermal(
+            lm_thermal, n_good, chi2_red,
+            r_good, sigma_good, r_fine,
+            lambda_c_m, delta_lambda_fit_m, Y_line, B_sci, cal,
+        )
+        result_flags |= unc_th_flags
+
+        if not np.all(np.isfinite(sigmas_th)):
+            result_flags |= AirglowFitFlags.STDERR_NONE
+            raise RuntimeError(
+                "H06 thermal covariance failure: stderrs are non-finite "
+                "even after pseudoinverse fallback."
+            )
+
+        sigma_lambda_c_m = sigmas_th[0]
+        sigma_Y_line     = sigmas_th[2]
+        sigma_B_sci      = sigmas_th[3]
+
+        # Update Doppler quantities from refined lambda_c_m
+        v_rel_ms       = SPEED_OF_LIGHT_MS * (lambda_c_m - OI_WAVELENGTH_AIR_M) / OI_WAVELENGTH_AIR_M
+        sigma_v_rel_ms = SPEED_OF_LIGHT_MS * sigma_lambda_c_m / OI_WAVELENGTH_AIR_M
+        epsilon_sci    = float((2.0 * lambda_c_m / OI_WAVELENGTH_AIR_M) % 1.0)
+        delta_epsilon  = epsilon_sci - float(cal.epsilon_cal)
+
+        # Temperature and uncertainty (Harding Eq. 12 inverted)
+        T_est_K = temperature_from_delta_lambda(delta_lambda_fit_m)
+        dT_dDlam = (
+            2.0 * OXYGEN_MASS_KG * SPEED_OF_LIGHT_MS ** 2
+            * delta_lambda_fit_m
+            / (OI_WAVELENGTH_AIR_M ** 2 * BOLTZMANN_J_PER_K)
+        )
+        sigma_T_K     = dT_dDlam * sigmas_th[1]   # sigmas_th[1] = σ_Δλ
+        two_sigma_T_K = 2.0 * sigma_T_K
+
+        # DELTA_LAMBDA_AT_BOUND: set when fitted Δλ is at or within 1e-18 m of bound
+        dlam_lo = delta_lambda_from_temperature(100.0)
+        dlam_hi = delta_lambda_from_temperature(3000.0)
+        if (abs(delta_lambda_fit_m - dlam_lo) < 1e-18 or
+                abs(delta_lambda_fit_m - dlam_hi) < 1e-18):
+            result_flags |= AirglowFitFlags.DELTA_LAMBDA_AT_BOUND
+
+        lm_final          = lm_thermal
+        n_params_free_out = 4
+
+    # ---- Quality flags ----
+    if chi2_red > 10.0:
+        result_flags |= AirglowFitFlags.CHI2_VERY_HIGH | AirglowFitFlags.CHI2_HIGH
+        log.warning(f"chi2_reduced = {chi2_red:.2f} > 10")
+    elif chi2_red > 3.0:
+        result_flags |= AirglowFitFlags.CHI2_HIGH
+        log.warning(f"chi2_reduced = {chi2_red:.2f} > 3.0")
+    elif chi2_red < 0.5:
+        result_flags |= AirglowFitFlags.CHI2_LOW
+
+    lambda_c_lo = OI_WAVELENGTH_AIR_M - 1.5 * FSR_OI_M
+    lambda_c_hi = OI_WAVELENGTH_AIR_M + 1.5 * FSR_OI_M
+    if abs(lambda_c_m - lambda_c_lo) < 1e-15 or abs(lambda_c_m - lambda_c_hi) < 1e-15:
+        result_flags |= AirglowFitFlags.LAMBDA_C_AT_BOUND
+
+    snr_estimate = (
+        (float(np.max(profile_good)) - float(np.min(profile_good))) / abs(B_sci)
+        if abs(B_sci) > 0 else np.inf
+    )
+    if snr_estimate < 1.0:
+        result_flags |= AirglowFitFlags.LOW_SNR
+
+    converged = bool(lm_final.success or lm_final.cost < 1e-10)
+
+    return AirglowFitResult(
+        # Line centre
+        lambda_c_m           = lambda_c_m,
+        sigma_lambda_c_m     = sigma_lambda_c_m,
+        two_sigma_lambda_c_m = 2.0 * sigma_lambda_c_m,
+        # Wind
+        v_rel_ms             = v_rel_ms,
+        sigma_v_rel_ms       = sigma_v_rel_ms,
+        two_sigma_v_rel_ms   = 2.0 * sigma_v_rel_ms,
+        # Intensity scale
+        Y_line               = Y_line,
+        sigma_Y_line         = sigma_Y_line,
+        two_sigma_Y_line     = 2.0 * sigma_Y_line,
+        # Bias
+        B_sci                = B_sci,
+        sigma_B_sci          = sigma_B_sci,
+        two_sigma_B_sci      = 2.0 * sigma_B_sci,
+        # Quality
+        chi2_reduced         = chi2_red,
+        n_bins_used          = n_good,
+        n_params_free        = n_params_free_out,
+        converged            = converged,
+        quality_flags        = result_flags,
+        # Phase
+        epsilon_sci          = epsilon_sci,
+        delta_epsilon        = delta_epsilon,
+        # Traceability
+        calibration_t_m         = float(cal.t_m),
+        calibration_epsilon_cal = float(cal.epsilon_cal),
+        # Scan diagnostics
+        lambda_c_scan_init_m = lc_start,
+        lambda_c_lm_init_m   = lambda_c_best,
+        # Temperature (None when use_temperature=False)
+        T_est_K              = T_est_K,
+        sigma_T_K            = sigma_T_K,
+        two_sigma_T_K        = two_sigma_T_K,
+        delta_lambda_m       = delta_lambda_fit_m,
+    )

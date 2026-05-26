@@ -13,6 +13,8 @@
 | S10  | M02         | impl   | passing  | 2026-04-06    |
 | S11  | M04         | impl   | passing  | 2026-04-06    |
 | S12  | M03         | PASS   | 6/7      | 2026-05-13    |
+| M03-add | m03_airglow_synthesis_2026_05_24 | IMPLEMENTED | 7/7 | 2026-05-24 |
+| M06-add | m06_airglow_inversion_2026_05_24 | IMPLEMENTED | 8/8 | 2026-05-24 |
 | S13  | Tolansky    | impl   | passing  | 2026-04-06    |
 | S13a | tolansky_2line_2026-05-05 | impl | 7/7 | 2026-05-05 |
 | S13b | tolansky_1line_2026-05-05 | impl | 6/6 | 2026-05-05 |
@@ -35,6 +37,8 @@
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
 | CAL01 | fpi_cal_lib + run_cal_pipeline | PASS (all S0–S6 complete) | 10/10 | 2026-05-18 |
+| MC01 | mc01_fpi_mc_engine | IMPLEMENTED | 10/10 | 2026-05-24 |
+| MC02 | mc02_fpi_mc_simulations | IMPLEMENTED | 10/10 | 2026-05-24 |
 
 ## Known pre-existing test failures (not introduced by current work)
 

@@ -7,8 +7,8 @@ here rather than hardcoding.
 Sources:
   OI_WAVELENGTH_NM    : NIST ASD (https://physics.nist.gov/PhysRefData/ASD/lines_form.html)
   OI_WAVELENGTH_VAC_NM: derived via Edlén (1966) air-to-vacuum formula
-  ALPHA_RAD_PX        : S13a two-line neon Tolansky fit (2x2 binned, 2026-05-06)
-  D_TOLANSKY_MM       : S13a two-line neon Tolansky fit (Benoit, 2026-05-06)
+  ALPHA_RAD_PX        : H05 calibration inversion (10-param, 2026-05-24); seeded by S13a Tolansky
+  D_TOLANSKY_MM       : H05 calibration inversion (10-param, 2026-05-24); seeded by S13a Tolansky
   ICOS_GAP_MM         : ICOS mechanical spacer measurement
   D_25C_MM            : ICOS_GAP_MM minus Pat & Nir pre-load compression
   D_PRELOAD_NM        : Pat & Nir clamping compression (Zerodur spacer)
@@ -18,7 +18,8 @@ Sources:
   NE_WAVELENGTH_1_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
   NE_WAVELENGTH_2_NM      : Ne 6382.9914 A, IAU standard "S" (Burns 1950), air
   NE_WAVELENGTH_2_VAC_NM  : derived via Edlén (1966) air-to-vacuum formula
-  R_REFL              : FlatSat effective etalon reflectivity
+  R_REFL              : H05 calibration inversion R1 at 640.2 nm (2026-05-24)
+  NE_INTENSITY_2      : H05 calibration inversion ne_ratio (2026-05-24)
   R_MAX_PX            : FlatSat/flight maximum fringe radius
 """
 
@@ -30,17 +31,17 @@ import math
 # ---------------------------------------------------------------------------
 
 # Etalon / optics
-ETALON_GAP_M        : float = 20.1071e-3    # m  — S13a Tolansky Benoit (2026-05-06); 1σ = 0.0002 mm
-ETALON_N            : float = 1.0           # —  — refractive index of etalon gap (air)
-ETALON_R_INSTRUMENT : float = 0.53         # —  — effective reflectivity (FlatSat)
-# ALPHA_RAD_PX defined below in opto-mechanical section (1.6085e-4 rad/px)
+ETALON_GAP_M        : float = 20.1069749e-3  # m  — H05 inversion (2026-05-24); 1σ = 1.5 nm
+ETALON_N            : float = 1.0            # —  — refractive index of etalon gap (air)
+ETALON_R_INSTRUMENT : float = 0.24378        # —  — H05 inversion R1 @ 640.2 nm (2026-05-24); 1σ = 0.0098
+# ALPHA_RAD_PX defined below in opto-mechanical section (1.60885e-4 rad/px)
 
 # CCD / FOV
-CCD_PIXELS_UNBINNED : int   = 512           # px — physical pixels per side (CCD97)
-FOV_DEG             : float = 1.65          # deg — full field of view
+CCD_PIXELS_UNBINNED : int   = 512            # px — physical pixels per side (CCD97)
+FOV_DEG             : float = 1.65           # deg — full field of view
 
 # OI airglow target line
-OI_WAVELENGTH_AIR_M : float = 630.0304e-9  # m  — NIST ASD air wavelength (rest)
+OI_WAVELENGTH_AIR_M : float = 630.0304e-9   # m  — NIST ASD air wavelength (rest)
 
 # Neon calibration lines — air wavelengths (Burns 1950) and vacuum (NIST ASD / Edlén 1966)
 NE_WAVELENGTH_1_AIR_M : float = 640.2248e-9   # m  — strong line, air
@@ -48,10 +49,11 @@ NE_WAVELENGTH_1_VAC_M : float = 640.4018e-9   # m  — strong line, vacuum (±0.
 NE_WAVELENGTH_2_AIR_M : float = 638.2991e-9   # m  — weak line, air
 NE_WAVELENGTH_2_VAC_M : float = 638.47560e-9  # m  — weak line, vacuum (±0.00005 nm)
 NE_INTENSITY_1        : float = 1.0           # —  — reference intensity ratio
-NE_INTENSITY_2        : float = 0.36          # —  — weak/strong ratio
+NE_INTENSITY_2        : float = 0.5126        # —  — H05 inversion ne_ratio (2026-05-24); 1σ = 0.012
+                                              #       previous nominal value: 0.36
 
 # Physical constants
-SPEED_OF_LIGHT_MS : float = 299_792_458.0   # m/s — exact SI value
+SPEED_OF_LIGHT_MS : float = 299_792_458.0    # m/s — exact SI value
 
 # ---------------------------------------------------------------------------
 # Physical / astronomical constants
@@ -89,24 +91,30 @@ NE_WAVELENGTH_2_VAC_NM: float = 638.47560  # nm, vacuum (NIST ASD; ±0.00005 nm)
 
 # ---------------------------------------------------------------------------
 # Opto-mechanical calibration constants
-# Recovered from two-line neon Tolansky fit on FlatSat data
+# Recovered from H05 calibration inversion (10-param fit, Harding 2014 forward model)
+# Tolansky two-line fit (S13a, 2026-05-24) used as seeds; H05 values are authoritative.
 # ---------------------------------------------------------------------------
 
-# Etalon plate spacing recovered by S13a two-line Tolansky fit (Benoit method) [mm]
-# d = 20.1071 ± 0.0002 mm  (1σ),  2σ = 0.0004 mm   (2026-05-06)
+# Etalon plate spacing from H05 inversion [mm]
+# t = 20.1069749 ± 0.0015 mm  (1σ = 1.5 nm)   (2026-05-24)
+# Previous (Tolansky seed): 20.10695 ± 0.2 µm  (2026-05-24)
 # NOTE: disagrees with D_25C_MM (mechanical prior) by ~99 µm; discrepancy unresolved.
 # All pipeline code must use ICOS_GAP_MM / D_25C_MM for N_int resolution only.
-D_TOLANSKY_MM:       float = 20.1071
-SIGMA_D_TOLANSKY_MM: float = 0.0002   # 1σ [mm]
+D_TOLANSKY_MM:       float = 20.1069749
+SIGMA_D_TOLANSKY_MM: float = 0.0000015   # 1σ [mm]  (1.5 nm — H05 inversion)
 
-# Plate scale (2x2 binned) recovered by S13a two-line Tolansky fit [rad/px]
-# alpha = 1.6085e-4 ± 1.3478e-8 rad/px  (1σ),  2σ = 2.6955e-8   (2026-05-06)
-# Old value 1.6071e-4 rad/px superseded.
-ALPHA_RAD_PX:       float = 1.6085e-4
-SIGMA_ALPHA_RAD_PX: float = 1.3478e-8   # 1σ [rad/px]
+# Plate scale (2x2 binned) from H05 inversion [rad/px]
+# alpha = 1.60885e-4 ± 0.00014e-4 rad/px  (1σ)   (2026-05-24)
+# Previous (Tolansky seed): 1.608163e-4 ± 1.23e-8 rad/px  (2026-05-24)
+ALPHA_RAD_PX:       float = 1.60885e-4
+SIGMA_ALPHA_RAD_PX: float = 0.00014e-4   # 1σ [rad/px]
 
-# FlatSat effective etalon reflectivity (dimensionless)
-R_REFL: float = 0.53
+# FlatSat effective etalon reflectivity at 640.2 nm [dimensionless]
+# R1 from H05 inversion (used as R_refl in H06 airglow inversion)
+# R1 = 0.24378 ± 0.0098  (1σ)   (2026-05-24)
+# Previous value: 0.53 (placeholder)
+# Note: R2 (638.3 nm) = 0.33400 ± 0.018 — reference only, not used in H06
+R_REFL: float = 0.24378
 
 # Maximum fringe radius used in annular reduction [px] (FlatSat / flight)
 R_MAX_PX: int = 110
@@ -164,10 +172,10 @@ EM_GAIN: float = 1.0                       # dimensionless
 # Nominal science frame integration time.
 INTEGRATION_TIME_S: float = 10.0           # seconds
 
-# Plate scale (2×2 binned).  Authoritative Tolansky value from S13a (2026-05-06).
+# Plate scale (2×2 binned).  Authoritative H05 inversion value (2026-05-24).
 # Reproduced here so NB03 can compute pixel solid angle without
 # importing from M01 (which would create a circular Tier dependency).
-ALPHA_RAD_PER_PX: float = 1.6085e-4        # rad / binned pixel
+ALPHA_RAD_PER_PX: float = 1.60885e-4       # rad / binned pixel
 
 # Orbital and observation geometry defaults
 ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit
@@ -177,6 +185,7 @@ VER_LAYER_TOP_M:    float = 490_000.0     # m, upper bound of emission layer for
 # --- Observation regime velocity bounds (H03) ---
 # Cross-track (even orbits): thermospheric wind projected onto LOS
 V_REL_CROSSTRACK_MAX_MS  =  1000.0   # m/s; symmetric: valid range [-1000, +1000]
+
 # Along-track (odd orbits): spacecraft orbital velocity + wind projected onto LOS
 V_REL_ALONGTRACK_MIN_MS  = -8000.0   # m/s; lower bound (maximum blueshift)
 V_REL_ALONGTRACK_MAX_MS  = -6000.0   # m/s; upper bound (minimum blueshift)

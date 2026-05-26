@@ -496,7 +496,7 @@ def _figure_s0b(
     axes[2].set_title("Summary statistics", fontsize=9)
 
     fig.tight_layout()
-    _save_and_show(fig, save_path)
+    _save_and_show(fig, save_path, show=False)
 
 
 # ── Figure S1 — Cal frame gallery (combined) ─────────────────────────────────

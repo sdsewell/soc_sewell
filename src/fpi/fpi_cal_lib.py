@@ -28,18 +28,18 @@ from scipy.optimize import curve_fit, least_squares, minimize
 from scipy.signal import find_peaks
 
 from windcube.constants import (
-    ETALON_GAP_M,
-    ETALON_N,
-    ETALON_R_INSTRUMENT,
-    ALPHA_RAD_PX,
-    R_MAX_PX,
-    OI_WAVELENGTH_AIR_M,
-    NE_WAVELENGTH_1_AIR_M,
-    NE_WAVELENGTH_2_AIR_M,
-    NE_INTENSITY_1,
-    NE_INTENSITY_2,
-    SPEED_OF_LIGHT_MS,
+    ETALON_N,             # refractive index of gap (= 1.0, air)
+    OI_WAVELENGTH_AIR_M,  # OI 630.0304 nm rest wavelength (NIST)
+    NE_WAVELENGTH_1_AIR_M,  # Ne 640.2248 nm strong line (Burns 1950)
+    NE_WAVELENGTH_2_AIR_M,  # Ne 638.2991 nm weak line  (Burns 1950)
+    NE_INTENSITY_1,       # neon line intensity ratio (= 1.0)
+    NE_INTENSITY_2,       # neon line intensity ratio (measured by H05)
+    SPEED_OF_LIGHT_MS,    # exact SI value
 )
+# NOTE: ETALON_GAP_M, ETALON_R_INSTRUMENT, ALPHA_RAD_PX, R_MAX_PX are
+# intentionally NOT imported here.  Instrument values (t, alpha, R) are
+# always supplied via the Tolansky seed chain at runtime; importing them
+# from constants would give a false impression they are used as defaults.
 
 
 # ===========================================================================
@@ -3728,7 +3728,7 @@ def run_tolansky(
 
 def average_tolansky_seeds(
     results: list,
-    chi2_threshold: float = 5.0,
+    chi2_threshold: float = 15.0,
 ) -> TolanskySeedMean:
     """
     Average Tolansky seeds over N cal frames.
@@ -3736,6 +3736,13 @@ def average_tolansky_seeds(
     Frames where chi2_dof_a > threshold OR chi2_dof_b > threshold are
     excluded with a warning printed to stdout.
     Raises ValueError if no frames pass the filter.
+
+    chi2_threshold = 15.0 (raised from 5.0 on 2026-05-25).
+    With ideal peak-fit uncertainties chi2/nu ~ 1; values up to ~15
+    indicate noisy but physically consistent ring positions.  All five
+    FlatSat frames agreed on t and alpha to sub-micron level despite
+    chi2/nu up to ~11, confirming that 5.0 was over-aggressive and
+    left N=1, making the SEM undefined.
 
     Computes mean and std/sqrt(N) for: d_m, alpha_mean, eps_a, Delta_a, Y_B_obs.
     All two_sigma_ fields = exactly 2 × sigma_.
