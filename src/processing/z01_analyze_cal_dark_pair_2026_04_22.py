@@ -44,11 +44,14 @@ from src.fpi.archive.m03_annular_reduction_2026_04_06 import (  # noqa: E402
 )
 
 # ── File selection via dialog ─────────────────────────────────────────────────
+_DEFAULT_DIR = str(REPO_ROOT / "data_reference")
+
 _root = tk.Tk()
 _root.withdraw()   # hide the empty root window
 
 cal_path = filedialog.askopenfilename(
     title="Select calibration image",
+    initialdir=_DEFAULT_DIR,
     filetypes=[("Cal images", "*cal*.bin"), ("All files", "*.*")],
 )
 if not cal_path:
@@ -57,7 +60,7 @@ if not cal_path:
 dark_path = filedialog.askopenfilename(
     title="Select dark image",
     filetypes=[("Dark images", "*dark*.bin"), ("All files", "*.*")],
-    initialdir=str(pathlib.Path(cal_path).parent),
+    initialdir=_DEFAULT_DIR,
 )
 if not dark_path:
     sys.exit("No dark file selected — exiting.")
@@ -106,39 +109,8 @@ _is_synthetic  = bool(_SYNTHETIC_PAT.match(pathlib.Path(cal_path).name))
 _cx_default, _cy_default = (138, 129) if _is_synthetic else (145, 143)
 ROI_SIZE = 220
 
-# ── Interactive fringe-centre selection ───────────────────────────────────────
-_fig_sel, _ax_sel = plt.subplots(figsize=(10, 10))
-try:
-    plt.get_current_fig_manager().window.state("zoomed")   # TkAgg (Windows)
-except AttributeError:
-    try:
-        plt.get_current_fig_manager().window.showMaximized()  # Qt backends
-    except AttributeError:
-        pass
-_vmin_s, _vmax_s = np.percentile(images[0], [1, 99])
-_ax_sel.imshow(images[0], origin="upper", cmap="gray",
-               vmin=_vmin_s, vmax=_vmax_s, interpolation="nearest")
-_ax_sel.plot(_cx_default, _cy_default, "+", color="yellow",
-             markersize=16, markeredgewidth=1.5,
-             label=f"Default seed  ({_cx_default}, {_cy_default})")
-_ax_sel.set_title(
-    "Click the centre of the fringe rings,  then press Enter\n"
-    "(yellow cross = previous default; close window to keep it)",
-    fontsize=10, fontweight="bold", color="#C00000",
-)
-_ax_sel.set_xlabel("Column  (px)", fontsize=9)
-_ax_sel.set_ylabel("Row  (px)", fontsize=9)
-_ax_sel.legend(fontsize=8, loc="lower right")
-_pts = plt.ginput(n=1, timeout=0, show_clicks=True)
-plt.close(_fig_sel)
-
-if _pts:
-    CX = int(round(_pts[0][0]))
-    CY = int(round(_pts[0][1]))
-    print(f"User-selected centre:  CX={CX}, CY={CY}")
-else:
-    CX, CY = _cx_default, _cy_default
-    print(f"No click received — using default centre:  CX={CX}, CY={CY}")
+CX, CY = _cx_default, _cy_default
+print(f"Using default centre:  CX={CX}, CY={CY}")
 
 # ── Plot figure 1 — cal & dark image viewer ───────────────────────────────────
 fig, axes = plt.subplots(2, 2, figsize=(14, 10),
@@ -609,9 +581,9 @@ for _i, _pk in enumerate(fp.peak_fits):
     _npy_rows.append(_row)
 peak_fits_arr = np.array(_npy_rows, dtype=np.float64)
 
-# Output paths (same folder as the calibration image)
+# Output paths — always written to data_reference/, not the cal/dark subfolder
 _cal_stem = pathlib.Path(cal_path).stem
-_out_dir  = pathlib.Path(cal_path).parent
+_out_dir  = REPO_ROOT / "data_reference"
 _png_path = _out_dir / f"{_cal_stem}_annular_profile.png"
 _npy_path = _out_dir / f"{_cal_stem}_peak_fits.npy"
 
@@ -634,24 +606,24 @@ ax_tbl  = fig3.add_subplot(gs[1])
 r_good = fp.r_grid[good]
 p_good = fp.profile[good]
 
-ax_prof.plot(r_good, p_good, "-", color="#4472C4", linewidth=0.8,
+ax_prof.plot(r_good ** 2, p_good, "-", color="#4472C4", linewidth=0.8,
              alpha=0.5, zorder=1)
-ax_prof.scatter(r_good, p_good, s=10, facecolors="none",
+ax_prof.scatter(r_good ** 2, p_good, s=10, facecolors="none",
                 edgecolors="#4472C4", linewidths=0.8,
                 zorder=2, label="Binned profile")
 
-# ── Peak markers and error bars ───────────────────────────────────────────────
+# ── Peak markers and error bars (in r² space) ─────────────────────────────────
 for i, pk in enumerate(fp.peak_fits):
-    r_x    = float(pk.r_fit_px)
-    y_mark = float(fp.profile[pk.peak_idx])
-    two_s  = (2.0 * pk.sigma_r_fit_px
-              if (pk.fit_ok and np.isfinite(pk.sigma_r_fit_px)) else 0.0)
+    r2_x     = float(pk.r_fit_px) ** 2
+    y_mark   = float(fp.profile[pk.peak_idx])
+    two_s_r2 = (4.0 * pk.r_fit_px * pk.sigma_r_fit_px
+                if (pk.fit_ok and np.isfinite(pk.sigma_r_fit_px)) else 0.0)
 
-    ax_prof.errorbar(r_x, y_mark, xerr=two_s,
+    ax_prof.errorbar(r2_x, y_mark, xerr=two_s_r2,
                      fmt="none", ecolor="red", elinewidth=1.2, capsize=3, zorder=4)
-    ax_prof.plot(r_x, y_mark, "v", color="red", markersize=6, zorder=5)
+    ax_prof.plot(r2_x, y_mark, "v", color="red", markersize=6, zorder=5)
 
-ax_prof.set_xlabel("Radius [px]", fontsize=10)
+ax_prof.set_xlabel("r²  [px²]", fontsize=10)
 ax_prof.set_ylabel("Mean intensity (ADU)", fontsize=10)
 ax_prof.set_title(
     f"Cal−Dark annular profile  |  cx={cx_fine:.2f}, cy={cy_fine:.2f}  |  "
@@ -672,7 +644,7 @@ ax_tbl.set_title(
 NE_LINES = {1: 640.2248, 0: 638.2991}   # keyed by (peak_number - 1) % 2
 
 col_labels = [
-    "#", "Line [nm]", "r_fit [px]", "2σ_r [px]",
+    "#", "Line [nm]",
     "r²_fit [px²]", "Δ_640 [px²]", "Δ_638 [px²]",
     "2σ_r² [px²]", "Amp [ADU]", "Baseline [ADU]", "Width [px]",
 ]
@@ -687,8 +659,6 @@ for i, pk in enumerate(fp.peak_fits):
     peak_num   = i + 1
     wavelength = NE_LINES[peak_num % 2]   # odd → 640.2248, even → 638.2991
 
-    two_sr = (2.0 * pk.sigma_r_fit_px
-              if (pk.fit_ok and np.isfinite(pk.sigma_r_fit_px)) else float("nan"))
     r2_fit  = r2_all[i]
     # σ_{r²} = 2·r·σ_r  →  2σ_{r²} = 4·r·σ_r
     two_sr2 = (4.0 * pk.r_fit_px * pk.sigma_r_fit_px
@@ -710,7 +680,6 @@ for i, pk in enumerate(fp.peak_fits):
         d638_val = float("nan")
         d638_str = "—"
 
-    two_sr_str   = f"{two_sr:.3f}"  if np.isfinite(two_sr)  else "—"
     two_sr2_str  = f"{two_sr2:.2f}" if np.isfinite(two_sr2) else "—"
     width_str    = f"{pk.width_px:.3f}"    if np.isfinite(pk.width_px)    else "—"
     base_str     = f"{pk.baseline_adu:.1f}" if np.isfinite(pk.baseline_adu) else "—"
@@ -720,8 +689,6 @@ for i, pk in enumerate(fp.peak_fits):
     cell_text.append([
         str(peak_num),
         f"{wavelength:.4f}",
-        f"{pk.r_fit_px:.3f}",
-        two_sr_str,
         f"{r2_fit:.2f}",
         d640_str,
         d638_str,
@@ -735,7 +702,7 @@ for i, pk in enumerate(fp.peak_fits):
 mean_640 = np.nanmean(d640_vals) if d640_vals else float("nan")
 mean_638 = np.nanmean(d638_vals) if d638_vals else float("nan")
 mean_row = [
-    "Mean", "", "", "",
+    "Mean", "",
     "",
     f"{mean_640:.2f}" if np.isfinite(mean_640) else "—",
     f"{mean_638:.2f}" if np.isfinite(mean_638) else "—",
@@ -1055,9 +1022,7 @@ import pandas as pd
 # Y_B_estimate was computed above from peak amplitude ratios.
 # Both are written to the CSV header so F01 step4b can read them directly.
 
-csv_path = pathlib.Path(cal_path).with_suffix("").parent / (
-    pathlib.Path(cal_path).stem + "_annular_profile.csv"
-)
+csv_path = _out_dir / f"{_cal_stem}_annular_profile.csv"
 _df = pd.DataFrame({
     "r_grid":        fp.r_grid,
     "profile":       fp.profile,
