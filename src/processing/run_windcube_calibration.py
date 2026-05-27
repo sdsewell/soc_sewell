@@ -122,6 +122,15 @@ from fpi_cal_lib import (
     run_tolansky_2line,
     plot_tolansky_result,
     print_rectangular_array,
+    # Section E — H05 Harding calibration inversion
+    average_tolansky_seeds,
+    run_h05,
+    make_figure,
+    save_cal_result,
+    _model_components,
+    phase_correct_gap,
+    FitResult,
+    TolanskySeedMean,
 )
 
 
@@ -1233,7 +1242,7 @@ def main() -> None:
 
 
     # -- Step 7: Tolansky two-line analysis ----------------------------------
-    print("\n[7/7]  Tolansky two-line analysis (640.2248 + 638.2991 nm)...")
+    print("\n[7/8]  Tolansky two-line analysis (640.2248 + 638.2991 nm)...")
     peak_array = peaks_to_array(peaks)
     n_valid    = np.sum(np.isfinite(peak_array[:, 2]))
     print(f"  Peaks in array : {len(peak_array)}  ({n_valid} with valid r2_fit)")
@@ -1469,6 +1478,169 @@ def main() -> None:
         fig5.savefig(_fig5_path, dpi=150, bbox_inches="tight")
         print(f"  Saved : {_fig5_path}")
         fig5.show()
+
+    # -- Step 8: H05 Harding calibration inversion ---------------------------
+    # Gate: Tolansky must have succeeded (result is defined and valid).
+    # Uses the fp (FringeProfile) produced in Step 4 and the Tolansky result
+    # from Step 7.  Runs the 4-stage Levenberg-Marquardt inversion defined in
+    # Section E of fpi_cal_lib (run_h05), saves a diagnostic figure and a
+    # .npy calibration file for downstream H06 science inversion.
+    # -------------------------------------------------------------------------
+    _tolansky_result = locals().get('result', None)
+    if _tolansky_result is None:
+        print("\n[8/8]  H05 inversion SKIPPED — Tolansky did not complete.")
+    else:
+        result = _tolansky_result   # confirmed alias for clarity below
+        print("\n[8/8]  H05 Harding calibration inversion (dual-wavelength Airy fit)...")
+        import logging as _logging
+        _logging.basicConfig(
+            level=_logging.INFO,
+            format="  %(name)s  %(message)s",
+        )
+
+        # ── 8a: wrap single Tolansky result as TolanskySeedMean ──────────────
+        # average_tolansky_seeds accepts a list; one frame is perfectly valid.
+        print("  Building TolanskySeedMean from single Tolansky frame...")
+        try:
+            seeds = average_tolansky_seeds([result])
+            print(f"  Seeds:  d = {seeds.d_m_mean*1e3:.6f} mm  "
+                  f"α = {seeds.alpha_mean:.5e} rad/px  "
+                  f"ε_a = {seeds.eps_a_mean:.5f}  "
+                  f"Y_B = {seeds.Y_B_obs_mean:.4f}")
+        except Exception as exc:
+            print(f"  ERROR building seeds: {exc}")
+            seeds = None
+
+        if seeds is not None:
+            # ── 8b: run 4-stage LM inversion ─────────────────────────────────
+            # fp is the FringeProfile produced by annular_reduce in Step 4.
+            # run_h05 duck-types FringeProfile via .profile/.r_grid/.sigma_profile/
+            # .masked/.r_max_px — all present on the public FringeProfile class.
+            print("  Running staged inversion (4 LM stages)...")
+            print("  (Stage progress printed below via logging)")
+            try:
+                fit = run_h05(
+                    fp,
+                    seeds,
+                    R1_init=0.53,     # FlatSat-measured effective reflectivity
+                    R2_init=0.53,     # start both wavelengths equal; LM decouples
+                    sigma0_init=0.55, # Harding-typical initial PSF blur (pixels)
+                )
+
+                conv_str = "CONVERGED" if fit.converged else "NOT CONVERGED"
+                print(f"\n  -- H05 results [{conv_str}]  χ²/ν = {fit.chi2_reduced:.3f} --")
+                print(f"  t      = {fit.t_m*1e3:.7f} mm   ±{fit.sigma_t_m*1e9:.2g} nm")
+                print(f"  α      = {fit.alpha:.5e} rad/px  ±{fit.sigma_alpha:.2e}")
+                print(f"  R1     = {fit.R1:.5f}  ±{fit.sigma_R1:.2g}   (λ₁=640.2 nm → used as R_refl in H06)")
+                print(f"  R2     = {fit.R2:.5f}  ±{fit.sigma_R2:.2g}   (λ₂=638.3 nm, reference)")
+                print(f"  ΔR     = {fit.R2-fit.R1:+.5f}   (wavelength-dependent finesse)")
+                print(f"  I0     = {fit.I0:.1f} ADU   ±{fit.sigma_I0:.2g}")
+                print(f"  I1     = {fit.I1:.5f}   ±{fit.sigma_I1:.2g}   (linear vignetting)")
+                print(f"  I2     = {fit.I2:.5f}   ±{fit.sigma_I2:.2g}   (quadratic vignetting)")
+                print(f"  σ₀     = {fit.sigma0:.4f} px   ±{fit.sigma_sigma0:.2g}   (PSF blur)")
+                print(f"  σ₁,σ₂  = 0.0 px (fixed; F-test p=0.998)")
+                print(f"  B      = {fit.B:.1f} ADU   ±{fit.sigma_B:.2g}   (CCD bias)")
+                print(f"  ne_rat = {fit.ne_ratio:.4f}   ±{fit.sigma_ne_ratio:.2g}   (λ₂/λ₁ intensity)")
+                print(f"  ε_cal  = {fit.epsilon_cal:.6f}   ±{fit.sigma_epsilon_cal:.2g}   (fractional order, zero-wind reference)")
+                chi2_stages_str = "  ".join(f"S{i+1}:{v:.2f}" for i,v in enumerate(fit.chi2_by_stage))
+                print(f"  χ²/ν by stage:  {chi2_stages_str}   bins_used={fit.n_bins_used}")
+                print(f"  ----------------------------------------------------------")
+
+                # ── 8c: build model curves for figure ────────────────────────
+                # _model_components returns (composite, lam1+B, ne_ratio*lam2+B)
+                # evaluated on a fine r grid; passed directly to make_figure.
+                print("  Building diagnostic figure...")
+                n_fine = 2000
+                r_fine = np.linspace(0.0, fp.r_max_px, n_fine)
+                model_fine, lam1_fine, lam2_fine = _model_components(
+                    r_fine, fp.r_max_px,
+                    fit.t_m, fit.alpha, fit.R1, fit.R2,
+                    fit.I0, fit.I1, fit.I2,
+                    fit.sigma0, 0.0, 0.0,
+                    fit.B, fit.ne_ratio,
+                    n_fine=n_fine,
+                )
+
+                # Data arrays for figure: use the unmasked profile bins only
+                good_mask = ~fp.masked & np.isfinite(fp.sigma_profile) & (fp.sigma_profile > 0)
+                r2_data_fig  = fp.r2_grid[good_mask]
+                prof_fig     = fp.profile[good_mask]
+                sigma_fig    = fp.sigma_profile[good_mask]
+
+                fig6 = make_figure(
+                    r2_data_fig, prof_fig, sigma_fig,
+                    r_fine, model_fine, lam1_fine, lam2_fine,
+                    fit,
+                    source_name=os.path.basename(cal_path),
+                    source_path=str(cal_path),
+                )
+
+                _fig6_path = output_dir / "6_cal_h05_harding_inversion.png"
+                fig6.savefig(_fig6_path, dpi=150, bbox_inches="tight")
+                print(f"  Saved : {_fig6_path}")
+                fig6.show()
+
+                # ── 8d: save .npy calibration result ─────────────────────────
+                # Saved alongside the output PNGs.  Downstream H06 loads this
+                # via:  cal = np.load(path, allow_pickle=True).item()
+                _npy_stem = output_dir / f"{pathlib.Path(cal_path).stem}_cal_result.npy"
+                npy_dict = {
+                    # Fitted instrument parameters
+                    't_m':              fit.t_m,
+                    'alpha':            fit.alpha,
+                    'R_refl':           fit.R1,       # R1 → H06 reflectivity (630 nm closer to 640)
+                    'R1':               fit.R1,
+                    'R2':               fit.R2,
+                    'delta_R':          fit.R2 - fit.R1,
+                    'I0':               fit.I0,
+                    'I1':               fit.I1,
+                    'I2':               fit.I2,
+                    'sigma0':           fit.sigma0,
+                    'sigma1':           0.0,
+                    'sigma2':           0.0,
+                    'B':                fit.B,
+                    'ne_ratio':         fit.ne_ratio,
+                    'epsilon_cal':      fit.epsilon_cal,
+                    # 1σ uncertainties
+                    'sigma_t_m':        fit.sigma_t_m,
+                    'sigma_alpha':      fit.sigma_alpha,
+                    'sigma_R_refl':     fit.sigma_R1,
+                    'sigma_R1':         fit.sigma_R1,
+                    'sigma_R2':         fit.sigma_R2,
+                    'sigma_I0':         fit.sigma_I0,
+                    'sigma_I1':         fit.sigma_I1,
+                    'sigma_I2':         fit.sigma_I2,
+                    'sigma_sigma0':     fit.sigma_sigma0,
+                    'sigma_B':          fit.sigma_B,
+                    'sigma_ne_ratio':   fit.sigma_ne_ratio,
+                    'sigma_epsilon_cal':fit.sigma_epsilon_cal,
+                    # Fit quality
+                    'chi2_reduced':     fit.chi2_reduced,
+                    'chi2_by_stage':    list(fit.chi2_by_stage),
+                    'n_bins_used':      fit.n_bins_used,
+                    'converged':        fit.converged,
+                    'quality_flags':    0,   # 0 = GOOD
+                    # Tolansky provenance
+                    't_tolansky_mm':    result.d_m * 1e3,
+                    'eps_a':            result.eps_a,
+                    'alpha_tolansky_init': result.alpha_mean,
+                    'r_max_px':         fp.r_max_px,
+                    # File provenance
+                    'source_file':      str(cal_path),
+                    'dark_file':        str(dark_path),
+                    'date_utc':         __import__('datetime').datetime.utcnow().isoformat(),
+                    'script':           os.path.basename(__file__),
+                }
+                np.save(_npy_stem, npy_dict)
+                print(f"  Saved : {_npy_stem}")
+                print(f"  Load via:  cal = np.load(r'{_npy_stem}', allow_pickle=True).item()")
+
+            except Exception as exc:
+                import traceback
+                print(f"\n  ERROR: H05 inversion failed — {exc}")
+                print(traceback.format_exc())
+                print("  -> Check that fp (FringeProfile) and Tolansky result are valid.")
+                print("     Adjust R1_init / R2_init / sigma0_init in Step 8 if needed.")
 
     print("\n[done]  All figures saved and displayed.")
     print(f"  Output folder : {output_dir}")
