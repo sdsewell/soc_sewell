@@ -179,6 +179,10 @@ _R2_WINDOWS.update({
     17: ( 10600,  10900),   # P17 638.3 nm  ctr≈10698
     18: ( 11200,  11600),   # P18 640.2 nm  ctr≈11363
     19: ( 11840,  12100),   # P19 638.3 nm  ctr≈11919
+    20: ( 12400,  12900),   # P20 640.2 nm  ctr≈12653  [estimated from profile]
+    21: ( 13000,  13450),   # P21 638.3 nm  ctr≈13232  [estimated from profile]
+    22: ( 13650,  14100),   # P22 640.2 nm  ctr≈13870  [estimated from profile]
+    23: ( 14200,  14700),   # P23 638.3 nm  ctr≈14430  [estimated from profile]
 })
 
 # ── Tolansky two-line analysis ───────────────────────────────────────────────
