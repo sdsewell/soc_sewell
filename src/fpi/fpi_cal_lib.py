@@ -387,22 +387,23 @@ def intensity_envelope(
     I0: float,       # average intensity, counts
     I1: float,       # linear falloff coefficient
     I2: float,       # quadratic falloff coefficient
+    I3: float = 0.0, # cubic falloff coefficient
 ) -> np.ndarray:
     """
-    Quadratic intensity envelope accounting for optical vignetting.
+    Cubic intensity envelope accounting for optical vignetting.
 
-    I(r) = I₀ · (1 + I₁·(r/r_max) + I₂·(r/r_max)²)    (Harding Eq. 4)
+    I(r) = I₀ · (1 + I₁·(r/r_max) + I₂·(r/r_max)² + I₃·(r/r_max)³)
 
-    The envelope must be positive everywhere for physically valid inputs.
-    Caller is responsible for choosing I1, I2 such that I(r) > 0 for
-    all r in [0, r_max].
+    Extended from Harding (2014) Eq. 4 by adding the cubic term I₃.
+    I₃ defaults to 0.0 for backward compatibility with callers that
+    pass only the quadratic form.
 
     Returns
     -------
     I : intensity in counts, same shape as r
     """
     rn = r / r_max
-    return I0 * (1.0 + I1 * rn + I2 * rn ** 2)
+    return I0 * (1.0 + I1 * rn + I2 * rn ** 2 + I3 * rn ** 3)
 
 
 def airy_ideal(
@@ -416,6 +417,7 @@ def airy_ideal(
     I0: float = None,
     I1: float = None,
     I2: float = None,
+    I3: float = 0.0,
 ) -> np.ndarray:
     """
     Ideal (unbroadened) Airy transmission function at a single wavelength.
@@ -437,8 +439,9 @@ def airy_ideal(
         p = t
         t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
         r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
+        I3 = getattr(p, 'I3', 0.0)
     theta = theta_from_r(r, alpha)
-    I_env = intensity_envelope(r, r_max, I0, I1, I2)
+    I_env = intensity_envelope(r, r_max, I0, I1, I2, I3)
     F = 4.0 * R_refl / (1.0 - R_refl) ** 2
     OPD = 2.0 * n * t * np.cos(theta)
     phase = np.pi * OPD / wavelength
@@ -483,6 +486,7 @@ def airy_modified(
     sigma0: float = None,
     sigma1: float = None,
     sigma2: float = None,
+    I3: float = 0.0,
 ) -> np.ndarray:
     """
     PSF-broadened Airy function at a single wavelength.
@@ -507,7 +511,8 @@ def airy_modified(
         t, R_refl, alpha, n = p.t, p.R_refl, p.alpha, p.n
         r_max, I0, I1, I2 = p.r_max, p.I0, p.I1, p.I2
         sigma0, sigma1, sigma2 = p.sigma0, p.sigma1, p.sigma2
-    A_ideal = airy_ideal(r, wavelength, t, R_refl, alpha, n, r_max, I0, I1, I2)
+        I3 = getattr(p, 'I3', 0.0)
+    A_ideal = airy_ideal(r, wavelength, t, R_refl, alpha, n, r_max, I0, I1, I2, I3)
     sigma = psf_sigma(r, r_max, sigma0, sigma1, sigma2)
     sigma_mean = float(np.mean(sigma))
     if sigma_mean < 1e-6:
@@ -2848,7 +2853,7 @@ log = logging.getLogger("H05")
 # ---------------------------------------------------------------------------
 # Parameter ordering (12 positions in p_all vector)
 # ---------------------------------------------------------------------------
-_NAMES = ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2',
+_NAMES = ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'I3',
           'sigma0', 'sigma1', 'sigma2', 'B', 'ne_ratio']
 _IDX   = {n: i for i, n in enumerate(_NAMES)}
 
@@ -2856,39 +2861,39 @@ _IDX   = {n: i for i, n in enumerate(_NAMES)}
 _FIXED_PSF = {'sigma1', 'sigma2'}
 
 _STAGE_FREE = {
-    1: ['I0', 'I1', 'I2', 'B'],
+    1: ['I0', 'I1', 'I2', 'I3', 'B'],
     2: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'B'],
-    3: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'sigma0', 'B'],
-    4: [n for n in _NAMES if n not in _FIXED_PSF],   # 10 free
+    3: ['t_m', 'alpha', 'R1', 'R2', 'I0', 'I1', 'I2', 'I3', 'sigma0', 'B'],
+    4: [n for n in _NAMES if n not in _FIXED_PSF],   # 11 free
 }
 
 # ---------------------------------------------------------------------------
 # Forward model
 # ---------------------------------------------------------------------------
 
-def _neon_model(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
+def _neon_model(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2, I3,
                 sigma0, sigma1, sigma2, B, ne_ratio, _N_fine=500):
     """Two-line neon: S(r) = Ã(r;λ₁,R1) + ne_ratio·Ã(r;λ₂,R2) + B"""
     r_fine = np.linspace(0.0, r_max, _N_fine)
     A1 = airy_modified(r_fine, NE_WAVELENGTH_1_AIR_M,
                        t, R1, alpha, 1.0, r_max,
-                       I0, I1, I2, sigma0, sigma1, sigma2)
+                       I0, I1, I2, sigma0, sigma1, sigma2, I3=I3)
     A2 = airy_modified(r_fine, NE_WAVELENGTH_2_AIR_M,
                        t, R2, alpha, 1.0, r_max,
-                       I0, I1, I2, sigma0, sigma1, sigma2)
+                       I0, I1, I2, sigma0, sigma1, sigma2, I3=I3)
     return np.interp(r_arr, r_fine, A1 + ne_ratio * A2 + B)
 
 
-def _model_components(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2,
+def _model_components(r_arr, r_max, t, alpha, R1, R2, I0, I1, I2, I3,
                       sigma0, sigma1, sigma2, B, ne_ratio, n_fine=2000):
     """Return (composite, lam1+B, ne_ratio*lam2+B) for plotting."""
     r_fine = np.linspace(0.0, r_max, n_fine)
     A1 = airy_modified(r_fine, NE_WAVELENGTH_1_AIR_M,
                        t, R1, alpha, 1.0, r_max,
-                       I0, I1, I2, sigma0, sigma1, sigma2)
+                       I0, I1, I2, sigma0, sigma1, sigma2, I3=I3)
     A2 = airy_modified(r_fine, NE_WAVELENGTH_2_AIR_M,
                        t, R2, alpha, 1.0, r_max,
-                       I0, I1, I2, sigma0, sigma1, sigma2)
+                       I0, I1, I2, sigma0, sigma1, sigma2, I3=I3)
     comp = np.interp(r_arr, r_fine, A1 + ne_ratio * A2 + B)
     lam1 = np.interp(r_arr, r_fine, A1 + B)
     lam2 = np.interp(r_arr, r_fine, ne_ratio * A2 + B)
@@ -2939,9 +2944,9 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
 
     def _residuals_pen(p_free):
         p = p_fixed.copy(); p[free_idx] = p_free
-        t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p
+        t, alpha, R1, R2, I0, I1, I2, I3, s0, s1, s2, B, ne = p
         model  = _neon_model(r_good, r_max, t, alpha, R1, R2,
-                             I0, I1, I2, s0, s1, s2, B, ne)
+                             I0, I1, I2, I3, s0, s1, s2, B, ne)
         data_r = (prof_good - model) / sig_good
         below  = np.maximum(0.0, lo_arr - p_free) / pen_sigma
         above  = np.maximum(0.0, p_free - hi_arr) / pen_sigma
@@ -2953,18 +2958,18 @@ def _run_stage(r_good, prof_good, sig_good, r_max,
 
     p_updated = p_fixed.copy(); p_updated[free_idx] = lm.x
 
-    t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p_updated
+    t, alpha, R1, R2, I0, I1, I2, I3, s0, s1, s2, B, ne = p_updated
     model_f = _neon_model(r_good, r_max, t, alpha, R1, R2,
-                          I0, I1, I2, s0, s1, s2, B, ne)
+                          I0, I1, I2, I3, s0, s1, s2, B, ne)
     data_r  = (prof_good - model_f) / sig_good
     dof     = max(n_good - n_free, 1)
     chi2    = float(np.sum(data_r ** 2)) / dof
 
     def _residuals_data(p_free):
         p = p_fixed.copy(); p[free_idx] = p_free
-        t, alpha, R1, R2, I0, I1, I2, s0, s1, s2, B, ne = p
+        t, alpha, R1, R2, I0, I1, I2, I3, s0, s1, s2, B, ne = p
         model = _neon_model(r_good, r_max, t, alpha, R1, R2,
-                            I0, I1, I2, s0, s1, s2, B, ne)
+                            I0, I1, I2, I3, s0, s1, s2, B, ne)
         return (prof_good - model) / sig_good
 
     try:
@@ -2997,16 +3002,16 @@ class _FringeProfile:
 
 @dataclass
 class FitResult:
-    """10-free-parameter calibration fit result (sigma1=sigma2=0 fixed)."""
+    """11-free-parameter calibration fit result (sigma1=sigma2=0 fixed)."""
     t_m: float; alpha: float
     R1: float;  R2: float
-    I0: float;  I1: float;  I2: float
+    I0: float;  I1: float;  I2: float;  I3: float
     sigma0: float; sigma1: float; sigma2: float
     B: float;  ne_ratio: float
 
     sigma_t_m: float;    sigma_alpha: float
     sigma_R1: float;     sigma_R2: float
-    sigma_I0: float;     sigma_I1: float;  sigma_I2: float
+    sigma_I0: float;     sigma_I1: float;  sigma_I2: float;  sigma_I3: float
     sigma_sigma0: float; sigma_sigma1: float; sigma_sigma2: float
     sigma_B: float;      sigma_ne_ratio: float
 
@@ -3054,6 +3059,7 @@ def run_staged_inversion(fp: _FringeProfile,
         'I0':       (I0_init,       100.0,             15000.0),
         'I1':       (0.0,           -0.5,              0.5),
         'I2':       (0.0,           -0.5,              0.5),
+        'I3':       (0.0,           -0.5,              0.5),
         'sigma0':   (sigma0_init,   0.01,              5.0),
         'sigma1':   (0.0,           -2.0,              2.0),
         'sigma2':   (0.0,           -2.0,              2.0),
@@ -3082,7 +3088,7 @@ def run_staged_inversion(fp: _FringeProfile,
     chi2_stages.append(c3)
     log.info(f"  χ²/ν = {c3:.3f}  sigma0={p_all[_IDX['sigma0']]:.4f} px")
 
-    log.info("Stage 4 — 10 free params; FD covariance")
+    log.info("Stage 4 — 11 free params; FD covariance")
     p_all, cov4, se4, c4, res4 = _run_stage(r_good, p_good, s_good, r_max,
                                               p_all, _STAGE_FREE[4], bounds, cfg)
     chi2_stages.append(c4)
@@ -3101,20 +3107,21 @@ def run_staged_inversion(fp: _FringeProfile,
         log.info(f"    sigma_{name:12s} = {_se(name):.3e}")
 
     converged = bool(res4.success or res4.cost < 1e-10)
-    t_f, alpha_f, R1_f, R2_f, I0_f, I1_f, I2_f, s0_f, s1_f, s2_f, B_f, ne_f = p_all
+    t_f, alpha_f, R1_f, R2_f, I0_f, I1_f, I2_f, I3_f, s0_f, s1_f, s2_f, B_f, ne_f = p_all
     eps_cal       = (2.0 * t_f / NE_WAVELENGTH_1_AIR_M) % 1.0
     sigma_eps_cal = (2.0 / NE_WAVELENGTH_1_AIR_M) * _se('t_m')
 
     return FitResult(
         t_m=float(t_f), alpha=float(alpha_f),
         R1=float(R1_f), R2=float(R2_f),
-        I0=float(I0_f), I1=float(I1_f), I2=float(I2_f),
+        I0=float(I0_f), I1=float(I1_f), I2=float(I2_f), I3=float(I3_f),
         sigma0=float(s0_f), sigma1=0.0, sigma2=0.0,
         B=float(B_f), ne_ratio=float(ne_f),
 
         sigma_t_m=_se('t_m'),       sigma_alpha=_se('alpha'),
         sigma_R1=_se('R1'),         sigma_R2=_se('R2'),
         sigma_I0=_se('I0'),         sigma_I1=_se('I1'),    sigma_I2=_se('I2'),
+        sigma_I3=_se('I3'),
         sigma_sigma0=_se('sigma0'), sigma_sigma1=float('nan'),
         sigma_sigma2=float('nan'),
         sigma_B=_se('B'),           sigma_ne_ratio=_se('ne_ratio'),
@@ -3337,6 +3344,10 @@ def make_figure(r2_data, profile, sigma,
                      f"{fit.I2:.5f}",
                      f"±{fit.sigma_I2:.2g}",
                      "Quadratic vignetting  [Group B, shared]"),
+        ("I₃",       "0.0",
+                     f"{fit.I3:.5f}",
+                     f"±{fit.sigma_I3:.2g}",
+                     "Cubic vignetting  [Group B, shared]"),
         ("σ₀",       _seed_s0,
                      f"{fit.sigma0:.4f} px",
                      f"±{fit.sigma_sigma0:.2g}",
@@ -3377,13 +3388,13 @@ def make_figure(r2_data, profile, sigma,
             cell.set_facecolor("#c8d8f0"); cell.set_text_props(fontweight="bold")
         elif row % 2 == 0: cell.set_facecolor("#f0f4ff")
         if row in (3, 4): cell.set_facecolor("#fff4c2")
-        if row in (10, 11): cell.set_facecolor("#eeeeee")
-        if row == 13: cell.set_facecolor("#f4fff4")
+        if row in (11, 12): cell.set_facecolor("#eeeeee")
+        if row == 14: cell.set_facecolor("#f4fff4")
 
     stage_str = "  ".join(f"S{i+1}: {v:.2f}" for i, v in enumerate(fit.chi2_by_stage))
     ax_tbl.text(0.01, 0.055,
         f"χ²/ν by stage:  {stage_str}    bins used: {fit.n_bins_used}   "
-        f"free params: 10  (σ₁=σ₂=0 fixed; F-test p=0.998)",
+        f"free params: 11  (σ₁=σ₂=0 fixed; F-test p=0.998)",
         transform=ax_tbl.transAxes, va="bottom", ha="left",
         fontsize=8.5, fontfamily="monospace", color="dimgrey")
 
