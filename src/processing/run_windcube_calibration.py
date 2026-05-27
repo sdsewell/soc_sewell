@@ -1545,193 +1545,230 @@ def main() -> None:
         print(f"  Saved : {_fig5b_path}")
         fig5b.show()
 
-    # -- Step 8: H05 Harding calibration inversion ---------------------------
-    # Gate: Tolansky must have succeeded (result is defined and valid).
-    # Uses the fp (FringeProfile) produced in Step 4 and the Tolansky result
-    # from Step 7.  Runs the 4-stage Levenberg-Marquardt inversion defined in
-    # Section E of fpi_cal_lib (run_h05), saves a diagnostic figure and a
-    # .npy calibration file for downstream H06 science inversion.
+    # -- Step 8: H05 Harding calibration inversion — n_pairs sweep ----------
+    # Runs 7 inversions with Tolansky seeded from n_pairs = 10..16.
+    # Figures saved as 6{a..g}_cal_h05_harding_inversion_n{N:02d}pairs.png
+    # The 16-pair result (6g) is the authoritative production result.
     # -------------------------------------------------------------------------
     _tolansky_result = locals().get('result', None)
     if _tolansky_result is None:
-        print("\n[8/8]  H05 inversion SKIPPED — Tolansky did not complete.")
+        print("\n[8/8]  H05 sweep SKIPPED — Tolansky did not complete.")
     else:
-        result = _tolansky_result   # confirmed alias for clarity below
-        print("\n[8/8]  H05 Harding calibration inversion (dual-wavelength Airy fit)...")
         import logging as _logging
         _logging.basicConfig(
             level=_logging.INFO,
             format="  %(name)s  %(message)s",
         )
 
-        # ── 8a: wrap single Tolansky result as TolanskySeedMean ──────────────
-        # average_tolansky_seeds accepts a list; one frame is perfectly valid.
-        print("  Building TolanskySeedMean from single Tolansky frame...")
-        try:
-            seeds = average_tolansky_seeds([result])
-            _t_eff_pc = phase_correct_gap(seeds.d_m_mean, seeds.eps_a_mean, 640.2248e-9)
-            print(f"  Phase-corrected t_eff = {_t_eff_pc*1e3:.7f} mm  "
-                  f"(raw Tolansky: {seeds.d_m_mean*1e3:.7f} mm  "
-                  f"delta={(_t_eff_pc - seeds.d_m_mean)*1e9:+.2f} nm)")
-            print(f"  Seeds:  d = {seeds.d_m_mean*1e3:.6f} mm  "
-                  f"α = {seeds.alpha_mean:.5e} rad/px  "
-                  f"ε_a = {seeds.eps_a_mean:.5f}  "
-                  f"Y_B = {seeds.Y_B_obs_mean:.4f}")
-        except Exception as exc:
-            print(f"  ERROR building seeds: {exc}")
-            seeds = None
+        _SWEEP_PAIRS   = [10, 11, 12, 13, 14, 15, 16]
+        _SWEEP_LABELS  = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+        _sweep_summary = []   # list of dicts for console summary table
 
-        if seeds is not None:
-            # ── 8b: run 4-stage LM inversion ─────────────────────────────────
-            # fp is the FringeProfile produced by annular_reduce in Step 4.
-            # run_h05 duck-types FringeProfile via .profile/.r_grid/.sigma_profile/
-            # .masked/.r_max_px — all present on the public FringeProfile class.
-            print("  Running staged inversion (4 LM stages)...")
-            print("  (Stage progress printed below via logging)")
+        print(f"\n[8/8]  H05 n_pairs sweep  ({_SWEEP_PAIRS[0]}–{_SWEEP_PAIRS[-1]} pairs) ...")
+
+        for _sw_pairs, _sw_label in zip(_SWEEP_PAIRS, _SWEEP_LABELS):
+            print(f"\n  -- H05 sweep  n_pairs={_sw_pairs}  (figure 6{_sw_label}) --")
+
+            # ── 8a: re-run Tolansky with this pair count ─────────────────────
             try:
-                fit = run_h05(
+                with warnings.catch_warnings(record=True) as _sw_caught:
+                    warnings.simplefilter("always")
+                    _sw_tol = run_tolansky_2line(
+                        peak_array,
+                        lam_a_m=LAM_A_M,
+                        lam_b_m=LAM_B_M,
+                        d_prior_m=D_PRIOR_M,
+                        n_pairs=_sw_pairs,
+                    )
+                for _w in _sw_caught:
+                    print(f"    Tolansky WARNING: {_w.message}")
+            except Exception as _exc:
+                print(f"    Tolansky FAILED for n_pairs={_sw_pairs}: {_exc}")
+                continue
+
+            print(f"    Tolansky: d={_sw_tol.d_m*1e3:.6f} mm  "
+                  f"α={_sw_tol.alpha_mean:.5e} rad/px  "
+                  f"ε_a={_sw_tol.eps_a:.5f}")
+
+            # ── 8b: build TolanskySeedMean from single frame ──────────────────
+            try:
+                _sw_seeds = average_tolansky_seeds([_sw_tol])
+            except Exception as _exc:
+                print(f"    Seeds FAILED for n_pairs={_sw_pairs}: {_exc}")
+                continue
+
+            # ── 8c: phase-corrected t_eff (for logging and seeds_dict) ────────
+            _sw_t_eff = phase_correct_gap(
+                _sw_seeds.d_m_mean,
+                _sw_seeds.eps_a_mean,
+                640.2248e-9,
+            )
+            print(f"    t_eff (phase-corrected) = {_sw_t_eff*1e3:.7f} mm  "
+                  f"(delta = {(_sw_t_eff - _sw_seeds.d_m_mean)*1e9:+.2f} nm)")
+
+            # ── 8d: run H05 inversion ─────────────────────────────────────────
+            try:
+                _sw_fit = run_h05(
                     fp,
-                    seeds,
-                    R1_init=0.25,     # from real-data H05 fit (R1=0.253)
-                    R2_init=0.30,     # from real-data H05 fit (R2=0.291)
-                    sigma0_init=0.50, # from real-data H05 fit (sigma0=0.492 px)
+                    _sw_seeds,
+                    R1_init=0.25,
+                    R2_init=0.30,
+                    sigma0_init=0.50,
                 )
+            except Exception as _exc:
+                import traceback as _tb
+                print(f"    H05 FAILED for n_pairs={_sw_pairs}: {_exc}")
+                print(_tb.format_exc())
+                continue
 
-                conv_str = "CONVERGED" if fit.converged else "NOT CONVERGED"
-                print(f"\n  -- H05 results [{conv_str}]  χ²/ν = {fit.chi2_reduced:.3f} --")
-                print(f"  t      = {fit.t_m*1e3:.7f} mm   ±{fit.sigma_t_m*1e9:.2g} nm")
-                print(f"  α      = {fit.alpha:.5e} rad/px  ±{fit.sigma_alpha:.2e}")
-                print(f"  R1     = {fit.R1:.5f}  ±{fit.sigma_R1:.2g}   (λ₁=640.2 nm → used as R_refl in H06)")
-                print(f"  R2     = {fit.R2:.5f}  ±{fit.sigma_R2:.2g}   (λ₂=638.3 nm, reference)")
-                print(f"  ΔR     = {fit.R2-fit.R1:+.5f}   (wavelength-dependent finesse)")
-                print(f"  I0     = {fit.I0:.1f} ADU   ±{fit.sigma_I0:.2g}")
-                print(f"  I1     = {fit.I1:.5f}   ±{fit.sigma_I1:.2g}   (linear vignetting)")
-                print(f"  I2     = {fit.I2:.5f}   ±{fit.sigma_I2:.2g}   (quadratic vignetting)")
-                print(f"  σ₀     = {fit.sigma0:.4f} px   ±{fit.sigma_sigma0:.2g}   (PSF blur)")
-                print(f"  σ₁,σ₂  = 0.0 px (fixed; F-test p=0.998)")
-                print(f"  B      = {fit.B:.1f} ADU   ±{fit.sigma_B:.2g}   (CCD bias)")
-                print(f"  ne_rat = {fit.ne_ratio:.4f}   ±{fit.sigma_ne_ratio:.2g}   (λ₂/λ₁ intensity)")
-                print(f"  ε_cal  = {fit.epsilon_cal:.6f}   ±{fit.sigma_epsilon_cal:.2g}   (fractional order, zero-wind reference)")
-                chi2_stages_str = "  ".join(f"S{i+1}:{v:.2f}" for i,v in enumerate(fit.chi2_by_stage))
-                print(f"  χ²/ν by stage:  {chi2_stages_str}   bins_used={fit.n_bins_used}")
-                print(f"  ----------------------------------------------------------")
+            _conv_str = "CONVERGED" if _sw_fit.converged else "NOT CONVERGED"
+            print(f"    H05 [{_conv_str}]  χ²/ν={_sw_fit.chi2_reduced:.3f}  "
+                  f"R1={_sw_fit.R1:.4f}  R2={_sw_fit.R2:.4f}  "
+                  f"σ₀={_sw_fit.sigma0:.4f} px  "
+                  f"t={_sw_fit.t_m*1e3:.7f} mm  "
+                  f"α={_sw_fit.alpha:.5e}")
 
-                # ── 8c: build model curves for figure ────────────────────────
-                # _model_components returns (composite, lam1+B, ne_ratio*lam2+B)
-                # evaluated on a fine r grid; passed directly to make_figure.
-                print("  Building diagnostic figure...")
-                n_fine = 2000
-                r_fine = np.linspace(0.0, fp.r_max_px, n_fine)
-                model_fine, lam1_fine, lam2_fine = _model_components(
-                    r_fine, fp.r_max_px,
-                    fit.t_m, fit.alpha, fit.R1, fit.R2,
-                    fit.I0, fit.I1, fit.I2,
-                    fit.sigma0, 0.0, 0.0,
-                    fit.B, fit.ne_ratio,
-                    n_fine=n_fine,
-                )
+            _sweep_summary.append({
+                'label':   _sw_label,
+                'n_pairs': _sw_pairs,
+                't_seed_mm':    _sw_seeds.d_m_mean * 1e3,
+                't_fit_mm':     _sw_fit.t_m * 1e3,
+                'alpha_seed':   _sw_seeds.alpha_mean,
+                'alpha_fit':    _sw_fit.alpha,
+                'R1':           _sw_fit.R1,
+                'R2':           _sw_fit.R2,
+                'sigma0':       _sw_fit.sigma0,
+                'chi2':         _sw_fit.chi2_reduced,
+                'converged':    _sw_fit.converged,
+            })
 
-                # Data arrays for figure: use the unmasked profile bins only
-                good_mask = ~fp.masked & np.isfinite(fp.sigma_profile) & (fp.sigma_profile > 0)
-                r2_data_fig  = fp.r2_grid[good_mask]
-                prof_fig     = fp.profile[good_mask]
-                sigma_fig    = fp.sigma_profile[good_mask]
+            # ── 8e: build model curves for figure ─────────────────────────────
+            _sw_n_fine = 2000
+            _sw_r_fine = np.linspace(0.0, fp.r_max_px, _sw_n_fine)
+            _sw_model_fine, _sw_lam1_fine, _sw_lam2_fine = _model_components(
+                _sw_r_fine, fp.r_max_px,
+                _sw_fit.t_m, _sw_fit.alpha,
+                _sw_fit.R1, _sw_fit.R2,
+                _sw_fit.I0, _sw_fit.I1, _sw_fit.I2,
+                _sw_fit.sigma0, 0.0, 0.0,
+                _sw_fit.B, _sw_fit.ne_ratio,
+                n_fine=_sw_n_fine,
+            )
 
-                # Build seeds dict for Figure 6 table annotation
-                _seeds_dict_fig6 = {
-                    't_eff_mm':      phase_correct_gap(
-                                         seeds.d_m_mean,
-                                         seeds.eps_a_mean,
-                                         640.2248e-9,
-                                     ) * 1e3,
-                    'alpha_init':    seeds.alpha_mean,
-                    'R1_init':       0.25,       # must match R1_init= argument in run_h05() call above
-                    'R2_init':       0.30,       # must match R2_init= argument in run_h05() call above
-                    'sigma0_init':   0.50,       # must match sigma0_init= argument in run_h05() call above
-                    'ne_ratio_init': seeds.Y_B_obs_mean,
-                    'n_pairs_tolansky': result.n_rings_a,   # rings used in Tolansky WLS (line-a family)
+            _sw_good_mask = (~fp.masked
+                             & np.isfinite(fp.sigma_profile)
+                             & (fp.sigma_profile > 0))
+            _sw_r2_data  = fp.r2_grid[_sw_good_mask]
+            _sw_prof     = fp.profile[_sw_good_mask]
+            _sw_sigma    = fp.sigma_profile[_sw_good_mask]
+
+            # ── 8f: build seeds_dict for figure annotation ────────────────────
+            _sw_seeds_dict = {
+                't_eff_mm':         _sw_t_eff * 1e3,
+                'alpha_init':       _sw_seeds.alpha_mean,
+                'R1_init':          0.25,
+                'R2_init':          0.30,
+                'sigma0_init':      0.50,
+                'ne_ratio_init':    _sw_seeds.Y_B_obs_mean,
+                'n_pairs_tolansky': _sw_tol.n_rings_a,
+            }
+
+            # ── 8g: make and save figure ──────────────────────────────────────
+            _sw_fig = make_figure(
+                _sw_r2_data, _sw_prof, _sw_sigma,
+                _sw_r_fine, _sw_model_fine,
+                _sw_lam1_fine, _sw_lam2_fine,
+                _sw_fit,
+                source_name=os.path.basename(cal_path),
+                source_path=str(cal_path),
+                seeds_dict=_sw_seeds_dict,
+            )
+
+            # Retitle the figure to show n_pairs
+            _sw_fig.texts[0].set_text(
+                f"WindCube FPI — Neon Calibration Fringe Inversion  "
+                f"(10-param: independent R1, R2; constant PSF / Harding 2014)"
+                f"  |  Tolansky seed: {_sw_pairs} fringe pairs"
+            )
+
+            _sw_fig_path = (output_dir /
+                f"6{_sw_label}_cal_h05_harding_inversion_n{_sw_pairs:02d}pairs.png")
+            _sw_fig.savefig(_sw_fig_path, dpi=150, bbox_inches="tight")
+            print(f"    Saved : {_sw_fig_path}")
+            _sw_fig.show()
+
+            # Save .npy calibration file for the 16-pair result only (6g)
+            if _sw_pairs == 16:
+                _npy_stem = (output_dir /
+                    f"{pathlib.Path(cal_path).stem}_cal_result.npy")
+                _npy_dict = {
+                    't_m':               _sw_fit.t_m,
+                    'alpha':             _sw_fit.alpha,
+                    'R_refl':            _sw_fit.R1,
+                    'R1':                _sw_fit.R1,
+                    'R2':                _sw_fit.R2,
+                    'delta_R':           _sw_fit.R2 - _sw_fit.R1,
+                    'I0':                _sw_fit.I0,
+                    'I1':                _sw_fit.I1,
+                    'I2':                _sw_fit.I2,
+                    'sigma0':            _sw_fit.sigma0,
+                    'sigma1':            0.0,
+                    'sigma2':            0.0,
+                    'B':                 _sw_fit.B,
+                    'ne_ratio':          _sw_fit.ne_ratio,
+                    'epsilon_cal':       _sw_fit.epsilon_cal,
+                    'sigma_t_m':         _sw_fit.sigma_t_m,
+                    'sigma_alpha':       _sw_fit.sigma_alpha,
+                    'sigma_R_refl':      _sw_fit.sigma_R1,
+                    'sigma_R1':          _sw_fit.sigma_R1,
+                    'sigma_R2':          _sw_fit.sigma_R2,
+                    'sigma_I0':          _sw_fit.sigma_I0,
+                    'sigma_I1':          _sw_fit.sigma_I1,
+                    'sigma_I2':          _sw_fit.sigma_I2,
+                    'sigma_sigma0':      _sw_fit.sigma_sigma0,
+                    'sigma_B':           _sw_fit.sigma_B,
+                    'sigma_ne_ratio':    _sw_fit.sigma_ne_ratio,
+                    'sigma_epsilon_cal': _sw_fit.sigma_epsilon_cal,
+                    'chi2_reduced':      _sw_fit.chi2_reduced,
+                    'chi2_by_stage':     list(_sw_fit.chi2_by_stage),
+                    'n_bins_used':       _sw_fit.n_bins_used,
+                    'converged':         _sw_fit.converged,
+                    'quality_flags':     0,
+                    't_tolansky_mm':     _sw_tol.d_m * 1e3,
+                    't_eff_phase_corrected_mm': _sw_t_eff * 1e3,
+                    'eps_a':             _sw_tol.eps_a,
+                    'alpha_tolansky_init': _sw_tol.alpha_mean,
+                    'n_pairs_tolansky':  _sw_tol.n_rings_a,
+                    'r_max_px':          fp.r_max_px,
+                    'source_file':       str(cal_path),
+                    'dark_file':         str(dark_path),
+                    'date_utc':          __import__('datetime').datetime.utcnow().isoformat(),
+                    'script':            os.path.basename(__file__),
                 }
+                np.save(_npy_stem, _npy_dict, allow_pickle=True)  # type: ignore[arg-type]
+                print(f"    Saved : {_npy_stem}  (authoritative 16-pair result)")
 
-                fig6 = make_figure(
-                    r2_data_fig, prof_fig, sigma_fig,
-                    r_fine, model_fine, lam1_fine, lam2_fine,
-                    fit,
-                    source_name=os.path.basename(cal_path),
-                    source_path=str(cal_path),
-                    seeds_dict=_seeds_dict_fig6,
+        # ── Sweep summary console table ───────────────────────────────────────
+        if _sweep_summary:
+            print(f"\n  -- H05 n_pairs sweep summary ---------------------------")
+            _hdr = (f"  {'fig':>3}  {'n':>2}  {'t_seed (mm)':>14}  "
+                    f"{'t_fit (mm)':>14}  {'α_fit (rad/px)':>14}  "
+                    f"{'R1':>6}  {'R2':>6}  {'σ₀ (px)':>7}  "
+                    f"{'χ²/ν':>6}  {'conv':>4}")
+            print(_hdr)
+            print("  " + "-" * (len(_hdr) - 2))
+            for _row in _sweep_summary:
+                _c = "Y" if _row['converged'] else "N"
+                print(
+                    f"  6{_row['label']:>1}  {_row['n_pairs']:>2}  "
+                    f"{_row['t_seed_mm']:>14.7f}  "
+                    f"{_row['t_fit_mm']:>14.7f}  "
+                    f"{_row['alpha_fit']:>14.6e}  "
+                    f"{_row['R1']:>6.4f}  {_row['R2']:>6.4f}  "
+                    f"{_row['sigma0']:>7.4f}  "
+                    f"{_row['chi2']:>6.3f}  {_c:>4}"
                 )
-
-                _fig6_path = output_dir / "6_cal_h05_harding_inversion.png"
-                fig6.savefig(_fig6_path, dpi=150, bbox_inches="tight")
-                print(f"  Saved : {_fig6_path}")
-                fig6.show()
-
-                # ── 8d: save .npy calibration result ─────────────────────────
-                # Saved alongside the output PNGs.  Downstream H06 loads this
-                # via:  cal = np.load(path, allow_pickle=True).item()
-                _npy_stem = output_dir / f"{pathlib.Path(cal_path).stem}_cal_result.npy"
-                npy_dict = {
-                    # Fitted instrument parameters
-                    't_m':              fit.t_m,
-                    'alpha':            fit.alpha,
-                    'R_refl':           fit.R1,       # R1 → H06 reflectivity (630 nm closer to 640)
-                    'R1':               fit.R1,
-                    'R2':               fit.R2,
-                    'delta_R':          fit.R2 - fit.R1,
-                    'I0':               fit.I0,
-                    'I1':               fit.I1,
-                    'I2':               fit.I2,
-                    'sigma0':           fit.sigma0,
-                    'sigma1':           0.0,
-                    'sigma2':           0.0,
-                    'B':                fit.B,
-                    'ne_ratio':         fit.ne_ratio,
-                    'epsilon_cal':      fit.epsilon_cal,
-                    # 1σ uncertainties
-                    'sigma_t_m':        fit.sigma_t_m,
-                    'sigma_alpha':      fit.sigma_alpha,
-                    'sigma_R_refl':     fit.sigma_R1,
-                    'sigma_R1':         fit.sigma_R1,
-                    'sigma_R2':         fit.sigma_R2,
-                    'sigma_I0':         fit.sigma_I0,
-                    'sigma_I1':         fit.sigma_I1,
-                    'sigma_I2':         fit.sigma_I2,
-                    'sigma_sigma0':     fit.sigma_sigma0,
-                    'sigma_B':          fit.sigma_B,
-                    'sigma_ne_ratio':   fit.sigma_ne_ratio,
-                    'sigma_epsilon_cal':fit.sigma_epsilon_cal,
-                    # Fit quality
-                    'chi2_reduced':     fit.chi2_reduced,
-                    'chi2_by_stage':    list(fit.chi2_by_stage),
-                    'n_bins_used':      fit.n_bins_used,
-                    'converged':        fit.converged,
-                    'quality_flags':    0,   # 0 = GOOD
-                    # Tolansky provenance
-                    't_tolansky_mm':    result.d_m * 1e3,
-                    't_eff_phase_corrected_mm': phase_correct_gap(
-                        result.d_m,
-                        result.eps_a,
-                        640.2248e-9,
-                    ) * 1e3,
-                    'eps_a':            result.eps_a,
-                    'alpha_tolansky_init': result.alpha_mean,
-                    'r_max_px':         fp.r_max_px,
-                    # File provenance
-                    'source_file':      str(cal_path),
-                    'dark_file':        str(dark_path),
-                    'date_utc':         __import__('datetime').datetime.utcnow().isoformat(),
-                    'script':           os.path.basename(__file__),
-                }
-                np.save(_npy_stem, npy_dict)
-                print(f"  Saved : {_npy_stem}")
-                print(f"  Load via:  cal = np.load(r'{_npy_stem}', allow_pickle=True).item()")
-
-            except Exception as exc:
-                import traceback
-                print(f"\n  ERROR: H05 inversion failed — {exc}")
-                print(traceback.format_exc())
-                print("  -> Check that fp (FringeProfile) and Tolansky result are valid.")
-                print("     Adjust R1_init / R2_init / sigma0_init in Step 8 if needed.")
+            print("  " + "-" * (len(_hdr) - 2))
 
     print("\n[done]  All figures saved and displayed.")
     print(f"  Output folder : {output_dir}")

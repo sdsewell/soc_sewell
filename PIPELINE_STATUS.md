@@ -36,7 +36,7 @@
 | G01_dark | dark frame synthesis | PASS v1.2 | 5/5 | 2026-05-16 |
 | H03  | airglow-syn | PASS   | 2/2      | 2026-05-13    |
 | H06  | airglow-inv | PASS   | 2/2      | 2026-05-14    |
-| CAL01 | fpi_cal_lib + run_cal_pipeline | PASS (all S0–S6 complete) | 10/10 | 2026-05-18 |
+| CAL01 | fpi_cal_lib + run_windcube_calibration | COMPLETE — H05 step now runs 7-iter n_pairs sweep (10–16); figs 6a–6g saved per run; .npy for 16-pair (6g) only | 10/10 | 2026-05-27 |
 | MC01 | mc01_fpi_mc_engine | IMPLEMENTED | 10/10 | 2026-05-24 |
 | MC02 | mc02_fpi_mc_simulations | IMPLEMENTED | 10/10 | 2026-05-24 |
 
@@ -75,6 +75,13 @@ assessment until the relevant modules are fixed or installed.
   Wind columns present: wind_v_zonal_ms, wind_v_merid_ms, v_wind_los_approach_ms.
   matplotlib savefig outside conda-activated env: native LoadLibrary calls bypass os.add_dll_directory;
   fix is to prepend conda env dirs to os.environ["PATH"] before importing matplotlib.
+
+- CAL01 H05 n_pairs sweep (2026-05-27): run_windcube_calibration.py Step 8 replaced with a 7-iteration
+  sweep over Tolansky seed pair counts 10–16. Each iteration re-runs run_tolansky_2line(n_pairs=N),
+  builds a fresh TolanskySeedMean, runs run_h05(), and saves figure 6{a..g}_cal_h05_harding_inversion_n{N:02d}pairs.png.
+  The authoritative .npy calibration result is saved for the 16-pair run (6g) only.
+  data_reference/ PNGs (0_–6_cal_*.png, *_cal_result.npy) are pipeline OUTPUT files regenerated on each run —
+  they are NOT committed source and should not be git-tracked.
 
 - windcube env GEN01 dependencies (2026-05-16): all third-party packages verified present.
   numpy 2.4.5, pandas 3.0.3, scipy 1.17.1, astropy 7.2.0, sgp4 2.25, matplotlib 3.10.9,
