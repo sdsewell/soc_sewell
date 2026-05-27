@@ -1503,6 +1503,10 @@ def main() -> None:
         print("  Building TolanskySeedMean from single Tolansky frame...")
         try:
             seeds = average_tolansky_seeds([result])
+            _t_eff_pc = phase_correct_gap(seeds.d_m_mean, seeds.eps_a_mean, 640.2248e-9)
+            print(f"  Phase-corrected t_eff = {_t_eff_pc*1e3:.7f} mm  "
+                  f"(raw Tolansky: {seeds.d_m_mean*1e3:.7f} mm  "
+                  f"delta={(_t_eff_pc - seeds.d_m_mean)*1e9:+.2f} nm)")
             print(f"  Seeds:  d = {seeds.d_m_mean*1e3:.6f} mm  "
                   f"α = {seeds.alpha_mean:.5e} rad/px  "
                   f"ε_a = {seeds.eps_a_mean:.5f}  "
@@ -1622,6 +1626,11 @@ def main() -> None:
                     'quality_flags':    0,   # 0 = GOOD
                     # Tolansky provenance
                     't_tolansky_mm':    result.d_m * 1e3,
+                    't_eff_phase_corrected_mm': phase_correct_gap(
+                        result.d_m,
+                        result.eps_a,
+                        640.2248e-9,
+                    ) * 1e3,
                     'eps_a':            result.eps_a,
                     'alpha_tolansky_init': result.alpha_mean,
                     'r_max_px':         fp.r_max_px,

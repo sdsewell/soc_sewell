@@ -3768,10 +3768,20 @@ def run_h05(
     This is the culmination of the instrument characterisation pipeline.
     The returned FitResult is packed into OrbitCalResult by the wrapper
     and constitutes the sole input to the science inversion layer.
+
+    Phase correction: t_eff is phase-corrected via phase_correct_gap()
+    so that (2*t_eff/λ₁) % 1 == seeds.eps_a_mean exactly. This anchors
+    the absolute fringe phase and eliminates the sinusoidal residuals
+    that arise when the raw Tolansky gap is used as the LM seed.
     """
+    t_eff = phase_correct_gap(
+        seeds.d_m_mean,
+        seeds.eps_a_mean,
+        NE_WAVELENGTH_1_AIR_M,
+    )
     return run_staged_inversion(
         fp,
-        t_eff=seeds.d_m_mean,
+        t_eff=t_eff,
         alpha_init=seeds.alpha_mean,
         eps_a=seeds.eps_a_mean,
         ne_ratio_init=seeds.Y_B_obs_mean,
