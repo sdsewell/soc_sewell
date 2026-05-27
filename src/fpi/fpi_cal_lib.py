@@ -1879,7 +1879,7 @@ def _plot_all_fringe_diagnostics_r2(
             ax.errorbar(r2_w, p_w, yerr=sem_w,
                         fmt="o", color="steelblue", markersize=4,
                         ecolor="cornflowerblue", elinewidth=1.0, capsize=2,
-                        zorder=3, label="Data")
+                        zorder=3)  # no legend label — self-evident
 
         # Parabolic fit curve — recompute polynomial for display (orange solid)
         coeffs = errs = None
@@ -1893,22 +1893,24 @@ def _plot_all_fringe_diagnostics_r2(
                 try:
                     coeffs, cov = np.polyfit(xm, ym, 2, cov=True)
                     errs = np.sqrt(np.diag(cov))
-                except np.linalg.LinAlgError:
-                    coeffs = np.polyfit(xm, ym, 2)
-                    errs = np.full(3, float("nan"))
-                if coeffs[0] < 0:
+                except (np.linalg.LinAlgError, ValueError):
+                    try:
+                        coeffs = np.polyfit(xm, ym, 2)
+                    except (np.linalg.LinAlgError, ValueError):
+                        coeffs = None
+                    errs = np.full(3, float("nan")) if coeffs is not None else None
+                if coeffs is not None and coeffs[0] < 0:
                     y_floor   = coeffs[2]
                     poly_vals = np.polyval(coeffs, r2_fine)
                     mask_above = poly_vals >= y_floor
                     if mask_above.any():
                         ax.plot(r2_fine[mask_above], poly_vals[mask_above],
-                                color="darkorange", lw=1.8, zorder=4,
-                                label="Parabola + offset")
+                                color="darkorange", lw=1.8, zorder=4)  # no legend label
 
-        # Raw detection (gray dashed) and fitted centroid (red solid + band)
+        # Raw detection bin (gray dashed) — no legend label
         ax.axvline(pf.r2_raw_px2, color="gray", lw=0.9, ls="--", alpha=0.6)
         if fit_ok:
-            ax.axvline(r2_fit, color="red", lw=1.2, ls="-", zorder=6,
+            ax.axvline(r2_fit, color="red", lw=1.5, ls="-", zorder=6,
                        label=f"centroid r²={r2_fit:.1f}")
             if np.isfinite(sigma_r2_fit):
                 ax.axvspan(r2_fit - sigma_r2_fit, r2_fit + sigma_r2_fit,
@@ -1931,22 +1933,12 @@ def _plot_all_fringe_diagnostics_r2(
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                               alpha=0.75, edgecolor="gray"))
 
-        # ── Title ────────────────────────────────────────────────────────────
-        lam_str = "640.2" if k % 2 == 0 else "638.3"
-        if fit_ok:
-            chi2_str = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "—"
-            title = (
-                f"Peak {k}  λ={lam_str} nm\n"
-                f"r²_fit={r2_fit:.1f} px²   χ²={chi2_str}"
-            )
-            title_color = "#1a6e2e"
-        else:
-            title = (
-                f"Peak {k}  λ={lam_str} nm  FAILED"
-            )
-            title_color = "#b22222"
-
-        ax.set_title(title, fontsize=7.5, color=title_color)
+        # ── Title: Peak number and wavelength only ────────────────────────────
+        # r²_fit and χ²_red are in the infobox — no need to duplicate here.
+        lam_str     = "640.2" if k % 2 == 0 else "638.3"
+        title       = f"Peak {k}  λ={lam_str} nm" + ("" if fit_ok else "  FAILED")
+        title_color = "#1a6e2e" if fit_ok else "#b22222"
+        ax.set_title(title, fontsize=9.0, color=title_color)
         ax.tick_params(labelsize=6.5)
         ax.set_xlabel("r² [px²]", fontsize=7)
         ax.set_ylabel("ADU", fontsize=7)
@@ -1962,8 +1954,10 @@ def _plot_all_fringe_diagnostics_r2(
 
     # ── Peak summary table ───────────────────────────────────────────────────
     col_labels = [
-        "Peak", "λ (nm)", "r²_raw (px²)", "r²_fit (px²)", "±σ r² (px²)",
-        "r_derived (px)", "±σ_r (px)", "Amp (ADU)", "Width σ r² (px²)",
+        "Peak", "λ (nm)",
+        "win_lo\n(px²)", "win_hi\n(px²)",
+        "r²_raw\n(px²)", "r²_fit\n(px²)", "±σ r²\n(px²)",
+        "r_derived\n(px)", "±σ_r\n(px)", "Amp\n(ADU)", "Width σ r²\n(px²)",
         "para_ok", "χ²_red",
     ]
     table_data = []
@@ -1976,9 +1970,15 @@ def _plot_all_fringe_diagnostics_r2(
             r_der      = float("nan")
             sigma_r_dr = float("nan")
         chi2_s = f"{pf.reduced_chi2:.2f}" if np.isfinite(pf.reduced_chi2) else "—"
+        win_lo_s, win_hi_s = ("—", "—")
+        if k in _R2_WINDOWS:
+            win_lo_s = f"{_R2_WINDOWS[k][0]:.0f}"
+            win_hi_s = f"{_R2_WINDOWS[k][1]:.0f}"
         row = [
             str(k),
             lam_str_k,
+            win_lo_s,
+            win_hi_s,
             f"{pf.r2_raw_px2:.1f}",
             f"{pf.r2_fit_px2:.3f}" if pf.fit_ok else "—",
             f"{pf.sigma_r2_fit_px2:.3f}" if (pf.fit_ok and np.isfinite(pf.sigma_r2_fit_px2)) else "—",
@@ -1993,8 +1993,8 @@ def _plot_all_fringe_diagnostics_r2(
 
     n_tbl_rows = len(table_data)
     n_tbl_cols = len(col_labels)
-    fig_tbl_h  = max(4.0, 0.35 * n_tbl_rows + 1.5)
-    fig_tbl, ax_tbl = plt.subplots(figsize=(22, fig_tbl_h))
+    fig_tbl_h  = max(4.0, 0.35 * n_tbl_rows + 2.2)
+    fig_tbl, ax_tbl = plt.subplots(figsize=(26, fig_tbl_h))
     ax_tbl.axis("off")
     tbl = ax_tbl.table(
         cellText=table_data,
@@ -2004,9 +2004,10 @@ def _plot_all_fringe_diagnostics_r2(
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8.5)
-    tbl.scale(1, 1.3)
+    tbl.scale(1, 1.8)
     for col in range(n_tbl_cols):
         tbl[(0, col)].set_facecolor("#c8d8f0")
+        tbl[(0, col)].set_height(tbl[(0, col)].get_height() * 1.6)
     for row in range(1, n_tbl_rows + 1):
         bg = "#f0f4ff" if row % 2 == 0 else "white"
         for col in range(n_tbl_cols):
