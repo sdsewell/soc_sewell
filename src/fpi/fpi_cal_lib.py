@@ -1933,24 +1933,16 @@ def _plot_all_fringe_diagnostics_r2(
 
         # ── Title ────────────────────────────────────────────────────────────
         lam_str = "640.2" if k % 2 == 0 else "638.3"
-        hw_str  = f"[{r2_lo_w:.0f},{r2_hi_w:.0f}]"
         if fit_ok:
-            r_derived = float(np.sqrt(r2_fit)) if r2_fit > 0 else float("nan")
-            chi2_str  = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "nan"
-            rms_str   = f"{para_rms:.2f}" if np.isfinite(para_rms) else "nan"
-            tag_para  = f"para ok rms={rms_str}" if para_ok else "para FAIL"
-            tag_gauss = "gauss ok" if gauss_ok else "gauss FAIL"
+            chi2_str = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "—"
             title = (
-                f"Peak {k}  λ={lam_str} nm  hw={hw_str}\n"
-                f"r²={r2_fit:.1f}±{sigma_r2_fit:.1f}  r={r_derived:.3f}  χ²={chi2_str}\n"
-                f"{tag_para}  {tag_gauss}"
+                f"Peak {k}  λ={lam_str} nm\n"
+                f"r²_fit={r2_fit:.1f} px²   χ²={chi2_str}"
             )
             title_color = "#1a6e2e"
         else:
             title = (
-                f"Peak {k}  λ={lam_str} nm  hw={hw_str}  FAILED\n"
-                f"{'para ok' if para_ok else 'para FAIL'}  "
-                f"{'gauss ok' if gauss_ok else 'gauss FAIL'}"
+                f"Peak {k}  λ={lam_str} nm  FAILED"
             )
             title_color = "#b22222"
 
