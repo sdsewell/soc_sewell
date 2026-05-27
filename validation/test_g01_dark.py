@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1]))
 
-from src.processing.GEN01_synthesize_mission_dataset_2026_05_16 import (
+from src.processing.GEN01_synthesize_mission_dataset import (
     _dark_rate_e_per_px_s,
     synthesise_dark_frame,
 )
