@@ -162,6 +162,16 @@ R_MAX_PX        = 150.0    # outer radius for annular integration (px); extended
 N_BINS          = 1500     # number of r² bins  (→ ~43 bins/FWHM)
 PEAK_PROMINENCE = 20.0     # minimum peak prominence in ADU  [lowered for weak outer fringes]
 
+# ── H05 inversion radial cutoff ──────────────────────────────────────────────
+# Sweep B analysis (2026-05-27) established r2_max=12000 px² as optimal:
+#   - lowest chi2/nu (1.587) across 7 cutoff values tested
+#   - I3 cubic term ≈ 0 (not compensating for contamination)
+#   - R1/R2 from cleanest high-SNR data
+#   - matches the Tolansky fringe range (16 pairs, r² ≈ 0–12000 px²)
+# The full annular profile (R_MAX_PX=150, r²≈22500) is still computed
+# by annular_reduce for peak finding and Tolansky; only H05 uses this cutoff.
+H05_R2_MAX_FIT  = 12000    # px²  — H05 profile cutoff (r_max ≈ 109.5 px)
+
 # ── Peak fitting windows in r²  (px²) ───────────────────────────────────────
 # These override the auto-detected windows peak-by-peak.
 # Format:  { peak_index: (r2_lo, r2_hi), ... }
@@ -1545,481 +1555,301 @@ def main() -> None:
         print(f"  Saved : {_fig5b_path}")
         fig5b.show()
 
-    # -- Step 8: H05 Harding calibration inversion — n_pairs sweep ----------
-    # Runs 7 inversions with Tolansky seeded from n_pairs = 10..16.
-    # Figures saved as 6{a..g}_cal_h05_harding_inversion_n{N:02d}pairs.png
-    # The 16-pair result (6g) is the authoritative production result.
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # Step 8: H05 Harding calibration inversion — production run
+    # =========================================================================
+    #
+    # PARAMETER SELECTION — established by sweep analysis (2026-05-27):
+    #
+    # n_pairs = 16  (Tolansky seed pair count)
+    # -----------------------------------------------------------------------
+    # A 7-point sweep over n_pairs = 10..16 (Sweep A) showed a clean
+    # two-basin structure with the boundary at 13→14 pairs:
+    #
+    #   Pairs 10–13:  t=20.10730 mm, R1=0.265, R2=0.310, chi2/nu=3.296
+    #   Pairs 14–16:  t=20.10762 mm, R1=0.261, R2=0.293, chi2/nu=3.405
+    #
+    # The 14–16 pair basin gives physically correct reflectivities (R1≈0.25,
+    # R2≈0.29 consistent with ICOS coating spec) and is the correct solution.
+    # The 10–13 pair basin is a spurious LM minimum reached when the noisier
+    # outer rings are excluded from the Tolansky seed — it gives artificially
+    # high reflectivities. Using all 16 pairs is the authoritative choice.
+    # t_fit is stable to ±0.5 nm across all 7 sweep points.
+    #
+    # r2_max_fit = 12000 px²  (r_max ≈ 109.5 px, 800 profile bins)
+    # -----------------------------------------------------------------------
+    # A 7-point sweep over r2_max_fit = 10000..22500 px² at fixed n_pairs=16
+    # (Sweep B) showed the following structure:
+    #
+    #   r2_max   chi2/nu   R1      R2      sigma0   I3
+    #   10000    1.646     0.2376  0.2834  0.5598   +0.076  ← too few bins
+    #   12000    1.587     0.2413  0.2830  0.5592   +0.020  ← OPTIMAL
+    #   14000    1.721     0.2555  0.3008  0.5467   +0.050
+    #   16000    1.671     0.2691  0.3149  0.5352   +0.113
+    #   18000    1.688     0.2713  0.3164  0.5343   +0.015
+    #   20000    2.189     0.2662  0.3018  0.5547   -0.228  ← I3 sign flip
+    #   22500    3.405     0.2613  0.2933  0.5094   -0.382  ← full profile
+    #
+    # Key findings:
+    #
+    # (1) chi2/nu minimum at r2_max=12000 (1.587) — best fit quality.
+    #     The chi2/nu jump from ~1.69 to 2.19 to 3.41 beyond r2=18000
+    #     confirms the outer bins add noise, not signal.
+    #
+    # (2) I3 sign flip between r2=18000 and r2=20000 is the definitive
+    #     contamination boundary. Below r2=18000, I3≈0 (cubic term does
+    #     minor cleanup). Above r2=18000, I3 snaps large-negative: the
+    #     model uses the cubic vignetting term as a rescue parameter to
+    #     absorb 638.3 nm background bleed-through from the outer fringes
+    #     rather than fitting real fringe shape. This is unphysical.
+    #
+    # (3) R1 and R2 drift across the sweep (R1: 0.238–0.271), confirming
+    #     reflectivity is sensitive to radial cutoff. Values at r2=12000
+    #     (R1=0.241, R2=0.283) come from the cleanest data and are the
+    #     most trustworthy.
+    #
+    # (4) t_fit is rock-solid: range ±0.5 nm across all 7 Sweep B points.
+    #     The etalon gap estimate is independent of the radial cutoff choice.
+    #
+    # (5) r2_max=10000 gives chi2/nu=1.646 (slightly worse than 12000)
+    #     with only 667 bins — insufficient fringe shape coverage to
+    #     well-constrain sigma0 and the vignetting envelope.
+    #
+    # CONCLUSION: r2_max_fit=12000 px² is the production cutoff. It gives
+    # the lowest chi2/nu, physically reasonable R1/R2, and I3≈0 (the cubic
+    # term does real work only in the inner envelope, not as contamination
+    # absorption). This corresponds exactly to the 16-pair Tolansky range.
+    #
+    # H05 radial range intentionally matches the Tolansky fringe range:
+    # both use the same high-SNR inner 16 fringe pairs. This is physically
+    # correct — the outer fringes have degraded SNR from 638.3 nm bleed-
+    # through and contribute more noise than signal to the inversion.
+    # =========================================================================
+
+    # Gate: Tolansky must have succeeded.
     _tolansky_result = locals().get('result', None)
     if _tolansky_result is None:
-        print("\n[8/8]  H05 sweep SKIPPED — Tolansky did not complete.")
+        print("\n[8/8]  H05 inversion SKIPPED — Tolansky did not complete.")
     else:
+        result = _tolansky_result
+        print("\n[8/8]  H05 Harding calibration inversion...")
+        print(f"       Tolansky seed: n_pairs=16  "
+              f"(authoritative; Sweep A 2026-05-27)")
+        print(f"       Radial cutoff: r2_max_fit={H05_R2_MAX_FIT} px²  "
+              f"(r_max={np.sqrt(H05_R2_MAX_FIT):.1f} px;  "
+              f"optimal from Sweep B 2026-05-27)")
+
         import logging as _logging
         _logging.basicConfig(
             level=_logging.INFO,
             format="  %(name)s  %(message)s",
         )
 
-        _SWEEP_PAIRS   = [10, 11, 12, 13, 14, 15, 16]
-        _SWEEP_LABELS  = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
-        _sweep_summary = []   # list of dicts for console summary table
-        _sw_tol        = None  # will hold the last successful TolanskyResult
+        # ── 8a: build TolanskySeedMean from the full 16-pair result ──────────
+        print("  Building TolanskySeedMean from 16-pair Tolansky result...")
+        try:
+            seeds = average_tolansky_seeds([result])
+            print(f"  Seeds:  d = {seeds.d_m_mean*1e3:.6f} mm  "
+                  f"α = {seeds.alpha_mean:.5e} rad/px  "
+                  f"ε_a = {seeds.eps_a_mean:.5f}  "
+                  f"Y_B = {seeds.Y_B_obs_mean:.4f}")
+        except Exception as exc:
+            print(f"  ERROR building seeds: {exc}")
+            seeds = None
 
-        print(f"\n[8/8]  H05 n_pairs sweep  ({_SWEEP_PAIRS[0]}–{_SWEEP_PAIRS[-1]} pairs) ...")
+        if seeds is not None:
 
-        for _sw_pairs, _sw_label in zip(_SWEEP_PAIRS, _SWEEP_LABELS):
-            print(f"\n  -- H05 sweep  n_pairs={_sw_pairs}  (figure 6{_sw_label}) --")
-
-            # ── 8a: re-run Tolansky with this pair count ─────────────────────
-            try:
-                with warnings.catch_warnings(record=True) as _sw_caught:
-                    warnings.simplefilter("always")
-                    _sw_tol = run_tolansky_2line(
-                        peak_array,
-                        lam_a_m=LAM_A_M,
-                        lam_b_m=LAM_B_M,
-                        d_prior_m=D_PRIOR_M,
-                        n_pairs=_sw_pairs,
-                    )
-                for _w in _sw_caught:
-                    print(f"    Tolansky WARNING: {_w.message}")
-            except Exception as _exc:
-                print(f"    Tolansky FAILED for n_pairs={_sw_pairs}: {_exc}")
-                continue
-
-            print(f"    Tolansky: d={_sw_tol.d_m*1e3:.6f} mm  "
-                  f"α={_sw_tol.alpha_mean:.5e} rad/px  "
-                  f"ε_a={_sw_tol.eps_a:.5f}")
-
-            # ── 8b: build TolanskySeedMean from single frame ──────────────────
-            try:
-                _sw_seeds = average_tolansky_seeds([_sw_tol])
-            except Exception as _exc:
-                print(f"    Seeds FAILED for n_pairs={_sw_pairs}: {_exc}")
-                continue
-
-            # ── 8c: phase-corrected t_eff (for logging and seeds_dict) ────────
-            _sw_t_eff = phase_correct_gap(
-                _sw_seeds.d_m_mean,
-                _sw_seeds.eps_a_mean,
+            # ── 8b: phase-corrected t_eff ─────────────────────────────────────
+            # phase_correct_gap nudges t by at most lambda_1/4 (~160 nm) so
+            # that (2*t_eff/lambda_1) % 1 == eps_a_mean exactly. This anchors
+            # the absolute fringe phase and ensures the LM inversion starts in
+            # the correct phase basin. Without this correction the LM can
+            # converge to an adjacent (wrong) minimum with systematic
+            # sinusoidal residuals.
+            _t_eff_pc = phase_correct_gap(
+                seeds.d_m_mean,
+                seeds.eps_a_mean,
                 640.2248e-9,
             )
-            print(f"    t_eff (phase-corrected) = {_sw_t_eff*1e3:.7f} mm  "
-                  f"(delta = {(_sw_t_eff - _sw_seeds.d_m_mean)*1e9:+.2f} nm)")
+            print(f"  Phase-corrected t_eff = {_t_eff_pc*1e3:.7f} mm  "
+                  f"(raw Tolansky: {seeds.d_m_mean*1e3:.7f} mm  "
+                  f"delta={(_t_eff_pc - seeds.d_m_mean)*1e9:+.2f} nm)")
+
+            # ── 8c: mask FringeProfile to r2_max_fit ──────────────────────────
+            # We create a shallow copy of fp and assign a NEW masked array.
+            # fp itself is never modified — the original full-profile object
+            # remains available for diagnostics.
+            import copy as _copy
+            fp_h05 = _copy.copy(fp)
+            _h05_mask = fp.masked.copy()
+            _h05_mask[fp.r2_grid > H05_R2_MAX_FIT] = True
+            fp_h05.masked   = _h05_mask
+            fp_h05.r_max_px = float(np.sqrt(H05_R2_MAX_FIT))
+            _n_bins_h05     = int((~_h05_mask).sum())
+            print(f"  Profile masked to r2_max_fit={H05_R2_MAX_FIT} px²: "
+                  f"{_n_bins_h05} bins used  "
+                  f"(r_max = {fp_h05.r_max_px:.1f} px)")
 
             # ── 8d: run H05 inversion ─────────────────────────────────────────
+            # Init values from previous real-data fit (2026-05-27):
+            #   R1_init=0.25 (fit returned R1=0.241 at r2_max=12000)
+            #   R2_init=0.30 (fit returned R2=0.283 at r2_max=12000)
+            #   sigma0_init=0.50 (fit returned sigma0=0.559 at r2_max=12000)
+            print("  Running staged inversion (4 LM stages)...")
+            print("  (Stage progress printed below via logging)")
             try:
-                _sw_fit = run_h05(
-                    fp,
-                    _sw_seeds,
-                    R1_init=0.25,
-                    R2_init=0.30,
-                    sigma0_init=0.50,
-                )
-            except Exception as _exc:
-                import traceback as _tb
-                print(f"    H05 FAILED for n_pairs={_sw_pairs}: {_exc}")
-                print(_tb.format_exc())
-                continue
-
-            _conv_str = "CONVERGED" if _sw_fit.converged else "NOT CONVERGED"
-            print(f"    H05 [{_conv_str}]  χ²/ν={_sw_fit.chi2_reduced:.3f}  "
-                  f"R1={_sw_fit.R1:.4f}  R2={_sw_fit.R2:.4f}  "
-                  f"σ₀={_sw_fit.sigma0:.4f} px  "
-                  f"t={_sw_fit.t_m*1e3:.7f} mm  "
-                  f"α={_sw_fit.alpha:.5e}")
-
-            _sweep_summary.append({
-                'label':   _sw_label,
-                'n_pairs': _sw_pairs,
-                't_seed_mm':    _sw_seeds.d_m_mean * 1e3,
-                't_fit_mm':     _sw_fit.t_m * 1e3,
-                'alpha_seed':   _sw_seeds.alpha_mean,
-                'alpha_fit':    _sw_fit.alpha,
-                'R1':           _sw_fit.R1,
-                'R2':           _sw_fit.R2,
-                'sigma0':       _sw_fit.sigma0,
-                'chi2':         _sw_fit.chi2_reduced,
-                'converged':    _sw_fit.converged,
-            })
-
-            # ── 8e: build model curves for figure ─────────────────────────────
-            _sw_n_fine = 2000
-            _sw_r_fine = np.linspace(0.0, fp.r_max_px, _sw_n_fine)
-            _sw_model_fine, _sw_lam1_fine, _sw_lam2_fine = _model_components(
-                _sw_r_fine, fp.r_max_px,
-                _sw_fit.t_m, _sw_fit.alpha,
-                _sw_fit.R1, _sw_fit.R2,
-                _sw_fit.I0, _sw_fit.I1, _sw_fit.I2, _sw_fit.I3,
-                _sw_fit.sigma0, 0.0, 0.0,
-                _sw_fit.B, _sw_fit.ne_ratio,
-                n_fine=_sw_n_fine,
-            )
-
-            _sw_good_mask = (~fp.masked
-                             & np.isfinite(fp.sigma_profile)
-                             & (fp.sigma_profile > 0))
-            _sw_r2_data  = fp.r2_grid[_sw_good_mask]
-            _sw_prof     = fp.profile[_sw_good_mask]
-            _sw_sigma    = fp.sigma_profile[_sw_good_mask]
-
-            # ── 8f: build seeds_dict for figure annotation ────────────────────
-            _sw_seeds_dict = {
-                't_eff_mm':         _sw_t_eff * 1e3,
-                'alpha_init':       _sw_seeds.alpha_mean,
-                'R1_init':          0.25,
-                'R2_init':          0.30,
-                'sigma0_init':      0.50,
-                'ne_ratio_init':    _sw_seeds.Y_B_obs_mean,
-                'n_pairs_tolansky': _sw_tol.n_rings_a,
-            }
-
-            # ── 8g: make and save figure ──────────────────────────────────────
-            _sw_fig = make_figure(
-                _sw_r2_data, _sw_prof, _sw_sigma,
-                _sw_r_fine, _sw_model_fine,
-                _sw_lam1_fine, _sw_lam2_fine,
-                _sw_fit,
-                source_name=os.path.basename(cal_path),
-                source_path=str(cal_path),
-                seeds_dict=_sw_seeds_dict,
-            )
-
-            # Retitle the figure to show n_pairs
-            _sw_fig.texts[0].set_text(
-                f"WindCube FPI — Neon Calibration Fringe Inversion  "
-                f"(10-param: independent R1, R2; constant PSF / Harding 2014)"
-                f"  |  Tolansky seed: {_sw_pairs} fringe pairs"
-            )
-
-            _sw_fig_path = (output_dir /
-                f"6{_sw_label}_cal_h05_harding_inversion_n{_sw_pairs:02d}pairs.png")
-            _sw_fig.savefig(_sw_fig_path, dpi=150, bbox_inches="tight")
-            print(f"    Saved : {_sw_fig_path}")
-            _sw_fig.show()
-
-            # Save .npy calibration file for the 16-pair result only (6g)
-            if _sw_pairs == 16:
-                _npy_stem = (output_dir /
-                    f"{pathlib.Path(cal_path).stem}_cal_result.npy")
-                _npy_dict = {
-                    't_m':               _sw_fit.t_m,
-                    'alpha':             _sw_fit.alpha,
-                    'R_refl':            _sw_fit.R1,
-                    'R1':                _sw_fit.R1,
-                    'R2':                _sw_fit.R2,
-                    'delta_R':           _sw_fit.R2 - _sw_fit.R1,
-                    'I0':                _sw_fit.I0,
-                    'I1':                _sw_fit.I1,
-                    'I2':                _sw_fit.I2,
-                    'I3':                _sw_fit.I3,
-                    'sigma0':            _sw_fit.sigma0,
-                    'sigma1':            0.0,
-                    'sigma2':            0.0,
-                    'B':                 _sw_fit.B,
-                    'ne_ratio':          _sw_fit.ne_ratio,
-                    'epsilon_cal':       _sw_fit.epsilon_cal,
-                    'sigma_t_m':         _sw_fit.sigma_t_m,
-                    'sigma_alpha':       _sw_fit.sigma_alpha,
-                    'sigma_R_refl':      _sw_fit.sigma_R1,
-                    'sigma_R1':          _sw_fit.sigma_R1,
-                    'sigma_R2':          _sw_fit.sigma_R2,
-                    'sigma_I0':          _sw_fit.sigma_I0,
-                    'sigma_I1':          _sw_fit.sigma_I1,
-                    'sigma_I2':          _sw_fit.sigma_I2,
-                    'sigma_I3':          _sw_fit.sigma_I3,
-                    'sigma_sigma0':      _sw_fit.sigma_sigma0,
-                    'sigma_B':           _sw_fit.sigma_B,
-                    'sigma_ne_ratio':    _sw_fit.sigma_ne_ratio,
-                    'sigma_epsilon_cal': _sw_fit.sigma_epsilon_cal,
-                    'chi2_reduced':      _sw_fit.chi2_reduced,
-                    'chi2_by_stage':     list(_sw_fit.chi2_by_stage),
-                    'n_bins_used':       _sw_fit.n_bins_used,
-                    'converged':         _sw_fit.converged,
-                    'quality_flags':     0,
-                    't_tolansky_mm':     _sw_tol.d_m * 1e3,
-                    't_eff_phase_corrected_mm': _sw_t_eff * 1e3,
-                    'eps_a':             _sw_tol.eps_a,
-                    'alpha_tolansky_init': _sw_tol.alpha_mean,
-                    'n_pairs_tolansky':  _sw_tol.n_rings_a,
-                    'r_max_px':          fp.r_max_px,
-                    'source_file':       str(cal_path),
-                    'dark_file':         str(dark_path),
-                    'date_utc':          __import__('datetime').datetime.utcnow().isoformat(),
-                    'script':            os.path.basename(__file__),
-                }
-                np.save(_npy_stem, _npy_dict, allow_pickle=True)  # type: ignore[arg-type]
-                print(f"    Saved : {_npy_stem}  (authoritative 16-pair result)")
-
-        # ── Sweep summary console table ───────────────────────────────────────
-        if _sweep_summary:
-            print(f"\n  -- H05 n_pairs sweep summary ---------------------------")
-            _hdr = (f"  {'fig':>3}  {'n':>2}  {'t_seed (mm)':>14}  "
-                    f"{'t_fit (mm)':>14}  {'α_fit (rad/px)':>14}  "
-                    f"{'R1':>6}  {'R2':>6}  {'σ₀ (px)':>7}  "
-                    f"{'χ²/ν':>6}  {'conv':>4}")
-            print(_hdr)
-            print("  " + "-" * (len(_hdr) - 2))
-            for _row in _sweep_summary:
-                _c = "Y" if _row['converged'] else "N"
-                print(
-                    f"  6{_row['label']:>1}  {_row['n_pairs']:>2}  "
-                    f"{_row['t_seed_mm']:>14.7f}  "
-                    f"{_row['t_fit_mm']:>14.7f}  "
-                    f"{_row['alpha_fit']:>14.6e}  "
-                    f"{_row['R1']:>6.4f}  {_row['R2']:>6.4f}  "
-                    f"{_row['sigma0']:>7.4f}  "
-                    f"{_row['chi2']:>6.3f}  {_c:>4}"
-                )
-            print("  " + "-" * (len(_hdr) - 2))
-
-        # ── Sweep B: r2_max_fit sweep at n_pairs=16 ──────────────────────────
-        # Uses the authoritative 16-pair Tolansky result only.
-        # Masks out bins beyond r2_max_fit before each H05 call.
-        # -----------------------------------------------------------------------
-        _R2_MAX_SWEEP   = [10000, 12000, 14000, 16000, 18000, 20000, 22500]
-        _R2_LABELS      = ['a',   'b',   'c',   'd',   'e',   'f',   'g']
-        _sw_b_summary   = []
-
-        # Re-use the 16-pair Tolansky result from Sweep A (_sw_tol is the
-        # last iteration of the sweep loop, which is n_pairs=16).
-        # Build seeds once — same for all Sweep B points.
-        try:
-            _sw_b_seeds = average_tolansky_seeds([_sw_tol])
-        except Exception as _exc:
-            print(f"\n  Sweep B SKIPPED — could not build seeds: {_exc}")
-            _sw_b_seeds = None
-
-        if _sw_b_seeds is not None:
-            print(f"\n  -- H05 r2_max_fit sweep (n_pairs=16, "
-                  f"r2_max = {_R2_MAX_SWEEP}) --")
-
-            for _r2_max, _r2_label in zip(_R2_MAX_SWEEP, _R2_LABELS):
-                print(f"\n  -- Sweep B  r2_max={_r2_max}  (figure 7{_r2_label}) --")
-
-                # ── Build a masked FringeProfile for this r2_max ──────────────
-                import copy as _copy
-                _sw_b_fp = _copy.copy(fp)
-                _sw_b_mask = fp.masked.copy()
-                _sw_b_mask[fp.r2_grid > _r2_max] = True
-                _sw_b_fp.masked       = _sw_b_mask
-                _sw_b_fp.r_max_px     = float(np.sqrt(_r2_max))
-
-                _n_bins_used = int((~_sw_b_mask).sum())
-                print(f"    Masking r² > {_r2_max}: "
-                      f"{_n_bins_used} bins remain "
-                      f"(r_max = {_sw_b_fp.r_max_px:.1f} px)")
-
-                if _n_bins_used < 100:
-                    print(f"    SKIP — fewer than 100 usable bins")
-                    continue
-
-                # ── Phase-correct t_eff ───────────────────────────────────────
-                _sw_b_t_eff = phase_correct_gap(
-                    _sw_b_seeds.d_m_mean,
-                    _sw_b_seeds.eps_a_mean,
-                    640.2248e-9,
+                fit = run_h05(
+                    fp_h05,
+                    seeds,
+                    R1_init=0.25,     # from Sweep B r2_max=12000 result
+                    R2_init=0.30,     # from Sweep B r2_max=12000 result
+                    sigma0_init=0.50, # from Sweep B r2_max=12000 result
                 )
 
-                # ── Run H05 ───────────────────────────────────────────────────
-                try:
-                    _sw_b_fit = run_h05(
-                        _sw_b_fp,
-                        _sw_b_seeds,
-                        R1_init=0.25,
-                        R2_init=0.30,
-                        sigma0_init=0.50,
-                    )
-                except Exception as _exc:
-                    import traceback as _tb
-                    print(f"    H05 FAILED: {_exc}")
-                    print(_tb.format_exc())
-                    continue
+                conv_str = "CONVERGED" if fit.converged else "NOT CONVERGED"
+                print(f"\n  -- H05 results [{conv_str}]  "
+                      f"χ²/ν = {fit.chi2_reduced:.3f} --")
+                print(f"  t      = {fit.t_m*1e3:.7f} mm   "
+                      f"±{fit.sigma_t_m*1e9:.2g} nm")
+                print(f"  α      = {fit.alpha:.5e} rad/px  "
+                      f"±{fit.sigma_alpha:.2e}")
+                print(f"  R1     = {fit.R1:.5f}  ±{fit.sigma_R1:.2g}   "
+                      f"(λ₁=640.2 nm → R_refl in H06)")
+                print(f"  R2     = {fit.R2:.5f}  ±{fit.sigma_R2:.2g}   "
+                      f"(λ₂=638.3 nm, reference)")
+                print(f"  ΔR     = {fit.R2-fit.R1:+.5f}   "
+                      f"(wavelength-dependent finesse)")
+                print(f"  I0     = {fit.I0:.1f} ADU   ±{fit.sigma_I0:.2g}")
+                print(f"  I1     = {fit.I1:.5f}   ±{fit.sigma_I1:.2g}")
+                print(f"  I2     = {fit.I2:.5f}   ±{fit.sigma_I2:.2g}")
+                print(f"  I3     = {fit.I3:.5f}   ±{fit.sigma_I3:.2g}   "
+                      f"(cubic vignetting; ~0 at optimal r2_max)")
+                print(f"  σ₀     = {fit.sigma0:.4f} px   "
+                      f"±{fit.sigma_sigma0:.2g}")
+                print(f"  σ₁,σ₂  = 0.0 px (fixed; F-test p=0.998)")
+                print(f"  B      = {fit.B:.1f} ADU   ±{fit.sigma_B:.2g}")
+                print(f"  ne_rat = {fit.ne_ratio:.4f}   "
+                      f"±{fit.sigma_ne_ratio:.2g}")
+                print(f"  ε_cal  = {fit.epsilon_cal:.6f}   "
+                      f"±{fit.sigma_epsilon_cal:.2g}")
+                chi2_stages_str = "  ".join(
+                    f"S{i+1}:{v:.2f}"
+                    for i, v in enumerate(fit.chi2_by_stage))
+                print(f"  χ²/ν by stage:  {chi2_stages_str}   "
+                      f"bins_used={fit.n_bins_used}")
+                print(f"  --------------------------------------------------")
 
-                _conv_b = "Y" if _sw_b_fit.converged else "N"
-                print(f"    [{_conv_b}] χ²/ν={_sw_b_fit.chi2_reduced:.3f}  "
-                      f"R1={_sw_b_fit.R1:.4f}  R2={_sw_b_fit.R2:.4f}  "
-                      f"σ₀={_sw_b_fit.sigma0:.4f} px  "
-                      f"t={_sw_b_fit.t_m*1e3:.7f} mm  "
-                      f"I3={_sw_b_fit.I3:.4f}")
-
-                _sw_b_summary.append({
-                    'label':    _r2_label,
-                    'r2_max':   _r2_max,
-                    'r_max':    _sw_b_fp.r_max_px,
-                    'n_bins':   _n_bins_used,
-                    't_fit':    _sw_b_fit.t_m * 1e3,
-                    'alpha':    _sw_b_fit.alpha,
-                    'R1':       _sw_b_fit.R1,
-                    'R2':       _sw_b_fit.R2,
-                    'sigma0':   _sw_b_fit.sigma0,
-                    'I3':       _sw_b_fit.I3,
-                    'chi2':     _sw_b_fit.chi2_reduced,
-                    'converged':_sw_b_fit.converged,
-                })
-
-                # ── Build model curves and figure ─────────────────────────────
-                _sw_b_n_fine = 2000
-                _sw_b_r_fine = np.linspace(
-                    0.0, _sw_b_fp.r_max_px, _sw_b_n_fine)
-                _sw_b_model, _sw_b_lam1, _sw_b_lam2 = _model_components(
-                    _sw_b_r_fine, _sw_b_fp.r_max_px,
-                    _sw_b_fit.t_m, _sw_b_fit.alpha,
-                    _sw_b_fit.R1, _sw_b_fit.R2,
-                    _sw_b_fit.I0, _sw_b_fit.I1, _sw_b_fit.I2,
-                    _sw_b_fit.I3,
-                    _sw_b_fit.sigma0, 0.0, 0.0,
-                    _sw_b_fit.B, _sw_b_fit.ne_ratio,
-                    n_fine=_sw_b_n_fine,
+                # ── 8e: build model curves for figure ────────────────────────
+                print("  Building diagnostic figure...")
+                n_fine = 2000
+                r_fine = np.linspace(0.0, fp_h05.r_max_px, n_fine)
+                model_fine, lam1_fine, lam2_fine = _model_components(
+                    r_fine, fp_h05.r_max_px,
+                    fit.t_m, fit.alpha, fit.R1, fit.R2,
+                    fit.I0, fit.I1, fit.I2, fit.I3,
+                    fit.sigma0, 0.0, 0.0,
+                    fit.B, fit.ne_ratio,
+                    n_fine=n_fine,
                 )
 
-                _sw_b_good = (
-                    ~_sw_b_mask
+                # Use only the bins that were actually fitted (r2 <= r2_max_fit)
+                good_mask = (
+                    ~_h05_mask
                     & np.isfinite(fp.sigma_profile)
                     & (fp.sigma_profile > 0)
                 )
-                _sw_b_r2d  = fp.r2_grid[_sw_b_good]
-                _sw_b_prof = fp.profile[_sw_b_good]
-                _sw_b_sig  = fp.sigma_profile[_sw_b_good]
+                r2_data_fig = fp.r2_grid[good_mask]
+                prof_fig    = fp.profile[good_mask]
+                sigma_fig   = fp.sigma_profile[good_mask]
 
-                assert _sw_tol is not None  # non-None: _sw_b_seeds was built from it
-                _sw_b_seeds_dict = {
-                    't_eff_mm':         _sw_b_t_eff * 1e3,
-                    'alpha_init':       _sw_b_seeds.alpha_mean,
+                # ── 8f: seeds dict for figure annotation ─────────────────────
+                _seeds_dict_fig6 = {
+                    't_eff_mm':         _t_eff_pc * 1e3,
+                    'alpha_init':       seeds.alpha_mean,
                     'R1_init':          0.25,
                     'R2_init':          0.30,
                     'sigma0_init':      0.50,
-                    'ne_ratio_init':    _sw_b_seeds.Y_B_obs_mean,
-                    'n_pairs_tolansky': _sw_tol.n_rings_a,
+                    'ne_ratio_init':    seeds.Y_B_obs_mean,
+                    'n_pairs_tolansky': result.n_rings_a,
                 }
 
-                _sw_b_fig = make_figure(
-                    _sw_b_r2d, _sw_b_prof, _sw_b_sig,
-                    _sw_b_r_fine, _sw_b_model,
-                    _sw_b_lam1, _sw_b_lam2,
-                    _sw_b_fit,
+                fig6 = make_figure(
+                    r2_data_fig, prof_fig, sigma_fig,
+                    r_fine, model_fine, lam1_fine, lam2_fine,
+                    fit,
                     source_name=os.path.basename(cal_path),
                     source_path=str(cal_path),
-                    seeds_dict=_sw_b_seeds_dict,
+                    seeds_dict=_seeds_dict_fig6,
                 )
 
-                # Retitle to show r2_max cutoff
-                _sw_b_fig.texts[0].set_text(
-                    f"WindCube FPI — Neon Calibration Fringe Inversion  "
-                    f"(11-param: independent R1, R2; constant PSF / Harding 2014)"
-                    f"  |  r²_max = {_r2_max} px²  (r_max = {_sw_b_fp.r_max_px:.1f} px)"
-                )
+                _fig6_path = output_dir / "6_cal_h05_harding_inversion.png"
+                fig6.savefig(_fig6_path, dpi=150, bbox_inches="tight")
+                print(f"  Saved : {_fig6_path}")
+                fig6.show()
 
-                _sw_b_path = (output_dir /
-                    f"7{_r2_label}_cal_h05_harding_inversion"
-                    f"_r2max{_r2_max:05d}.png")
-                _sw_b_fig.savefig(_sw_b_path, dpi=150, bbox_inches="tight")
-                print(f"    Saved : {_sw_b_path}")
-                _sw_b_fig.show()
+                # ── 8g: save .npy calibration result ────────────────────────
+                _npy_stem = (output_dir /
+                    f"{pathlib.Path(cal_path).stem}_cal_result.npy")
+                npy_dict = {
+                    # Fitted instrument parameters
+                    't_m':               fit.t_m,
+                    'alpha':             fit.alpha,
+                    'R_refl':            fit.R1,
+                    'R1':                fit.R1,
+                    'R2':                fit.R2,
+                    'delta_R':           fit.R2 - fit.R1,
+                    'I0':                fit.I0,
+                    'I1':                fit.I1,
+                    'I2':                fit.I2,
+                    'I3':                fit.I3,
+                    'sigma0':            fit.sigma0,
+                    'sigma1':            0.0,
+                    'sigma2':            0.0,
+                    'B':                 fit.B,
+                    'ne_ratio':          fit.ne_ratio,
+                    'epsilon_cal':       fit.epsilon_cal,
+                    # 1σ uncertainties
+                    'sigma_t_m':         fit.sigma_t_m,
+                    'sigma_alpha':       fit.sigma_alpha,
+                    'sigma_R_refl':      fit.sigma_R1,
+                    'sigma_R1':          fit.sigma_R1,
+                    'sigma_R2':          fit.sigma_R2,
+                    'sigma_I0':          fit.sigma_I0,
+                    'sigma_I1':          fit.sigma_I1,
+                    'sigma_I2':          fit.sigma_I2,
+                    'sigma_I3':          fit.sigma_I3,
+                    'sigma_sigma0':      fit.sigma_sigma0,
+                    'sigma_B':           fit.sigma_B,
+                    'sigma_ne_ratio':    fit.sigma_ne_ratio,
+                    'sigma_epsilon_cal': fit.sigma_epsilon_cal,
+                    # Fit quality
+                    'chi2_reduced':      fit.chi2_reduced,
+                    'chi2_by_stage':     list(fit.chi2_by_stage),
+                    'n_bins_used':       fit.n_bins_used,
+                    'converged':         fit.converged,
+                    'quality_flags':     0,
+                    # Provenance
+                    't_tolansky_mm':          result.d_m * 1e3,
+                    't_eff_phase_corrected_mm': _t_eff_pc * 1e3,
+                    'eps_a':                  result.eps_a,
+                    'alpha_tolansky_init':     result.alpha_mean,
+                    'n_pairs_tolansky':        result.n_rings_a,
+                    'r2_max_fit':             H05_R2_MAX_FIT,
+                    'r_max_px':               fp_h05.r_max_px,
+                    'source_file':            str(cal_path),
+                    'dark_file':              str(dark_path),
+                    'date_utc':               __import__('datetime').datetime.utcnow().isoformat(),
+                    'script':                 os.path.basename(__file__),
+                }
+                np.save(_npy_stem, npy_dict, allow_pickle=True)  # type: ignore[arg-type]
+                print(f"  Saved : {_npy_stem}")
+                print(f"  Load via:  cal = np.load(r'{_npy_stem}', "
+                      f"allow_pickle=True).item()")
 
-            # ── Sweep B console summary ───────────────────────────────────────
-            if _sw_b_summary:
-                print(f"\n  -- Sweep B summary (n_pairs=16, r2_max sweep) ------")
-                _hdr_b = (
-                    f"  {'fig':>3}  {'r2_max':>7}  {'r_max(px)':>9}  "
-                    f"{'n_bins':>6}  {'t_fit(mm)':>14}  "
-                    f"{'R1':>6}  {'R2':>6}  {'σ₀(px)':>7}  "
-                    f"{'I3':>7}  {'χ²/ν':>6}  {'cv':>3}"
-                )
-                print(_hdr_b)
-                print("  " + "-" * (len(_hdr_b) - 2))
-                for _row in _sw_b_summary:
-                    _cv = "Y" if _row['converged'] else "N"
-                    print(
-                        f"  7{_row['label']:>1}  "
-                        f"{_row['r2_max']:>7}  "
-                        f"{_row['r_max']:>9.1f}  "
-                        f"{_row['n_bins']:>6}  "
-                        f"{_row['t_fit']:>14.7f}  "
-                        f"{_row['R1']:>6.4f}  {_row['R2']:>6.4f}  "
-                        f"{_row['sigma0']:>7.4f}  "
-                        f"{_row['I3']:>7.4f}  "
-                        f"{_row['chi2']:>6.3f}  {_cv:>3}"
-                    )
-                print("  " + "-" * (len(_hdr_b) - 2))
-
-            # ── Figure 8: r2_max sweep summary plot ───────────────────────────
-            if len(_sw_b_summary) >= 2:
-                print("\n  Building Figure 8 (r2_max sweep summary)...")
-
-                _r2v  = np.array([r['r2_max']  for r in _sw_b_summary])
-                _chi2 = np.array([r['chi2']    for r in _sw_b_summary])
-                _R1v  = np.array([r['R1']      for r in _sw_b_summary])
-                _R2v  = np.array([r['R2']      for r in _sw_b_summary])
-                _sig  = np.array([r['sigma0']  for r in _sw_b_summary])
-                _I3v  = np.array([r['I3']      for r in _sw_b_summary])
-
-                fig8, axes8 = plt.subplots(1, 3, figsize=(16, 5))
-                fig8.suptitle(
-                    f"H05 r²_max sweep  |  n_pairs=16 (authoritative Tolansky seed)  "
-                    f"|  {os.path.basename(cal_path)}",
-                    fontsize=11, fontweight="bold",
-                )
-
-                # Panel 0: χ²/ν vs r2_max
-                ax = axes8[0]
-                ax.plot(_r2v, _chi2, 'o-', color='steelblue',
-                        lw=1.8, ms=7, markerfacecolor='white',
-                        markeredgewidth=2)
-                ax.axhline(1.0, color='green', lw=0.9, ls='--',
-                           alpha=0.6, label='χ²=1 (ideal)')
-                ax.axhline(2.0, color='orange', lw=0.8, ls=':',
-                           alpha=0.6, label='χ²=2')
-                for _rb, _cb in zip(_r2v, _chi2):
-                    ax.annotate(f'{_cb:.2f}',
-                                xy=(_rb, _cb),
-                                xytext=(0, 8), textcoords='offset points',
-                                ha='center', fontsize=8)
-                ax.set_xlabel('r²_max  (px²)', fontsize=9)
-                ax.set_ylabel('χ²/ν', fontsize=9)
-                ax.set_title('Goodness of fit vs radial cutoff',
-                             fontsize=9, fontweight='bold')
-                ax.legend(fontsize=8)
-                ax.tick_params(labelsize=8)
-
-                # Panel 1: R1, R2 vs r2_max
-                ax = axes8[1]
-                ax.plot(_r2v, _R1v, 'o-', color='#1f77b4',
-                        lw=1.8, ms=7, markerfacecolor='white',
-                        markeredgewidth=2, label='R1  640.2 nm')
-                ax.plot(_r2v, _R2v, 's--', color='#ff7f0e',
-                        lw=1.8, ms=7, markerfacecolor='white',
-                        markeredgewidth=2, label='R2  638.3 nm')
-                ax.set_xlabel('r²_max  (px²)', fontsize=9)
-                ax.set_ylabel('Reflectivity', fontsize=9)
-                ax.set_title('R1, R2 vs radial cutoff',
-                             fontsize=9, fontweight='bold')
-                ax.legend(fontsize=8)
-                ax.tick_params(labelsize=8)
-
-                # Panel 2: σ₀ and I3 vs r2_max
-                ax = axes8[2]
-                ax2b = ax.twinx()
-                l1, = ax.plot(_r2v, _sig, 'o-', color='purple',
-                              lw=1.8, ms=7, markerfacecolor='white',
-                              markeredgewidth=2, label='σ₀ (px)')
-                l2, = ax2b.plot(_r2v, _I3v, '^--', color='firebrick',
-                                lw=1.8, ms=7, markerfacecolor='white',
-                                markeredgewidth=2, label='I3')
-                ax.set_xlabel('r²_max  (px²)', fontsize=9)
-                ax.set_ylabel('σ₀  (px)', fontsize=9, color='purple')
-                ax2b.set_ylabel('I3', fontsize=9, color='firebrick')
-                ax.tick_params(labelsize=8, axis='y', labelcolor='purple')
-                ax2b.tick_params(labelsize=8, axis='y', labelcolor='firebrick')
-                ax.set_title('PSF width and cubic vignetting vs cutoff',
-                             fontsize=9, fontweight='bold')
-                ax.legend(handles=[l1, l2], fontsize=8, loc='upper left')
-
-                fig8.tight_layout()
-                _fig8_path = output_dir / "8_cal_h05_r2max_sweep.png"
-                fig8.savefig(_fig8_path, dpi=150, bbox_inches="tight")
-                print(f"  Saved : {_fig8_path}")
-                fig8.show()
+            except Exception as exc:
+                import traceback
+                print(f"\n  ERROR: H05 inversion failed — {exc}")
+                print(traceback.format_exc())
 
     print("\n[done]  All figures saved and displayed.")
     print(f"  Output folder : {output_dir}")
