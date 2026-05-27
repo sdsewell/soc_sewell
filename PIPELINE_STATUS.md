@@ -51,6 +51,27 @@
 These failures pre-date the S07b session and are excluded from regression
 assessment until the relevant modules are fixed or installed.
 
+## Output file policy
+
+`data_reference/` PNGs and `.npy` files are pipeline outputs regenerated
+on each run. They are NOT committed source files and should remain
+unstaged. The authoritative calibration result is
+`data_reference/<stem>_cal_result.npy` produced by the single
+production H05 run (n_pairs=16, r2_max_fit=12000 px²).
+
+## H05 parameter selection (2026-05-27)
+
+Two sweep analyses established the production parameters:
+
+- **Sweep A** (n_pairs=10..16): two-basin LM structure at 13→14 pairs.
+  Pairs 14–16 give physically correct R1≈0.25, R2≈0.29. n_pairs=16
+  is the authoritative Tolansky seed.
+
+- **Sweep B** (r2_max=10000..22500 px²): chi2/nu minimum at 12000 px²
+  (1.587). I3 sign flip at r2>18000 identifies the 638.3 nm bleed-
+  through contamination boundary. t_fit stable ±0.5 nm across all
+  cutoffs. r2_max_fit=12000 is the production cutoff.
+
 ## Notes
 
 - NB00 HWM14WindMap (spec v2026-05-16): uses `pyhwm2014` backend (pyHWM14/pyhwm2014/hwm14.cp312-win_amd64.pyd).
@@ -75,16 +96,6 @@ assessment until the relevant modules are fixed or installed.
   Wind columns present: wind_v_zonal_ms, wind_v_merid_ms, v_wind_los_approach_ms.
   matplotlib savefig outside conda-activated env: native LoadLibrary calls bypass os.add_dll_directory;
   fix is to prepend conda env dirs to os.environ["PATH"] before importing matplotlib.
-
-- CAL01 H05 production cutoff (2026-05-27): Sweep A (n_pairs=10–16) and Sweep B (r2_max=10000–22500 px²)
-  completed; results documented in run_windcube_calibration.py Step 8 comments. Production parameters:
-  n_pairs=16 (authoritative Tolansky seed; 14–16 pair basin gives R1≈0.25, R2≈0.29 consistent with ICOS
-  coating spec), r2_max_fit=12000 px² (chi2/nu minimum 1.587; I3 sign flip at r2>18000 identifies
-  contamination boundary from 638.3 nm bleed-through). H05_R2_MAX_FIT=12000 added to USER-TUNABLE
-  PARAMETERS. Single Figure 6 (6_cal_h05_harding_inversion.png) replaces 6a–6g sweep. .npy provenance
-  includes r2_max_fit and r_max_px fields.
-  data_reference/ PNGs (0_–6_cal_*.png, *_cal_result.npy) are pipeline OUTPUT files regenerated on each run —
-  they are NOT committed source and should not be git-tracked.
 
 - windcube env GEN01 dependencies (2026-05-16): all third-party packages verified present.
   numpy 2.4.5, pandas 3.0.3, scipy 1.17.1, astropy 7.2.0, sgp4 2.25, matplotlib 3.10.9,
