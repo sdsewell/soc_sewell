@@ -65,7 +65,23 @@ from src.metadata.p01_image_metadata_2026_04_06 import (
     AdcsQualityFlags,
     compute_adcs_quality_flag,
 )
-from windcube.constants import WGS84_A_M, EARTH_GRAV_PARAM_M3_S2
+from windcube.constants import (
+    WGS84_A_M, EARTH_GRAV_PARAM_M3_S2,
+    # FPI optical model (previously hardcoded)
+    ETALON_GAP_M        as _C_ETALON_GAP_M,
+    ETALON_N            as _C_ETALON_N,
+    ALPHA_RAD_PX        as _C_PLATE_SCALE_RPX,
+    R_REFL              as _C_R_REFL,
+    R_REFL_2            as _C_R_REFL_2,
+    NE_INTENSITY_2      as _C_REL_638,
+    PSF_SIGMA0_PX       as _C_SIGMA0_PX,
+    OI_WAVELENGTH_VAC_M as _C_LAMBDA_OI_M,
+    NE_WAVELENGTH_1_VAC_M as _C_LAMBDA_NE1_M,
+    NE_WAVELENGTH_2_VAC_M as _C_LAMBDA_NE2_M,
+    SPEED_OF_LIGHT_MS   as _C_SPEED_OF_LIGHT_MS,
+    R_MAX_PX            as _C_R_MAX_PX,
+    CCD_DARK_RATE_E_PX_S as _C_QDD_AT_20C,
+)
 
 # ---------------------------------------------------------------------------
 # Constants — scheduling / instrument
@@ -94,18 +110,21 @@ WIND_MAP_TAGS = {
 # Constants — FPI optical model (§7.1)
 # ---------------------------------------------------------------------------
 
-LAMBDA_OI_M      = 630.0e-9       # OI 630.0 nm source wavelength, m
-LAMBDA_NE1_M     = 640.2248e-9    # Neon strong line (Burns et al. 1950)
-LAMBDA_NE2_M     = 638.2991e-9    # Neon weak line  (Burns et al. 1950)
-ETALON_GAP_M     = 20.1069751e-3  # Real FlatSat H05 fit: t_m = 20.1069751 mm
-PLATE_SCALE_RPX  = 1.60885e-4     # Real FlatSat H05 fit: alpha = 1.60885e-4 rad/px
-R_REFL           = 0.23737        # Real FlatSat H05 fit: R1 at λ1=640.2 nm
-R_REFL_2         = 0.33603        # Real FlatSat H05 fit: R2 at λ2=638.3 nm
-SIGMA0_PX        = 0.5540         # Real FlatSat H05 fit: PSF base width [px]
-N_GAP            = 1.0            # Refractive index of etalon gap (air)
-C_LIGHT_MS       = 2.99792458e8   # Speed of light, m/s
+LAMBDA_OI_M     = _C_LAMBDA_OI_M       # OI vac wavelength (NIST+Edlén)
+LAMBDA_NE1_M    = _C_LAMBDA_NE1_M      # Ne 640.2 nm vac (NIST+Edlén)
+LAMBDA_NE2_M    = _C_LAMBDA_NE2_M      # Ne 638.3 nm vac (NIST+Edlén)
+ETALON_GAP_M    = _C_ETALON_GAP_M      # H05 TBAL (2026-05-24)
+PLATE_SCALE_RPX = _C_PLATE_SCALE_RPX   # H05 TBAL (2026-05-24)
+R_REFL          = _C_R_REFL            # H05 TBAL R1 @ 640.2 nm
+R_REFL_2        = _C_R_REFL_2          # H05 TBAL R2 @ 638.3 nm
+SIGMA0_PX       = _C_SIGMA0_PX         # H05 TBAL PSF width
+N_GAP           = _C_ETALON_N          # refractive index (=1.0)
+C_LIGHT_MS      = _C_SPEED_OF_LIGHT_MS # CODATA 2018
+REL_638         = _C_REL_638           # H05 TBAL ne_ratio
 
-FINESSE_F        = 4 * R_REFL / (1 - R_REFL) ** 2   # ≈ 3.24 with R_REFL=0.23737 (real FlatSat)
+FINESSE_F = 4 * R_REFL / (1 - R_REFL) ** 2
+# At R1=0.241 (TBAL): F≈1.67, reflective finesse N_R≈2.03
+# These fringes are broad/shallow — this is the real instrument.
 
 # CCD / pixel layout — keyed by binning factor (1 or 2)
 # Layout: row 0 of file = header (276 words, zero-padded to N_COLS_FRAME);
@@ -118,7 +137,7 @@ BINNING_CFG = {
         n_cols_frame  = 276,
         row_offset    = 1,
         col_offset    = 10,
-        plate_scale   = PLATE_SCALE_RPX,          # 1.6071e-4 rad/px
+        plate_scale   = PLATE_SCALE_RPX,          # 1.60854e-4 rad/px  (updated from TBAL)
         rows_meta     = 260,
         cols_meta     = 276,
         n_bin         = 4,      # 2×2: 4 physical pixels per output pixel
@@ -130,7 +149,7 @@ BINNING_CFG = {
         n_cols_frame  = 552,
         row_offset    = 2,
         col_offset    = 20,
-        plate_scale   = PLATE_SCALE_RPX / 2.0,   # 8.036e-5 rad/px
+        plate_scale   = PLATE_SCALE_RPX / 2.0,   # 8.0427e-5 rad/px
         rows_meta     = 528,
         cols_meta     = 552,
         n_bin         = 1,      # 1×1: 1 physical pixel per output pixel
@@ -150,12 +169,11 @@ ADU_MAX          = 16383
 # Signal levels
 SCI_PEAK_ADU     = 5000
 CAL_PEAK_ADU     = 12000
-REL_638          = 0.5087         # Real FlatSat H05 fit: ne_ratio (weak/strong amplitude ratio)
 
 # CCD97 physical noise model — FM measured values (WIND-XCAM-RE-00035)
 GAIN_E_PER_DN    = 3.29           # e-/DN, PTC measurement, FM CCD 17195, signal_sample=7, 2x2
 READ_NOISE_E     = 4.61           # e- rms, back-clocked overscan, FM CCD 17195
-QDD_AT_20C       = 400.0          # e-/px/s dark reference at 20°C, CCD97 datasheet
+QDD_AT_20C       = _C_QDD_AT_20C  # e-/px/s dark reference at 20°C, CCD97 datasheet
 T_REF_K          = 293.15         # reference temperature for dark rate formula (K)
 BIAS_DN          = 275.0          # bias pedestal (DN), estimated from WIND-XCAM-RE-00035 Fig.6
 BIAS_SIGMA_DN    = 2.0            # pixel-to-pixel bias scatter (DN)

@@ -31,9 +31,9 @@ import math
 # ---------------------------------------------------------------------------
 
 # Etalon / optics
-ETALON_GAP_M        : float = 20.1069749e-3  # m  — H05 inversion (2026-05-24); 1σ = 1.5 nm
+ETALON_GAP_M        : float = 20.1076267e-3  # m  — H05 TBAL inversion (2026-05-24); 1σ=1.7 nm
 ETALON_N            : float = 1.0            # —  — refractive index of etalon gap (air)
-ETALON_R_INSTRUMENT : float = 0.24378        # —  — H05 inversion R1 @ 640.2 nm (2026-05-24); 1σ = 0.0098
+ETALON_R_INSTRUMENT : float = 0.241          # —  — H05 TBAL R1 @ 640.2 nm (2026-05-24); 1σ=0.010
 # ALPHA_RAD_PX defined below in opto-mechanical section (1.60885e-4 rad/px)
 
 # CCD / FOV
@@ -41,16 +41,20 @@ CCD_PIXELS_UNBINNED : int   = 512            # px — physical pixels per side (
 FOV_DEG             : float = 1.65           # deg — full field of view
 
 # OI airglow target line
-OI_WAVELENGTH_AIR_M : float = 630.0304e-9   # m  — NIST ASD air wavelength (rest)
+OI_WAVELENGTH_AIR_M : float = 630.0304e-9    # m  — NIST ASD air wavelength (rest)
+OI_WAVELENGTH_VAC_M : float = 630.204637e-9  # m  — NIST vacuum, Edlén (1966) from 630.0304 nm air; 6 sig figs authoritative
+# NOTE: OI_LAMBDA0_NM = 630.0 (Harding H06/H07 convention) is a SEPARATE
+# quantity used only in the H06/H07 Doppler reference convention.
+# All forward model wavelength calculations must use OI_WAVELENGTH_VAC_M.
 
 # Neon calibration lines — air wavelengths (Burns 1950) and vacuum (NIST ASD / Edlén 1966)
 NE_WAVELENGTH_1_AIR_M : float = 640.2248e-9   # m  — strong line, air
-NE_WAVELENGTH_1_VAC_M : float = 640.4018e-9   # m  — strong line, vacuum (±0.0001 nm)
+NE_WAVELENGTH_1_VAC_M : float = 640.401775e-9  # m  — NIST vacuum, Edlén (1966) from 640.2248 nm air; matches NIST ASD ±0.0001 nm
 NE_WAVELENGTH_2_AIR_M : float = 638.2991e-9   # m  — weak line, air
-NE_WAVELENGTH_2_VAC_M : float = 638.47560e-9  # m  — weak line, vacuum (±0.00005 nm)
+NE_WAVELENGTH_2_VAC_M : float = 638.475557e-9  # m  — NIST vacuum, Edlén (1966) from 638.2991 nm air; matches NIST ASD ±0.00005 nm
 NE_INTENSITY_1        : float = 1.0           # —  — reference intensity ratio
-NE_INTENSITY_2        : float = 0.5126        # —  — H05 inversion ne_ratio (2026-05-24); 1σ = 0.012
-                                              #       previous nominal value: 0.36
+NE_INTENSITY_2        : float = 0.7537        # —  — H05 TBAL ne_ratio (2026-05-24); 1σ=0.012
+                                              #       previous value 0.5126 was from an earlier run
 
 # Physical constants
 SPEED_OF_LIGHT_MS : float = 299_792_458.0    # m/s — exact SI value
@@ -81,13 +85,13 @@ OI_WAVELENGTH_VAC_NM: float = 630.2046   # nm, vacuum  (Edlén 1966 conversion)
 # σ = 1/0.6402248 µm⁻¹ = 1.56197 µm⁻¹  →  n_air = 1.00027643
 # λ_vac = 640.2248 × 1.00027643 = 640.4018 nm  (NIST: 640.4018 ± 0.0001 nm)
 NE_WAVELENGTH_1_NM:     float = 640.2248   # nm, air   (Burns 1950, rounded to 4 d.p.)
-NE_WAVELENGTH_1_VAC_NM: float = 640.4018   # nm, vacuum (NIST ASD; ±0.0001 nm)
+NE_WAVELENGTH_1_VAC_NM: float = 640.401775  # nm, vacuum (NIST ASD; ±0.0001 nm)
 
 # Ne 6382.9914 Å = 638.29914 nm (air)  — secondary / low-amplitude family (638 nm)
 # σ = 1/0.63829914 µm⁻¹ = 1.56668 µm⁻¹  →  n_air = 1.00027645
 # λ_vac = 638.29914 × 1.00027645 = 638.4756 nm  (NIST: 638.47560 ± 0.00005 nm)
 NE_WAVELENGTH_2_NM:     float = 638.2991   # nm, air   (Burns 1950, rounded to 4 d.p.)
-NE_WAVELENGTH_2_VAC_NM: float = 638.47560  # nm, vacuum (NIST ASD; ±0.00005 nm)
+NE_WAVELENGTH_2_VAC_NM: float = 638.475557  # nm, vacuum (NIST ASD; ±0.00005 nm)
 
 # ---------------------------------------------------------------------------
 # Opto-mechanical calibration constants
@@ -100,13 +104,13 @@ NE_WAVELENGTH_2_VAC_NM: float = 638.47560  # nm, vacuum (NIST ASD; ±0.00005 nm)
 # Previous (Tolansky seed): 20.10695 ± 0.2 µm  (2026-05-24)
 # NOTE: disagrees with D_25C_MM (mechanical prior) by ~99 µm; discrepancy unresolved.
 # All pipeline code must use ICOS_GAP_MM / D_25C_MM for N_int resolution only.
-D_TOLANSKY_MM:       float = 20.1069749
-SIGMA_D_TOLANSKY_MM: float = 0.0000015   # 1σ [mm]  (1.5 nm — H05 inversion)
+D_TOLANSKY_MM:       float = 20.1076267   # mm — H05 TBAL inversion (2026-05-24); 1σ=1.7 nm
+SIGMA_D_TOLANSKY_MM: float = 0.0000017   # 1σ [mm]  (1.7 nm — H05 TBAL 1σ)
 
 # Plate scale (2x2 binned) from H05 inversion [rad/px]
 # alpha = 1.60885e-4 ± 0.00014e-4 rad/px  (1σ)   (2026-05-24)
 # Previous (Tolansky seed): 1.608163e-4 ± 1.23e-8 rad/px  (2026-05-24)
-ALPHA_RAD_PX:       float = 1.60885e-4
+ALPHA_RAD_PX:       float = 1.60854e-4   # rad/px — H05 TBAL inversion (2026-05-24); 1σ=0.00014e-4
 SIGMA_ALPHA_RAD_PX: float = 0.00014e-4   # 1σ [rad/px]
 
 # FlatSat effective etalon reflectivity at 640.2 nm [dimensionless]
@@ -114,7 +118,20 @@ SIGMA_ALPHA_RAD_PX: float = 0.00014e-4   # 1σ [rad/px]
 # R1 = 0.24378 ± 0.0098  (1σ)   (2026-05-24)
 # Previous value: 0.53 (placeholder)
 # Note: R2 (638.3 nm) = 0.33400 ± 0.018 — reference only, not used in H06
-R_REFL: float = 0.24378
+R_REFL: float = 0.241          # — H05 TBAL R1 @ 640.2 nm (2026-05-24); 1σ=0.010
+
+# Etalon reflectivity at 638.3 nm (weak neon line) — H05 TBAL (2026-05-24)
+# Reference only — not used directly in H06 airglow inversion (H06 uses R_REFL=R1)
+R_REFL_2        : float = 0.28303   # — H05 TBAL R2 @ 638.3 nm; 1σ=0.014
+SIGMA_R_REFL_2  : float = 0.014     # 1σ
+
+# PSF base width from H05 Harding 10-param inversion (constant blur, σ1=σ2=0 fixed)
+PSF_SIGMA0_PX       : float = 0.5592   # px — H05 TBAL (2026-05-24); 1σ=0.009 px
+SIGMA_PSF_SIGMA0_PX : float = 0.0092
+
+# Airy denominator coefficient and reflective finesse — derived, for documentation
+# FINESSE_F = 4R/(1-R)^2; at R1=0.241: F≈1.67; reflective finesse N_R=π√R/(1-R)≈2.03
+# These are NOT stored as constants (they are derived); this comment is the record.
 
 # Maximum fringe radius used in annular reduction [px] (FlatSat / flight)
 R_MAX_PX: int = 110
@@ -175,7 +192,7 @@ INTEGRATION_TIME_S: float = 10.0           # seconds
 # Plate scale (2×2 binned).  Authoritative H05 inversion value (2026-05-24).
 # Reproduced here so NB03 can compute pixel solid angle without
 # importing from M01 (which would create a circular Tier dependency).
-ALPHA_RAD_PER_PX: float = 1.60885e-4       # rad / binned pixel
+ALPHA_RAD_PER_PX: float = 1.60854e-4       # rad/px — H05 TBAL (2026-05-24); alias of ALPHA_RAD_PX
 
 # Orbital and observation geometry defaults
 ORBIT_ALTITUDE_M:   float = 500_000.0     # m, nominal WindCube orbit
@@ -314,11 +331,11 @@ WIND_MAX_STORM_MS      : float = 400.0         # m/s — G2 storm wind
 WIND_MIN_DETECTABLE_MS : float = 20.0          # m/s — minimum detectable
 LAT_RANGE_DEG          : tuple = (-40.0, 40.0) # deg — primary science latitude band
 
-# Derived etalon quantities
-ETALON_FSR_NE1_M    : float = NE_WAVELENGTH_1_AIR_M ** 2 / (2.0 * ETALON_GAP_M)
-ETALON_FSR_OI_M     : float = OI_WAVELENGTH_AIR_M   ** 2 / (2.0 * ETALON_GAP_M)
-VELOCITY_PER_FSR_MS : float = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_M
-NE_DELTA_LAMBDA_M   : float = NE_WAVELENGTH_1_AIR_M - NE_WAVELENGTH_2_AIR_M
+# Derived etalon quantities — all use vacuum wavelengths (NIST+Edlén policy)
+ETALON_FSR_NE1_M    : float = NE_WAVELENGTH_1_VAC_M ** 2 / (2.0 * ETALON_GAP_M)
+ETALON_FSR_OI_M     : float = OI_WAVELENGTH_VAC_M   ** 2 / (2.0 * ETALON_GAP_M)
+VELOCITY_PER_FSR_MS : float = SPEED_OF_LIGHT_MS * ETALON_FSR_OI_M / OI_WAVELENGTH_VAC_M
+NE_DELTA_LAMBDA_M   : float = NE_WAVELENGTH_1_VAC_M - NE_WAVELENGTH_2_VAC_M
 NE_SEPARATION_FSR   : float = NE_DELTA_LAMBDA_M / ETALON_FSR_NE1_M
 
 
