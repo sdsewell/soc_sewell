@@ -149,9 +149,9 @@ VAR_SEARCH_PX   = 15.0     # ±half-width of coarse grid search (px)
 # controls where the ROI box is placed in Figure 0.
 
 # ── Annular reduction ────────────────────────────────────────────────────────
-R_MAX_PX        = 122.0    # outer radius for annular integration (px)
+R_MAX_PX        = 150.0    # outer radius for annular integration (px); extended to use partial annuli
 N_BINS          = 1500     # number of r² bins  (→ ~43 bins/FWHM)
-PEAK_PROMINENCE = 50.0     # minimum peak prominence in ADU
+PEAK_PROMINENCE = 20.0     # minimum peak prominence in ADU  [lowered for weak outer fringes]
 
 # ── Peak fitting windows in r²  (px²) ───────────────────────────────────────
 # These override the auto-detected windows peak-by-peak.
@@ -159,30 +159,45 @@ PEAK_PROMINENCE = 50.0     # minimum peak prominence in ADU
 # Copy _R2_WINDOWS from fpi_cal_lib as the starting point; edit freely.
 # Peak index 0 = innermost; even = 640.2 nm, odd = 638.3 nm.
 _R2_WINDOWS.update({
-     0: (    205,    455),   # P0  640.2 nm  fit≈330   hw≈125
-     1: (    797,   1097),   # P1  638.3 nm  fit≈947   hw≈150
-     2: (   1402,   1702),   # P2  640.2 nm  fit≈1552  hw≈150  [was right-clipped]
-     3: (   1972,   2372),   # P3  638.3 nm  fit≈2172  hw≈200  [re-centred]
-     4: (   2600,   3000),   # P4  640.2 nm  fit≈2800  hw≈200  [symmetric]
-     5: (   3244,   3544),   # P5  638.3 nm  fit≈3394  hw≈150
-     6: (   3822,   4222),   # P6  640.2 nm  fit≈4022  hw≈200
-     7: (   4474,   4774),   # P7  638.3 nm  fit≈4624  hw≈150  [trimmed right]
-     8: (   5104,   5404),   # P8  640.2 nm  fit≈5254  hw≈150  [trimmed right]
-     9: (   5649,   6049),   # P9  638.3 nm  fit≈5849  hw≈200  [trimmed left]
-    10: (   6282,   6682),   # P10 640.2 nm  fit≈6482  hw≈200  [trimmed left]
-    11: (   6889,   7289),   # P11 638.3 nm  fit≈7089  hw≈200  [trimmed left]
-    12: (   7517,   7917),   # P12 640.2 nm  fit≈7717  hw≈200  [trimmed right]
-    13: (   8161,   8461),   # P13 638.3 nm  fit≈8311  hw≈150  [extended right]
-    14: (   8703,   9203),   # P14 640.2 nm  fit≈8953  hw≈250
-    15: (   9348,   9648),   # P15 638.3 nm  fit≈9498  hw≈150  [extended right]
-    16: (   9984,  10384),   # P16 640.2 nm  fit≈10184 hw≈200
-    17: (  10616,  10916),   # P17 638.3 nm  fit≈10766 hw≈150  [extended right]
-    18: (  11226,  11626),   # P18 640.2 nm  fit≈11426 hw≈200  [trimmed left]
-    19: (  11847,  12147),   # P19 638.3 nm  fit≈11997 hw≈150  [extended right]
-    20: (  12407,  12907),   # P20 640.2 nm  fit≈12657 hw≈250
-    21: (  13003,  13453),   # P21 638.3 nm  fit≈13228 hw≈225
-    22: (  13657,  14107),   # P22 640.2 nm  fit≈13882 hw≈225
-    23: (  14204,  14654),   # P23 638.3 nm  fit≈14429 hw≈225  [trimmed right]
+    #  key: (lo, centre, hi)  -- 3-tuple: lo/hi = fitting window bounds,
+    #                             centre  = initial guess for parabolic fit
+    #  P0-P19: centre = r²_fit from last run (authoritative)
+    #  P20+:   centre = predicted from Δ spacing (adjust after inspecting Figure 2)
+     0: (     205,  330,    455),   # P0  640.2 nm
+     1: (     797,  947,   1097),   # P1  638.3 nm
+     2: (    1415, 1561,   1715),   # P2  640.2 nm
+     3: (    1973, 2173,   2373),   # P3  638.3 nm
+     4: (    2600, 2797,   3000),   # P4  640.2 nm
+     5: (    3243, 3395,   3543),   # P5  638.3 nm
+     6: (    3827, 4019,   4227),   # P6  640.2 nm
+     7: (    4474, 4670,   4774),   # P7  638.3 nm
+     8: (    5107, 5250,   5407),   # P8  640.2 nm
+     9: (    5649, 5850,   6049),   # P9  638.3 nm
+    10: (    6284, 6485,   6684),   # P10 640.2 nm
+    11: (    6889, 7085,   7289),   # P11 638.3 nm
+    12: (    7517, 7712,   7917),   # P12 640.2 nm
+    13: (    8157, 8312,   8457),   # P13 638.3 nm
+    14: (    8703, 8955,   9203),   # P14 640.2 nm
+    15: (    9361, 9529,   9661),   # P15 638.3 nm
+    16: (    9984,10191,  10384),   # P16 640.2 nm
+    17: (   10616,10757,  10916),   # P17 638.3 nm
+    18: (   11226,11420,  11626),   # P18 640.2 nm
+    19: (   11839,11988,  12139),   # P19 638.3 nm
+    # ── Extended outer fringes — centres are predictions, adjust as needed ────
+    20: (   12427,12652,  12877),   # P20 640.2 nm  predicted
+    21: (   12990,13215,  13440),   # P21 638.3 nm  predicted
+    22: (   13659,13884,  14109),   # P22 640.2 nm  predicted
+    23: (   14175,14400,  14625),   # P23 638.3 nm  observed≈14400
+    24: (   14975,15200,  15425),   # P24 640.2 nm  observed≈15200
+    25: (   15475,15700,  15925),   # P25 638.3 nm  observed≈15700
+    26: (   16075,16300,  16525),   # P26 640.2 nm  observed≈16300
+    27: (   16675,16900,  17125),   # P27 638.3 nm  observed≈16900
+    28: (   17375,17600,  17825),   # P28 640.2 nm  observed≈17600
+    29: (   17898,18123,  18348),   # P29 638.3 nm  predicted
+    30: (   18587,18812,  19037),   # P30 640.2 nm  predicted
+    31: (   19125,19350,  19575),   # P31 638.3 nm  predicted
+    32: (   19819,20044,  20269),   # P32 640.2 nm  predicted
+    33: (   20352,20577,  20802),   # P33 638.3 nm  predicted
 })
 
 # ── Tolansky two-line analysis ───────────────────────────────────────────────
@@ -829,6 +844,8 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
     # ── Shade fitting windows and draw centroid lines ─────────────────────────
     window_legend_a = window_legend_b = False
     centroid_legend = False
+    midpoint_legend = False
+    midpoint_legend = False
 
     for k, pf in enumerate(peaks):
         is_a    = (k % 2 == 0)
@@ -838,7 +855,11 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
 
         # Shaded fitting window from _R2_WINDOWS
         if k in _R2_WINDOWS:
-            r2_lo, r2_hi = _R2_WINDOWS[k]
+            _wk   = _R2_WINDOWS[k]
+            r2_lo, r2_hi = _wk[0], _wk[-1]
+            # 3-tuple: use explicit centre; 2-tuple: fall back to midpoint
+            r2_mid = _wk[1] if len(_wk) == 3 else 0.5 * (r2_lo + r2_hi)
+
             # Window shade label — only once per family
             if is_a and not window_legend_a:
                 ax_prof.axvspan(r2_lo, r2_hi, alpha=0.18, color=fc,
@@ -851,9 +872,18 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
             else:
                 ax_prof.axvspan(r2_lo, r2_hi, alpha=0.18, color=fc, zorder=1)
 
-            # Peak index label centred in the window at the top of the axes
+            # Dashed green line at the centre guess
+            if not midpoint_legend:
+                ax_prof.axvline(r2_mid, color="limegreen", lw=0.9, ls="--",
+                                alpha=0.85, zorder=3, label="window centre (initial guess)")
+                midpoint_legend = True
+            else:
+                ax_prof.axvline(r2_mid, color="limegreen", lw=0.9, ls="--",
+                                alpha=0.85, zorder=3)
+
+            # Peak index label at the centre guess
             ax_prof.text(
-                0.5 * (r2_lo + r2_hi),
+                r2_mid,
                 ax_prof.get_ylim()[1] if ax_prof.get_ylim()[1] != 0 else 1,
                 str(k),
                 ha="center", va="bottom",
@@ -881,7 +911,8 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
         f"Radial profile I(r²)  |  {n_rows} peaks detected  |  "
         f"n_bins={fp.n_bins}, r_max={fp.r_max_px:.0f} px  |  "
         "shaded = _R2_WINDOWS fitting range  |  "
-        "red lines = r²_fit centroids",
+        "red lines = r²_fit centroids  |  "
+        "green dashed = window midpoint (initial guess)",
         fontsize=9,
     )
 
@@ -890,7 +921,7 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
     ymax = ax_prof.get_ylim()[1]
     for k, pf in enumerate(peaks):
         if k in _R2_WINDOWS:
-            r2_lo, r2_hi = _R2_WINDOWS[k]
+            _wk = _R2_WINDOWS[k]; r2_lo, r2_hi = _wk[0], _wk[-1]
             ax_prof.text(
                 0.5 * (r2_lo + r2_hi), ymax * 0.995,
                 str(k),
@@ -915,8 +946,9 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
         lam_str = "640.2" if k % 2 == 0 else "638.3"
         win_lo_s, win_hi_s = "—", "—"
         if k in _R2_WINDOWS:
-            win_lo_s = f"{_R2_WINDOWS[k][0]:.0f}"
-            win_hi_s = f"{_R2_WINDOWS[k][1]:.0f}"
+            _wk = _R2_WINDOWS[k]
+            win_lo_s = f"{_wk[0]:.0f}"
+            win_hi_s = f"{_wk[-1]:.0f}"
         if pf.fit_ok and np.isfinite(pf.r2_fit_px2) and pf.r2_fit_px2 > 0:
             r2_fit  = f"{pf.r2_fit_px2:.2f}"
             sig_r2  = (f"{pf.sigma_r2_fit_px2:.3f}"
@@ -1147,13 +1179,142 @@ def main() -> None:
     print(f"  Saved : {_fig2_path}")
     fig2.show()
 
-    # -- Figure 3: per-peak fit diagnostic grid ------------------------------
+    # -- Figure 2b: zoomed radial profile r² > 12000 — for tuning outer peaks -
+    print("  Building Figure 2b (zoomed outer-fringe profile)...")
+    R2_ZOOM_LO = 12000.0   # px² — left edge of zoom window
+    fig2b, ax2b = plt.subplots(figsize=(20, 5))
+
+    # Plot the full r² profile clipped to the zoom region
+    r2g   = fp.r2_grid
+    prof  = fp.profile
+    sig   = fp.sigma_profile
+    mask  = r2g >= R2_ZOOM_LO
+    ax2b.plot(r2g[mask], prof[mask], color="steelblue", lw=0.9, zorder=2,
+              label="I(r²) profile")
+    ax2b.fill_between(r2g[mask],
+                      prof[mask] - sig[mask],
+                      prof[mask] + sig[mask],
+                      alpha=0.25, color="steelblue", zorder=1)
+
+    # Compute y-range from zoomed data before the loop (needed for text labels)
+    _zoom_prof = prof[mask]
+    _ylo  = float(np.nanmin(_zoom_prof))
+    _yhi  = float(np.nanmax(_zoom_prof))
+    _ypad = 0.05 * (_yhi - _ylo)
+
+    # Re-draw window shading, green centre lines and red centroid lines
+    _midpt_done = False
+    _ctr_done   = False
+    for k, pf in enumerate(peaks):
+        is_a = (k % 2 == 0)
+        fc   = "#5588CC" if is_a else "#CC8844"
+        lc   = "#2255AA" if is_a else "#AA5522"
+        C_VL = "#CC2222"
+
+        if k in _R2_WINDOWS:
+            _wk      = _R2_WINDOWS[k]
+            r2_lo    = _wk[0];  r2_hi = _wk[-1]
+            r2_mid   = _wk[1] if len(_wk) == 3 else 0.5 * (r2_lo + r2_hi)
+            if r2_hi < R2_ZOOM_LO:
+                continue   # entirely left of zoom window
+            ax2b.axvspan(r2_lo, r2_hi, alpha=0.18, color=fc, zorder=1)
+
+            # Green dashed centre line
+            lbl_mid = "window centre (initial guess)" if not _midpt_done else None
+            ax2b.axvline(r2_mid, color="limegreen", lw=1.0, ls="--",
+                         alpha=0.9, zorder=3, label=lbl_mid)
+            _midpt_done = True
+
+            # Peak index label at green line
+            ax2b.text(r2_mid, _yhi + _ypad * 0.3,
+                      str(k), ha="center", va="bottom",
+                      fontsize=7.5, color=lc, fontweight="bold", clip_on=True)
+
+        # Red fitted centroid
+        if pf.fit_ok and np.isfinite(pf.r2_fit_px2) and pf.r2_fit_px2 >= R2_ZOOM_LO:
+            lbl_ctr = "r²_fit centroid" if not _ctr_done else None
+            ax2b.axvline(pf.r2_fit_px2, color=C_VL, lw=1.0,
+                         alpha=0.8, zorder=4, label=lbl_ctr)
+            _ctr_done = True
+
+    ax2b.set_xlim(R2_ZOOM_LO, float(r2g[-1]))
+    ax2b.set_ylim(_ylo - _ypad, _yhi + _ypad)
+    ax2b.set_xlabel("r²  (px²)", fontsize=10)
+    ax2b.set_ylabel("Mean intensity  (ADU)", fontsize=10)
+
+    # Fine tick marks: major every 500 px², minor every 100 px²
+    import matplotlib.ticker as mticker
+    ax2b.xaxis.set_major_locator(mticker.MultipleLocator(500))
+    ax2b.xaxis.set_minor_locator(mticker.MultipleLocator(100))
+    ax2b.tick_params(axis="x", which="major", labelsize=8, length=6)
+    ax2b.tick_params(axis="x", which="minor", length=3)
+    ax2b.tick_params(axis="y", labelsize=8)
+    ax2b.grid(axis="x", which="major", lw=0.4, alpha=0.4)
+    ax2b.grid(axis="x", which="minor", lw=0.2, alpha=0.2)
+    ax2b.legend(fontsize=8, loc="upper right")
+    ax2b.set_title(
+        f"Figure 2b — Outer-fringe radial profile  |  r² > {R2_ZOOM_LO:.0f} px²  |  "
+        f"green dashed = window centre (initial guess)  |  red = r²_fit centroid\n"
+        f"Adjust 3-tuple centre values in _R2_WINDOWS to align green lines with "
+        f"visible fringe peaks",
+        fontsize=9,
+    )
+    fig2b.tight_layout()
+    _fig2b_path = output_dir / "2b_cal_outer_fringe_profile.png"
+    fig2b.savefig(_fig2b_path, dpi=150, bbox_inches="tight")
+    print(f"  Saved : {_fig2b_path}")
+    fig2b.show()
+
+    # -- Figures 3a/3b: per-peak fit diagnostics split inner / outer ---------
+    # 3a: P0-P{INNER_MAX-1} (reliably fitted inner fringes)
+    # 3b: P{INNER_MAX}+     (extended outer fringes, separate figure)
     print("\n[6/7]  Building Figure 3 (per-peak fit diagnostics)...")
-    _fig3_path = output_dir / "3_cal_peak_fit_diagnostics.png"
-    _plot_all_fringe_diagnostics_r2(
-        fp, fit_half_window=40, n_cols=4, save_path=_fig3_path)
-    print(f"  Saved : {_fig3_path}")
-    print(f"  Saved : {_fig3_path.with_name(_fig3_path.stem + "_peak_table.png")}")
+    _INNER_MAX = 20
+
+    def _plot_peak_subset(fp_obj, peak_slice, fit_half_window, n_cols, save_path, peak_offset=0):
+        """Temporarily swap fp.peak_fits_r2 to plot a subset."""
+        orig = fp_obj.peak_fits_r2
+        try:
+            fp_obj.peak_fits_r2 = peak_slice
+            _plot_all_fringe_diagnostics_r2(
+                fp_obj, fit_half_window=fit_half_window,
+                n_cols=n_cols, save_path=save_path,
+                peak_offset=peak_offset)
+        finally:
+            fp_obj.peak_fits_r2 = orig
+
+    all_peaks = fp.peak_fits_r2
+
+    # Assign each peak to its _R2_WINDOWS key by checking which window
+    # contains its r2_raw_px2.  Peaks that fall in no defined window are
+    # spurious find_peaks detections and are excluded from both figures.
+    def _window_key(pf):
+        """Return the _R2_WINDOWS key whose [lo,hi] contains pf.r2_raw_px2,
+        or None if no window matches."""
+        for k, w in _R2_WINDOWS.items():
+            if w[0] <= pf.r2_raw_px2 <= w[-1]:
+                return k
+        return None
+
+    inner_peaks = [p for p in all_peaks if (_window_key(p) is not None and
+                                             _window_key(p) < _INNER_MAX)]
+    outer_peaks = [p for p in all_peaks if (_window_key(p) is not None and
+                                             _window_key(p) >= _INNER_MAX)]
+
+    _fig3a_path = output_dir / "3a_cal_peak_fit_diagnostics_inner.png"
+    _plot_peak_subset(fp, inner_peaks, fit_half_window=200, n_cols=4,
+                      save_path=_fig3a_path)
+    print(f"  Saved : {_fig3a_path}  ({len(inner_peaks)} inner peaks P0-P{_INNER_MAX-1})")
+
+    if outer_peaks:
+        _fig3b_path = output_dir / "3b_cal_peak_fit_diagnostics_outer.png"
+        _outer_offset = min((_window_key(p) for p in outer_peaks), default=_INNER_MAX)
+        _plot_peak_subset(fp, outer_peaks, fit_half_window=200, n_cols=4,
+                          save_path=_fig3b_path, peak_offset=_outer_offset)
+        print(f"  Saved : {_fig3b_path}  ({len(outer_peaks)} outer peaks P{_INNER_MAX}+)")
+    else:
+        print("  No outer peaks (P20+) — check PEAK_PROMINENCE and _R2_WINDOWS.")
+
 
     # -- Step 7: Tolansky two-line analysis ----------------------------------
     print("\n[7/7]  Tolansky two-line analysis (640.2248 + 638.2991 nm)...")
