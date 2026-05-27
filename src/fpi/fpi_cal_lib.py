@@ -1810,6 +1810,15 @@ def _plot_all_fringe_diagnostics_r2(
         f"median r² bin width = {median_dr2_px2:.3f} px²  |  "
         f"windows from _R2_WINDOWS",
         fontsize=10, fontweight="bold",
+        y=0.995,
+    )
+    fig.text(
+        0.5, 0.982,
+        r"Parabola fit:  $f(r^2) = A \cdot (r^2)^2 + B \cdot r^2 + C$"
+        r"  where $A < 0$ (opens downward),  centroid $= -B\,/\,(2A)$,"
+        r"  $r$ = radius (px),  $r^2$ = squared radius (px²)",
+        ha="center", va="top", fontsize=8.5, color="dimgray",
+        fontstyle="italic",
     )
 
     for k, pf in enumerate(peaks):
@@ -2652,6 +2661,8 @@ def plot_tolansky_result(
     y_min_tol = -0.05 * data_max   # small negative margin
     ratio_ppm = r.Delta_ratio_residual * 1e6
 
+    _x_max_tol = min(float(p_all.max()), 16.0)
+
     # -- A: Joint Tolansky plot ------------------------------------------------
     ax_tol.axhline(0, color=GRAY, lw=0.7, ls=":", zorder=0)
     ax_tol.errorbar(p_a, r.r2_a, yerr=r.sigma_r2_a,
@@ -2666,9 +2677,9 @@ def plot_tolansky_result(
                 label=f"Fit a:  Δ_a = {r.Delta_a:.4g}")
     ax_tol.plot(p_fine, fit_b, color=ORANGE, lw=1.8, ls="--", zorder=2,
                 label=f"Fit b:  Δ_b = {r.Delta_b:.4g}")
-    ax_tol.set_xlim(-0.2, p_all.max() + 0.5)
+    ax_tol.set_xlim(-0.2, _x_max_tol + 0.5)
     ax_tol.set_ylim(y_min_tol, data_max)
-    ax_tol.set_xticks(range(0, int(p_all.max()) + 1))
+    ax_tol.set_xticks(range(0, int(_x_max_tol) + 1))
     ax_tol.set_xlabel("Fringe index  $p$", fontsize=11)
     ax_tol.set_ylabel(f"$r^2$  [{u2}]", fontsize=11)
     ax_tol.set_title("A — Tolansky Plot  (both neon lines)",
@@ -2705,6 +2716,7 @@ def plot_tolansky_result(
                       fontsize=11, fontweight="bold", pad=7)
     ax_res.legend(fontsize=9, facecolor="white", labelcolor=BLACK,
                   edgecolor=BLACK, framealpha=0.9)
+    ax_res.set_xlim(-0.2, _x_max_tol + 0.5)
 
     # -- C: Successive Delta(r^2) ----------------------------------------------
     p_mid_a = 0.5 * (p_a[:-1] + p_a[1:])
@@ -2740,6 +2752,7 @@ def plot_tolansky_result(
                 f"CV_a = {cv_a:.1f}%   CV_b = {cv_b:.1f}%",
                 transform=ax_dr2.transAxes,
                 ha="right", va="bottom", fontsize=8.5, color=cv_col)
+    ax_dr2.set_xlim(-0.2, _x_max_tol + 0.5)
 
     # -- D: Summary ------------------------------------------------------------
     ax_txt.axis("off")
@@ -3228,7 +3241,8 @@ def _fmt_unc(value):
 def make_figure(r2_data, profile, sigma,
                 r_fine, model_fine, lam1_fine, lam2_fine,
                 fit: FitResult, source_name: str = "",
-                source_path: str = "") -> plt.Figure:
+                source_path: str = "",
+                seeds_dict: dict | None = None) -> plt.Figure:
 
     r2_fine       = r_fine ** 2
     model_at_data = np.interp(r2_data, r2_fine, model_fine)
@@ -3259,19 +3273,6 @@ def make_figure(r2_data, profile, sigma,
     ax_fit.grid(True, alpha=0.2)
     ax_fit.tick_params(labelbottom=False)
 
-    conv_str = "converged" if fit.converged else "NOT converged"
-    ax_fit.text(0.02, 0.97,
-        f"χ²/ν = {fit.chi2_reduced:.3f}   {conv_str}\n"
-        f"R1 = {fit.R1:.4f} {_fmt_unc(fit.sigma_R1)}   "
-        f"R2 = {fit.R2:.4f} {_fmt_unc(fit.sigma_R2)}   "
-        f"ΔR = {fit.R2-fit.R1:+.4f}\n"
-        f"ne_ratio = {fit.ne_ratio:.4f} {_fmt_unc(fit.sigma_ne_ratio)}   "
-        f"σ₀ = {fit.sigma0:.3f} {_fmt_unc(fit.sigma_sigma0)} px",
-        transform=ax_fit.transAxes, va="top", ha="left", fontsize=8.5,
-        fontfamily="monospace",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
-                  edgecolor="grey", alpha=0.88))
-
     ax_res.axhline(0, color="black", lw=0.8, ls="--")
     ax_res.fill_between(r2_data, -sigma, sigma,
                         color="steelblue", alpha=0.22, label="±1σ")
@@ -3286,42 +3287,87 @@ def make_figure(r2_data, profile, sigma,
     _alpha_exp     = int(np.floor(np.log10(abs(fit.alpha))))
     _alpha_unc_str = f"±{fit.sigma_alpha / 10**_alpha_exp:.2g}e{_alpha_exp:+03d}"
 
+    # Extract seed values — fall back to "—" if seeds_dict not provided
+    _s = seeds_dict or {}
+    _seed_t     = (f"{_s['t_eff_mm']:.7f} mm"
+                   if 't_eff_mm' in _s else "—")
+    _seed_alpha = (f"{_s['alpha_init']:.5e}"
+                   if 'alpha_init' in _s else "—")
+    _seed_R1    = (f"{_s['R1_init']:.3f}"
+                   if 'R1_init' in _s else "—")
+    _seed_R2    = (f"{_s['R2_init']:.3f}"
+                   if 'R2_init' in _s else "—")
+    _seed_ne    = (f"{_s['ne_ratio_init']:.4f}"
+                   if 'ne_ratio_init' in _s else "—")
+    _n_pairs = (str(int(_s['n_pairs_tolansky']))
+                if 'n_pairs_tolansky' in _s else "?")
+    _seed_s0    = (f"{_s['sigma0_init']:.3f} px"
+                   if 'sigma0_init' in _s else "—")
+
     rows = [
-        ("t",        f"{fit.t_m*1e3:.7f} mm",
+        ("t",        _seed_t,
+                     f"{fit.t_m*1e3:.7f} mm",
                      f"±{fit.sigma_t_m*1e9:.2g} nm" if not np.isnan(fit.sigma_t_m) else "fixed",
-                     "Etalon gap  [Tolansky-seeded, Group A]"),
-        ("α",        f"{fit.alpha:.5e} rad/px",
-                     _alpha_unc_str, "Plate scale  [Tolansky-seeded, Group A]"),
-        ("R1",       f"{fit.R1:.5f}", f"±{fit.sigma_R1:.2g}",
+                     f"Etalon gap  [Tolansky-seeded ({_n_pairs} fringe pairs) · Group A = tight-bounded from Tolansky]"),
+        ("α",        _seed_alpha,
+                     f"{fit.alpha:.5e} rad/px",
+                     _alpha_unc_str,
+                     f"Plate scale  [Tolansky-seeded ({_n_pairs} fringe pairs) · Group A = tight-bounded from Tolansky]"),
+        ("R1",       _seed_R1,
+                     f"{fit.R1:.5f}",
+                     f"±{fit.sigma_R1:.2g}",
                      "Reflectivity λ₁=640.2 nm  [Group B] → used as R_refl in H06"),
-        ("R2",       f"{fit.R2:.5f}", f"±{fit.sigma_R2:.2g}",
+        ("R2",       _seed_R2,
+                     f"{fit.R2:.5f}",
+                     f"±{fit.sigma_R2:.2g}",
                      "Reflectivity λ₂=638.3 nm  [Group B, reference only]"),
-        ("ΔR=R2−R1", f"{fit.R2-fit.R1:+.5f}", "—",
+        ("ΔR=R2−R1", "—",
+                     f"{fit.R2-fit.R1:+.5f}",
+                     "—",
                      "Wavelength-dependent finesse difference  (4.7σ significant)"),
-        ("I₀",       f"{fit.I0:.1f} ADU", f"±{fit.sigma_I0:.2g}",
+        ("I₀",       "~P75 of profile",
+                     f"{fit.I0:.1f} ADU",
+                     f"±{fit.sigma_I0:.2g}",
                      "Mean intensity  [Group B, shared]"),
-        ("I₁",       f"{fit.I1:.5f}", f"±{fit.sigma_I1:.2g}",
+        ("I₁",       "0.0",
+                     f"{fit.I1:.5f}",
+                     f"±{fit.sigma_I1:.2g}",
                      "Linear vignetting  [Group B, shared]"),
-        ("I₂",       f"{fit.I2:.5f}", f"±{fit.sigma_I2:.2g}",
+        ("I₂",       "0.0",
+                     f"{fit.I2:.5f}",
+                     f"±{fit.sigma_I2:.2g}",
                      "Quadratic vignetting  [Group B, shared]"),
-        ("σ₀",       f"{fit.sigma0:.4f} px", f"±{fit.sigma_sigma0:.2g}",
+        ("σ₀",       _seed_s0,
+                     f"{fit.sigma0:.4f} px",
+                     f"±{fit.sigma_sigma0:.2g}",
                      "PSF base width  [Group B]  σ(r)=σ₀ (constant)"),
-        ("σ₁",       "0.0000 px", "fixed",
+        ("σ₁",       "0.0 px",
+                     "0.0000 px",
+                     "fixed",
                      "PSF sin variation  [fixed=0; F-test p=0.998]"),
-        ("σ₂",       "0.0000 px", "fixed",
+        ("σ₂",       "0.0 px",
+                     "0.0000 px",
+                     "fixed",
                      "PSF cos variation  [fixed=0; singular Hessian]"),
-        ("B",        f"{fit.B:.1f} ADU", f"±{fit.sigma_B:.2g}",
+        ("B",        "~P5 × 0.8",
+                     f"{fit.B:.1f} ADU",
+                     f"±{fit.sigma_B:.2g}",
                      "CCD bias pedestal  [Group B]"),
-        ("ne_ratio", f"{fit.ne_ratio:.4f}", f"±{fit.sigma_ne_ratio:.2g}",
+        ("ne_ratio", _seed_ne,
+                     f"{fit.ne_ratio:.4f}",
+                     f"±{fit.sigma_ne_ratio:.2g}",
                      f"λ₂/λ₁ intensity ratio  [nominal={NE_INTENSITY_2:.2f}]"),
-        ("ε_cal",    f"{fit.epsilon_cal:.6f}", f"±{fit.sigma_epsilon_cal:.2g}",
-                     "Fractional order at centre  (zero-wind phase reference)"),
+        ("ε_cal",    "—",
+                     f"{fit.epsilon_cal:.6f}",
+                     f"±{fit.sigma_epsilon_cal:.2g}",
+                     "Fractional order at centre  ε_cal = (2·t / λ₁) mod 1"
+                     "  where λ₁ = 640.2248 nm  (zero-wind phase reference)"),
     ]
 
     tbl = ax_tbl.table(cellText=rows,
-        colLabels=["Param", "Fitted value", "1σ", "Description"],
+        colLabels=["Param", "Initial seed", "Fitted value", "1σ", "Description"],
         cellLoc="left", loc="upper center",
-        colWidths=[0.10, 0.20, 0.13, 0.57])
+        colWidths=[0.08, 0.18, 0.16, 0.11, 0.47])
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8.0)
     tbl.scale(1, 1.18)
@@ -3335,11 +3381,19 @@ def make_figure(r2_data, profile, sigma,
         if row == 13: cell.set_facecolor("#f4fff4")
 
     stage_str = "  ".join(f"S{i+1}: {v:.2f}" for i, v in enumerate(fit.chi2_by_stage))
-    ax_tbl.text(0.01, 0.01,
+    ax_tbl.text(0.01, 0.055,
         f"χ²/ν by stage:  {stage_str}    bins used: {fit.n_bins_used}   "
         f"free params: 10  (σ₁=σ₂=0 fixed; F-test p=0.998)",
         transform=ax_tbl.transAxes, va="bottom", ha="left",
         fontsize=8.5, fontfamily="monospace", color="dimgrey")
+
+    ax_tbl.text(0.01, 0.01,
+        "Group A = t, α  seeded from Tolansky with tight bounds (±20 µm, ±5%);"
+        "  fitted value refines fringe shape within those bounds.   "
+        "Group B = R, I₀, I₁, I₂, σ₀, B, ne_ratio  fitted freely from fringe contrast and envelope.",
+        transform=ax_tbl.transAxes, va="bottom", ha="left",
+        fontsize=8.0, fontfamily="monospace", color="#444466",
+        style="italic")
 
     fig.suptitle("WindCube FPI — Neon Calibration Fringe Inversion  "
                  "(10-param: independent R1, R2; constant PSF / Harding 2014)",

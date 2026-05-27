@@ -197,16 +197,14 @@ _R2_WINDOWS.update({
     21: (   12990,13215,  13440),   # P21 638.3 nm  predicted
     22: (   13659,13884,  14109),   # P22 640.2 nm  predicted
     23: (   14175,14400,  14625),   # P23 638.3 nm  observed≈14400
-    24: (   14975,15200,  15425),   # P24 640.2 nm  observed≈15200
-    25: (   15475,15700,  15925),   # P25 638.3 nm  observed≈15700
-    26: (   16075,16300,  16525),   # P26 640.2 nm  observed≈16300
-    27: (   16675,16900,  17125),   # P27 638.3 nm  observed≈16900
+    24: (   14925,15200,  15425),   # P24 640.2 nm  observed≈15200
+    25: (   15475,15700,  15875),   # P25 638.3 nm  observed≈15700
+    26: (   16150,16300,  16575),   # P26 640.2 nm  observed≈16300
+    27: (   16650,16900,  17175),   # P27 638.3 nm  observed≈16900
     28: (   17375,17600,  17825),   # P28 640.2 nm  observed≈17600
     29: (   17898,18123,  18348),   # P29 638.3 nm  predicted
     30: (   18587,18812,  19037),   # P30 640.2 nm  predicted
     31: (   19125,19350,  19575),   # P31 638.3 nm  predicted
-    32: (   19819,20044,  20269),   # P32 640.2 nm  predicted
-    33: (   20352,20577,  20802),   # P33 638.3 nm  predicted
 })
 
 # ── Tolansky two-line analysis ───────────────────────────────────────────────
@@ -825,7 +823,7 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
     n_rows = len(peaks)
 
     # ── Figure layout: tall profile on top, table below ──────────────────────
-    tbl_h = max(3.5, 0.38 * n_rows + 1.8)
+    tbl_h = max(5.0, 0.55 * n_rows + 2.5)
     fig   = plt.figure(figsize=(22, 5.5 + tbl_h))
     gs    = gridspec.GridSpec(
         2, 1, figure=fig,
@@ -989,12 +987,12 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
                    0.07, 0.09, 0.06],
     )
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8.5)
-    tbl.scale(1, 1.6)
+    tbl.set_fontsize(12.5)
+    tbl.scale(1, 2.0)
     for c in range(n_cols_tbl):
         tbl[0, c].set_facecolor("#2C3E50")
         tbl[0, c].set_text_props(color="white", fontweight="bold")
-        tbl[0, c].set_height(tbl[0, c].get_height() * 1.8)
+        tbl[0, c].set_height(tbl[0, c].get_height() * 2.2)
     for r_idx, bg in enumerate(row_colours):
         fail = not peaks[r_idx].fit_ok
         for c in range(n_cols_tbl):
@@ -1473,11 +1471,79 @@ def main() -> None:
         ax.legend(fontsize=7)
         ax.tick_params(labelsize=7)
 
+        for _ax5 in axes5.ravel():
+            _lo5, _hi5 = _ax5.get_xlim()
+            _ax5.set_xlim(_lo5, min(_hi5, 16.5))
+
         fig5.tight_layout()
         _fig5_path = output_dir / "5_cal_tolansky_npairs_sweep.png"
         fig5.savefig(_fig5_path, dpi=150, bbox_inches="tight")
         print(f"  Saved : {_fig5_path}")
         fig5.show()
+
+        # -- Figure 5b: d and alpha results table by n_pairs --------------------
+        print("\n  Building Figure 5b (d and alpha sweep results table)...")
+
+        # Build table rows — one per successful sweep point, sorted by n_pairs desc
+        _tbl5b_rows = []
+        for _i, _n in enumerate(sw_n):
+            _tbl5b_rows.append([
+                str(int(_n)),
+                f"{sw_d[_i]:.6f}",
+                f"{sw_sd[_i]:.4f}",
+                f"{sw_alpha[_i]:.6e}",
+                f"{sw_sa[_i]:.1f}",
+            ])
+
+        _tbl5b_col_labels = [
+            "n pairs",
+            "d  (mm)",
+            "1σ_d  (µm)",
+            "α  (rad/px)",
+            "1σ_α/α  (ppm)",
+        ]
+
+        _n5b_rows = len(_tbl5b_rows)
+        _fig5b_h  = max(3.5, 0.45 * _n5b_rows + 2.0)
+        fig5b, ax5b = plt.subplots(figsize=(12, _fig5b_h))
+        ax5b.axis("off")
+
+        tbl5b = ax5b.table(
+            cellText=_tbl5b_rows,
+            colLabels=_tbl5b_col_labels,
+            loc="center",
+            cellLoc="center",
+            colWidths=[0.10, 0.20, 0.18, 0.24, 0.20],
+        )
+        tbl5b.auto_set_font_size(False)
+        tbl5b.set_fontsize(10)
+        tbl5b.scale(1, 1.6)
+
+        # Header row styling
+        for _c in range(len(_tbl5b_col_labels)):
+            tbl5b[0, _c].set_facecolor("#2C3E50")
+            tbl5b[0, _c].set_text_props(color="white", fontweight="bold")
+
+        # Alternating row colours; highlight the full-pairs row in gold
+        for _r in range(1, _n5b_rows + 1):
+            _n_this = int(sw_n[_r - 1])
+            _bg = "#FFF3CD" if _n_this == int(sw_n[0]) else (
+                  "#EBF5FB" if _r % 2 == 0 else "white")
+            for _c in range(len(_tbl5b_col_labels)):
+                tbl5b[_r, _c].set_facecolor(_bg)
+
+        ax5b.set_title(
+            f"Tolansky n_pairs sweep — d and α results  |  {os.path.basename(cal_path)}\n"
+            f"Gold row = maximum pairs ({int(sw_n[0])}).  "
+            f"d and α from WLS fit; 1σ uncertainties from formal covariance.",
+            fontsize=10, fontweight="bold", pad=10,
+        )
+
+        fig5b.tight_layout()
+        _fig5b_path = output_dir / "5b_cal_tolansky_npairs_table.png"
+        fig5b.savefig(_fig5b_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved : {_fig5b_path}")
+        fig5b.show()
 
     # -- Step 8: H05 Harding calibration inversion ---------------------------
     # Gate: Tolansky must have succeeded (result is defined and valid).
@@ -1526,9 +1592,9 @@ def main() -> None:
                 fit = run_h05(
                     fp,
                     seeds,
-                    R1_init=0.53,     # FlatSat-measured effective reflectivity
-                    R2_init=0.53,     # start both wavelengths equal; LM decouples
-                    sigma0_init=0.55, # Harding-typical initial PSF blur (pixels)
+                    R1_init=0.25,     # from real-data H05 fit (R1=0.253)
+                    R2_init=0.30,     # from real-data H05 fit (R2=0.291)
+                    sigma0_init=0.50, # from real-data H05 fit (sigma0=0.492 px)
                 )
 
                 conv_str = "CONVERGED" if fit.converged else "NOT CONVERGED"
@@ -1571,12 +1637,28 @@ def main() -> None:
                 prof_fig     = fp.profile[good_mask]
                 sigma_fig    = fp.sigma_profile[good_mask]
 
+                # Build seeds dict for Figure 6 table annotation
+                _seeds_dict_fig6 = {
+                    't_eff_mm':      phase_correct_gap(
+                                         seeds.d_m_mean,
+                                         seeds.eps_a_mean,
+                                         640.2248e-9,
+                                     ) * 1e3,
+                    'alpha_init':    seeds.alpha_mean,
+                    'R1_init':       0.25,       # must match R1_init= argument in run_h05() call above
+                    'R2_init':       0.30,       # must match R2_init= argument in run_h05() call above
+                    'sigma0_init':   0.50,       # must match sigma0_init= argument in run_h05() call above
+                    'ne_ratio_init': seeds.Y_B_obs_mean,
+                    'n_pairs_tolansky': result.n_rings_a,   # rings used in Tolansky WLS (line-a family)
+                }
+
                 fig6 = make_figure(
                     r2_data_fig, prof_fig, sigma_fig,
                     r_fine, model_fine, lam1_fine, lam2_fine,
                     fit,
                     source_name=os.path.basename(cal_path),
                     source_path=str(cal_path),
+                    seeds_dict=_seeds_dict_fig6,
                 )
 
                 _fig6_path = output_dir / "6_cal_h05_harding_inversion.png"
