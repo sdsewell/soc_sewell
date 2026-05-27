@@ -1826,7 +1826,7 @@ def _plot_all_fringe_diagnostics_r2(
 
     fig, axes = plt.subplots(
         n_rows, n_cols,
-        figsize=(4.2 * n_cols, 3.6 * n_rows),
+        figsize=(5.0 * n_cols, 4.6 * n_rows),
         squeeze=False,
     )
     fig.suptitle(
@@ -1879,7 +1879,7 @@ def _plot_all_fringe_diagnostics_r2(
             ax.errorbar(r2_w, p_w, yerr=sem_w,
                         fmt="o", color="steelblue", markersize=4,
                         ecolor="cornflowerblue", elinewidth=1.0, capsize=2,
-                        zorder=3)  # no legend label — self-evident
+                        zorder=3)  # no legend label
 
         # Parabolic fit curve — recompute polynomial for display (orange solid)
         coeffs = errs = None
@@ -1934,7 +1934,6 @@ def _plot_all_fringe_diagnostics_r2(
                               alpha=0.75, edgecolor="gray"))
 
         # ── Title: Peak number and wavelength only ────────────────────────────
-        # r²_fit and χ²_red are in the infobox — no need to duplicate here.
         lam_str     = "640.2" if k % 2 == 0 else "638.3"
         title       = f"Peak {k}  λ={lam_str} nm" + ("" if fit_ok else "  FAILED")
         title_color = "#1a6e2e" if fit_ok else "#b22222"
@@ -1948,7 +1947,7 @@ def _plot_all_fringe_diagnostics_r2(
         r, c = divmod(idx, n_cols)
         axes[r, c].axis("off")
 
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96], h_pad=3.5, w_pad=2.5)
     if save_path is not None:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
@@ -2017,13 +2016,9 @@ def _plot_all_fringe_diagnostics_r2(
         fontsize=11, fontweight="bold", pad=12,
     )
     fig_tbl.tight_layout()
-    if save_path is not None:
-        from pathlib import Path as _Path
-        tbl_path = _Path(save_path).with_name(
-            _Path(save_path).stem + "_peak_table.png"
-        )
-        fig_tbl.savefig(tbl_path, dpi=150, bbox_inches="tight")
-    plt.show()
+    # Standalone peak table figure eliminated — columns are now included
+    # directly in figure2_peak_table() in run_windcube_calibration.py.
+    plt.close(fig_tbl)
 
 
 def _print_peak_table(peak_fits: list[PeakFit]) -> None:

@@ -159,30 +159,30 @@ PEAK_PROMINENCE = 50.0     # minimum peak prominence in ADU
 # Copy _R2_WINDOWS from fpi_cal_lib as the starting point; edit freely.
 # Peak index 0 = innermost; even = 640.2 nm, odd = 638.3 nm.
 _R2_WINDOWS.update({
-     0: (    200,    450),   # P0  640.2 nm  ctr≈287
-     1: (   800,   1100),   # P1  638.3 nm  ctr≈900
-     2: (  1400,   1600),   # P2  640.2 nm  ctr≈1518
-     3: (  1925,   2325),   # P3  638.3 nm  ctr≈2122
-     4: (  2600,   3000),   # P4  640.2 nm  ctr≈2750
-     5: (  3250,   3550),   # P5  638.3 nm  ctr≈3345
-     6: (  3800,   4225),   # P6  640.2 nm  ctr≈3980
-     7: (  4500,   4800),   # P7  638.3 nm  ctr≈4579
-     8: (  5100,   5500),   # P8  640.2 nm  ctr≈5209
-     9: (  5600,   6025),   # P9  638.3 nm  ctr≈5802
-    10: (  6175,   6675),   # P10 640.2 nm  ctr≈6441
-    11: (  6825,   7250),   # P11 638.3 nm  ctr≈7021
-    12: (  7500,   8000),   # P12 640.2 nm  ctr≈7672
-    13: (  8147,   8397),   # P13 638.3 nm  ctr≈8247  [right +50 px²]
-    14: (  8700,   9200),   # P14 640.2 nm  ctr≈8902
-    15: (  9372,   9572),   # P15 638.3 nm  ctr≈9472
-    16: (  10000,  10375),   # P16 640.2 nm  ctr≈10132
-    17: ( 10600,  10900),   # P17 638.3 nm  ctr≈10698
-    18: ( 11200,  11600),   # P18 640.2 nm  ctr≈11363
-    19: ( 11840,  12100),   # P19 638.3 nm  ctr≈11919
-    20: ( 12400,  12900),   # P20 640.2 nm  ctr≈12653
-    21: ( 13000,  13450),   # P21 638.3 nm  ctr≈13232
-    22: ( 13650,  14100),   # P22 640.2 nm  ctr≈13870
-    23: ( 14200,  14700),   # P23 638.3 nm  ctr≈14430
+     0: (    205,    455),   # P0  640.2 nm  fit≈330   hw≈125
+     1: (    797,   1097),   # P1  638.3 nm  fit≈947   hw≈150
+     2: (   1402,   1702),   # P2  640.2 nm  fit≈1552  hw≈150  [was right-clipped]
+     3: (   1972,   2372),   # P3  638.3 nm  fit≈2172  hw≈200  [re-centred]
+     4: (   2600,   3000),   # P4  640.2 nm  fit≈2800  hw≈200  [symmetric]
+     5: (   3244,   3544),   # P5  638.3 nm  fit≈3394  hw≈150
+     6: (   3822,   4222),   # P6  640.2 nm  fit≈4022  hw≈200
+     7: (   4474,   4774),   # P7  638.3 nm  fit≈4624  hw≈150  [trimmed right]
+     8: (   5104,   5404),   # P8  640.2 nm  fit≈5254  hw≈150  [trimmed right]
+     9: (   5649,   6049),   # P9  638.3 nm  fit≈5849  hw≈200  [trimmed left]
+    10: (   6282,   6682),   # P10 640.2 nm  fit≈6482  hw≈200  [trimmed left]
+    11: (   6889,   7289),   # P11 638.3 nm  fit≈7089  hw≈200  [trimmed left]
+    12: (   7517,   7917),   # P12 640.2 nm  fit≈7717  hw≈200  [trimmed right]
+    13: (   8161,   8461),   # P13 638.3 nm  fit≈8311  hw≈150  [extended right]
+    14: (   8703,   9203),   # P14 640.2 nm  fit≈8953  hw≈250
+    15: (   9348,   9648),   # P15 638.3 nm  fit≈9498  hw≈150  [extended right]
+    16: (   9984,  10384),   # P16 640.2 nm  fit≈10184 hw≈200
+    17: (  10616,  10916),   # P17 638.3 nm  fit≈10766 hw≈150  [extended right]
+    18: (  11226,  11626),   # P18 640.2 nm  fit≈11426 hw≈200  [trimmed left]
+    19: (  11847,  12147),   # P19 638.3 nm  fit≈11997 hw≈150  [extended right]
+    20: (  12407,  12907),   # P20 640.2 nm  fit≈12657 hw≈250
+    21: (  13003,  13453),   # P21 638.3 nm  fit≈13228 hw≈225
+    22: (  13657,  14107),   # P22 640.2 nm  fit≈13882 hw≈225
+    23: (  14204,  14654),   # P23 638.3 nm  fit≈14429 hw≈225  [trimmed right]
 })
 
 # ── Tolansky two-line analysis ───────────────────────────────────────────────
@@ -428,18 +428,19 @@ def figure0_raw_images(
 
     r_lo, r_hi, c_lo, c_hi = roi_bounds
 
-    # ── Figure layout: 3 rows, 2 cols; rows 1 & 2 span full width ──────────
-    fig = plt.figure(figsize=(16, 20))
+    # ── Figure layout: 3 rows, 2 cols; row 1 spans full width; row 2 split ──
+    fig = plt.figure(figsize=(16, 22))
     gs  = gridspec.GridSpec(
         3, 2, figure=fig,
-        height_ratios=[3.5, 4.5, 3.5],
-        hspace=0.10, wspace=0.10,
-        left=0.05, right=0.97, top=0.94, bottom=0.03,
+        height_ratios=[3.5, 4.5, 3.0],
+        hspace=0.30, wspace=0.12,
+        left=0.05, right=0.97, top=0.90, bottom=0.03,
     )
     ax_cal   = fig.add_subplot(gs[0, 0])
     ax_dark  = fig.add_subplot(gs[0, 1])
     ax_table = fig.add_subplot(gs[1, :])
-    ax_roi   = fig.add_subplot(gs[2, :])
+    ax_roi   = fig.add_subplot(gs[2, 0])   # dark-subtracted image — left
+    ax_hist  = fig.add_subplot(gs[2, 1])   # pixel histogram — right
 
     vlo_cal  = float(np.percentile(img_cal,  1))
     vhi_cal  = float(np.percentile(img_cal, 99))
@@ -520,7 +521,7 @@ def figure0_raw_images(
         'Embedded metadata — decoded from binary header row',
         fontsize=10, fontweight='bold', pad=6)
 
-    # ── [2,:] Dark-subtracted ROI — the working array ───────────────────────
+    # ── [2,0] Dark-subtracted ROI image — left ───────────────────────────────
     vlo_roi = float(np.percentile(roi_ds,  1))
     vhi_roi = float(np.percentile(roi_ds, 99))
     im2 = ax_roi.imshow(
@@ -529,8 +530,7 @@ def figure0_raw_images(
         aspect='equal', interpolation='none',
         extent=[c_lo, c_hi, r_lo, r_hi],   # keep full-frame pixel coords on axes
     )
-    fig.colorbar(im2, ax=ax_roi, fraction=0.025, pad=0.02).set_label('ADU (dark-subtracted)', fontsize=8)
-    # Mark the coarse seed centre
+    fig.colorbar(im2, ax=ax_roi, fraction=0.046, pad=0.04).set_label('ADU (dark-subtracted)', fontsize=8)
     ax_roi.plot(CENTRE_SEED_COL, CENTRE_SEED_ROW, '+', color='yellow', ms=14, mew=2.5,
                 label=f'Seed  cx={CENTRE_SEED_COL}, cy={CENTRE_SEED_ROW}')
     ax_roi.axhline(CENTRE_SEED_ROW, color='cyan', lw=0.8, ls='--', alpha=0.7)
@@ -538,15 +538,32 @@ def figure0_raw_images(
     ax_roi.legend(fontsize=8, loc='upper right')
     ax_roi.set_title(
         f'Dark-subtracted ROI  |  {roi_ds.shape[0]}x{roi_ds.shape[1]} px  '
-        f'(centre seed row={CENTRE_SEED_ROW}, col={CENTRE_SEED_COL})  '
         f'ADU [{roi_ds.min():.0f}, {roi_ds.max():.0f}]  '
-        f'mean {roi_ds.mean():.1f}  std {roi_ds.std():.1f}\n'
-        f'This array is the input to all subsequent pipeline steps '
-        f'(centre finding, annular reduction, peak fitting, Tolansky)',
+        f'mean {roi_ds.mean():.1f}  std {roi_ds.std():.1f}',
         fontsize=9)
     ax_roi.set_xlabel('Column (full-frame pixel)', fontsize=8)
     ax_roi.set_ylabel('Row (full-frame pixel)', fontsize=8)
     ax_roi.tick_params(labelsize=7)
+
+    # ── [2,1] Histogram of dark-subtracted ROI pixels — right ────────────────
+    _ds_flat = roi_ds.ravel()
+    _ds_p1   = float(np.percentile(_ds_flat,  1))
+    _ds_p99  = float(np.percentile(_ds_flat, 99))
+    _ds_clip = _ds_flat[(_ds_flat >= _ds_p1) & (_ds_flat <= _ds_p99)]
+    ax_hist.hist(_ds_clip, bins=80, color='steelblue', alpha=0.75, edgecolor='none')
+    ax_hist.axvline(float(np.mean(_ds_flat)), color='red', lw=1.4,
+                    label=f'mean = {np.mean(_ds_flat):.1f} ADU')
+    ax_hist.axvline(float(np.median(_ds_flat)), color='orange', lw=1.2, ls='--',
+                    label=f'median = {np.median(_ds_flat):.1f} ADU')
+    ax_hist.set_xlabel('ADU  (dark-subtracted)', fontsize=8)
+    ax_hist.set_ylabel('Pixel count', fontsize=8)
+    ax_hist.set_title(
+        f'Dark-subtracted ROI histogram  |  '
+        f'mean={np.mean(_ds_flat):.1f}  std={np.std(_ds_flat):.1f}  '
+        f'[{_ds_flat.min():.0f}, {_ds_flat.max():.0f}] ADU',
+        fontsize=9)
+    ax_hist.legend(fontsize=8)
+    ax_hist.tick_params(labelsize=7)
 
     fig.suptitle(
         f'WindCube FPI — Raw Images & Metadata\n'
@@ -784,8 +801,8 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
     n_rows = len(peaks)
 
     # ── Figure layout: tall profile on top, table below ──────────────────────
-    tbl_h = max(3.5, 0.38 * n_rows + 1.2)
-    fig   = plt.figure(figsize=(18, 5.5 + tbl_h))
+    tbl_h = max(3.5, 0.38 * n_rows + 1.8)
+    fig   = plt.figure(figsize=(22, 5.5 + tbl_h))
     gs    = gridspec.GridSpec(
         2, 1, figure=fig,
         height_ratios=[5.5, tbl_h],
@@ -884,63 +901,62 @@ def figure2_peak_table(fp: FringeProfile, peaks: list[PeakFitR2]) -> plt.Figure:
             )
 
     # ── Peak table ────────────────────────────────────────────────────────────
+    # Unified columns: win_lo/hi added; r_derived, ±σ_r, para_ok removed
     col_labels = [
-        "Peak", "lambda\n(nm)",
-        "r2_raw\n(px2)", "r2_fit\n(px2)", "+/-sig_r2\n(px2)",
-        "r_derived\n(px)", "+/-sig_r\n(px)",
-        "Amp\n(ADU)", "chi2_red", "para\nok",
+        "Peak", "λ\n(nm)",
+        "win_lo\n(px²)", "win_hi\n(px²)",
+        "r²_raw\n(px²)", "r²_fit\n(px²)", "±σ r²\n(px²)",
+        "Amp\n(ADU)", "Width σ r²\n(px²)", "χ²_red",
     ]
 
-    rows       = []
+    rows        = []
     row_colours = []
     for k, pf in enumerate(peaks):
         lam_str = "640.2" if k % 2 == 0 else "638.3"
+        win_lo_s, win_hi_s = "—", "—"
+        if k in _R2_WINDOWS:
+            win_lo_s = f"{_R2_WINDOWS[k][0]:.0f}"
+            win_hi_s = f"{_R2_WINDOWS[k][1]:.0f}"
         if pf.fit_ok and np.isfinite(pf.r2_fit_px2) and pf.r2_fit_px2 > 0:
-            r_der   = float(np.sqrt(pf.r2_fit_px2))
-            sig_r   = (pf.sigma_r2_fit_px2 / (2.0 * r_der)
-                       if np.isfinite(pf.sigma_r2_fit_px2) else float("nan"))
             r2_fit  = f"{pf.r2_fit_px2:.2f}"
             sig_r2  = (f"{pf.sigma_r2_fit_px2:.3f}"
                        if np.isfinite(pf.sigma_r2_fit_px2) else "—")
-            r_d_str = f"{r_der:.3f}"
-            s_r_str = f"{sig_r:.4f}" if np.isfinite(sig_r) else "—"
+            wid_s   = (f"{pf.width_r2_px2:.2f}"
+                       if np.isfinite(pf.width_r2_px2) else "—")
             chi2_s  = (f"{pf.reduced_chi2:.2f}"
                        if np.isfinite(pf.reduced_chi2) else "—")
         else:
-            r2_fit  = "—"
-            sig_r2  = "—"
-            r_d_str = "—"
-            s_r_str = "—"
-            chi2_s  = "—"
+            r2_fit = sig_r2 = wid_s = chi2_s = "—"
 
-        para_s = "✓" if pf.para_ok else "✗"
         rows.append([
             str(k), lam_str,
+            win_lo_s, win_hi_s,
             f"{pf.r2_raw_px2:.1f}",
             r2_fit, sig_r2,
-            r_d_str, s_r_str,
-            f"{pf.amplitude_adu:.0f}",
-            chi2_s, para_s,
+            f"{pf.amplitude_adu:.0f}", wid_s, chi2_s,
         ])
         row_colours.append("#EAF4FF" if k % 2 == 0 else "#FFF6EA")
 
+    n_cols_tbl = len(col_labels)
     tbl = ax_table.table(
         cellText=rows,
         colLabels=col_labels,
         loc="upper center",
         cellLoc="center",
-        colWidths=[0.04, 0.06, 0.09, 0.09, 0.07,
-                   0.09, 0.07, 0.07, 0.06, 0.05],
+        colWidths=[0.04, 0.05, 0.07, 0.07,
+                   0.09, 0.09, 0.07,
+                   0.07, 0.09, 0.06],
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8.5)
-    tbl.scale(1, 1.35)
-    for c in range(len(col_labels)):
+    tbl.scale(1, 1.6)
+    for c in range(n_cols_tbl):
         tbl[0, c].set_facecolor("#2C3E50")
         tbl[0, c].set_text_props(color="white", fontweight="bold")
+        tbl[0, c].set_height(tbl[0, c].get_height() * 1.8)
     for r_idx, bg in enumerate(row_colours):
         fail = not peaks[r_idx].fit_ok
-        for c in range(len(col_labels)):
+        for c in range(n_cols_tbl):
             tbl[r_idx + 1, c].set_facecolor("#FFE0E0" if fail else bg)
     ax_table.set_title(
         f"Peak Identification Table  |  {n_rows} peaks  |  "
@@ -1193,6 +1209,189 @@ def main() -> None:
         fig4.savefig(_fig4_path, dpi=150, bbox_inches="tight")
         print(f"  Saved : {_fig4_path}")
         fig4.show()
+
+        # -- n_pairs sensitivity sweep ---------------------------------------
+        # Re-run Tolansky using only the innermost n_pairs ring pairs, where
+        # n_pairs decreases from (all rings) down to MIN_PAIRS.  This tests
+        # whether excluding the noisier outer fringes improves Δ precision or
+        # shifts d / α systematically.
+        #
+        # Theory reminder:
+        #   WLS σ_Δ ∝ 1/√(Σ w_i·(p_i − p̄)²)  — adding rings always reduces
+        #   the formal error IF they are unbiased.  But outer rings may carry
+        #   systematic centroid bias (low SNR, fitting window edge effects).
+        #   χ²_red > 1 on either line is the smoking gun.
+        #
+        # Outputs:
+        #   Console table + 5_cal_tolansky_npairs_sweep.png
+        MIN_PAIRS = 4   # minimum ring pairs to try
+
+        n_max = min(result.n_rings_a, result.n_rings_b)
+        sweep_pairs   = list(range(n_max, MIN_PAIRS - 1, -1))
+
+        # Storage
+        sw_n      = []
+        sw_d      = []
+        sw_sd     = []
+        sw_alpha  = []
+        sw_sa     = []
+        sw_Da     = []
+        sw_sDa    = []
+        sw_Db     = []
+        sw_sDb    = []
+        sw_c2a    = []
+        sw_c2b    = []
+        sw_ok     = []
+
+        print(f"\n  -- n_pairs sensitivity sweep  (all → {MIN_PAIRS} innermost pairs) --")
+        hdr = (f"  {'n':>3}  {'d (mm)':>12}  {'±σ_d (µm)':>10}  "
+               f"{'alpha (rad/px)':>14}  {'±σ_α (ppm)':>10}  "
+               f"{'Δ_a':>7}  {'±σΔ_a':>6}  {'χ²_a':>5}  "
+               f"{'Δ_b':>7}  {'±σΔ_b':>6}  {'χ²_b':>5}")
+        print(hdr)
+        print("  " + "-" * (len(hdr) - 2))
+
+        for n_pairs_sw in sweep_pairs:
+            try:
+                with warnings.catch_warnings(record=True):
+                    warnings.simplefilter("always")
+                    r_sw = run_tolansky_2line(
+                        peak_array,
+                        lam_a_m=LAM_A_M,
+                        lam_b_m=LAM_B_M,
+                        d_prior_m=D_PRIOR_M,
+                        n_pairs=n_pairs_sw,
+                    )
+                flag = ""
+                if r_sw.chi2_dof_a > 2.0 or r_sw.chi2_dof_b > 2.0:
+                    flag = " [χ²!]"
+                if abs(r_sw.d_m - result.d_m) * 1e6 > 3 * result.sigma_d_m * 1e6:
+                    flag += " [d shift!]"
+                alpha_ppm_sw = r_sw.sigma_alpha / r_sw.alpha_mean * 1e6
+                print(
+                    f"  {n_pairs_sw:>3}  "
+                    f"{r_sw.d_m*1e3:>12.6f}  "
+                    f"{r_sw.sigma_d_m*1e6:>10.3f}  "
+                    f"{r_sw.alpha_mean:>14.6e}  "
+                    f"{alpha_ppm_sw:>10.1f}  "
+                    f"{r_sw.Delta_a:>7.2f}  {r_sw.sigma_Delta_a:>6.3f}  "
+                    f"{r_sw.chi2_dof_a:>5.2f}  "
+                    f"{r_sw.Delta_b:>7.2f}  {r_sw.sigma_Delta_b:>6.3f}  "
+                    f"{r_sw.chi2_dof_b:>5.2f}"
+                    f"{flag}"
+                )
+                sw_n.append(n_pairs_sw)
+                sw_d.append(r_sw.d_m * 1e3)
+                sw_sd.append(r_sw.sigma_d_m * 1e6)
+                sw_alpha.append(r_sw.alpha_mean)
+                sw_sa.append(r_sw.sigma_alpha / r_sw.alpha_mean * 1e6)
+                sw_Da.append(r_sw.Delta_a)
+                sw_sDa.append(r_sw.sigma_Delta_a)
+                sw_Db.append(r_sw.Delta_b)
+                sw_sDb.append(r_sw.sigma_Delta_b)
+                sw_c2a.append(r_sw.chi2_dof_a)
+                sw_c2b.append(r_sw.chi2_dof_b)
+                sw_ok.append(True)
+            except Exception as exc:
+                print(f"  {n_pairs_sw:>3}  FAILED: {exc}")
+                sw_ok.append(False)
+
+        # -- Figure 5: n_pairs sweep plot ------------------------------------
+        print("\n  Building Figure 5 (n_pairs sensitivity sweep)...")
+
+        sw_n   = np.array(sw_n)
+        sw_d   = np.array(sw_d)
+        sw_sd  = np.array(sw_sd)
+        sw_alpha = np.array(sw_alpha)
+        sw_sa  = np.array(sw_sa)
+        sw_Da  = np.array(sw_Da)
+        sw_sDa = np.array(sw_sDa)
+        sw_Db  = np.array(sw_Db)
+        sw_sDb = np.array(sw_sDb)
+        sw_c2a = np.array(sw_c2a)
+        sw_c2b = np.array(sw_c2b)
+
+        fig5, axes5 = plt.subplots(2, 3, figsize=(16, 9))
+        fig5.suptitle(
+            f"Tolansky n_pairs sensitivity sweep  |  {os.path.basename(cal_path)}\n"
+            f"Each point uses only the innermost n ring pairs; all = {n_max}",
+            fontsize=11, fontweight="bold",
+        )
+        _kw  = dict(marker="o", ms=5, lw=1.2)
+        _kwA = dict(color="#1f77b4", **_kw)   # blue = line a / alpha
+        _kwB = dict(color="#ff7f0e", **_kw)   # orange = line b / d
+
+        # Panel [0,0]: d vs n_pairs
+        ax = axes5[0, 0]
+        ax.errorbar(sw_n, sw_d, yerr=sw_sd * 1e-3, **_kwB, capsize=3,
+                    ecolor="#ff7f0e", elinewidth=0.8)
+        ax.axhline(result.d_m * 1e3, color="gray", lw=0.8, ls="--",
+                   label=f"full ({n_max}) = {result.d_m*1e3:.6f} mm")
+        ax.set_xlabel("n_pairs (innermost rings used)", fontsize=9)
+        ax.set_ylabel("d  (mm)", fontsize=9)
+        ax.set_title("Etalon gap d", fontsize=9, fontweight="bold")
+        ax.legend(fontsize=7)
+        ax.tick_params(labelsize=7)
+
+        # Panel [0,1]: σ_d vs n_pairs
+        ax = axes5[0, 1]
+        ax.plot(sw_n, sw_sd, **_kwB)
+        ax.set_xlabel("n_pairs", fontsize=9)
+        ax.set_ylabel("σ_d  (µm)", fontsize=9)
+        ax.set_title("d uncertainty σ_d", fontsize=9, fontweight="bold")
+        ax.tick_params(labelsize=7)
+
+        # Panel [0,2]: α uncertainty (ppm) vs n_pairs
+        ax = axes5[0, 2]
+        ax.plot(sw_n, sw_sa, **_kwA)
+        ax.set_xlabel("n_pairs", fontsize=9)
+        ax.set_ylabel("σ_α / α  (ppm)", fontsize=9)
+        ax.set_title("Plate scale uncertainty σ_α (ppm)", fontsize=9, fontweight="bold")
+        ax.tick_params(labelsize=7)
+
+        # Panel [1,0]: Δ_a and Δ_b vs n_pairs
+        ax = axes5[1, 0]
+        ax.errorbar(sw_n, sw_Da, yerr=sw_sDa,
+                    label="Δ_a  640.2 nm", capsize=3,
+                    elinewidth=0.8, **_kwA)
+        ax.errorbar(sw_n, sw_Db, yerr=sw_sDb,
+                    label="Δ_b  638.3 nm", capsize=3,
+                    elinewidth=0.8, **_kwB)
+        ax.axhline(result.Delta_a, color="#1f77b4", lw=0.7, ls="--", alpha=0.5)
+        ax.axhline(result.Delta_b, color="#ff7f0e", lw=0.7, ls="--", alpha=0.5)
+        ax.set_xlabel("n_pairs", fontsize=9)
+        ax.set_ylabel("Δ  (px² / fringe)", fontsize=9)
+        ax.set_title("FSR slope Δ_a and Δ_b", fontsize=9, fontweight="bold")
+        ax.legend(fontsize=7)
+        ax.tick_params(labelsize=7)
+
+        # Panel [1,1]: σ_Δ vs n_pairs
+        ax = axes5[1, 1]
+        ax.plot(sw_n, sw_sDa, label="σ_Δ_a  640.2 nm", **_kwA)
+        ax.plot(sw_n, sw_sDb, label="σ_Δ_b  638.3 nm", **_kwB)
+        ax.set_xlabel("n_pairs", fontsize=9)
+        ax.set_ylabel("σ_Δ  (px² / fringe)", fontsize=9)
+        ax.set_title("Δ uncertainty — formal WLS error", fontsize=9, fontweight="bold")
+        ax.legend(fontsize=7)
+        ax.tick_params(labelsize=7)
+
+        # Panel [1,2]: χ²_red vs n_pairs
+        ax = axes5[1, 2]
+        ax.plot(sw_n, sw_c2a, label="χ²_red  line a  640.2 nm", **_kwA)
+        ax.plot(sw_n, sw_c2b, label="χ²_red  line b  638.3 nm", **_kwB)
+        ax.axhline(1.0, color="green", lw=1.0, ls="--", alpha=0.7, label="χ²=1 (ideal)")
+        ax.axhline(2.0, color="red",   lw=0.8, ls=":",  alpha=0.6, label="χ²=2 (warn)")
+        ax.set_xlabel("n_pairs", fontsize=9)
+        ax.set_ylabel("χ²_red", fontsize=9)
+        ax.set_title("Goodness of fit χ²_red", fontsize=9, fontweight="bold")
+        ax.legend(fontsize=7)
+        ax.tick_params(labelsize=7)
+
+        fig5.tight_layout()
+        _fig5_path = output_dir / "5_cal_tolansky_npairs_sweep.png"
+        fig5.savefig(_fig5_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved : {_fig5_path}")
+        fig5.show()
 
     print("\n[done]  All figures saved and displayed.")
     print(f"  Output folder : {output_dir}")
