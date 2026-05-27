@@ -1125,85 +1125,59 @@ def _find_and_fit_peaks(
 
 
 def _find_and_fit_peaks_r2(
-    r_grid:          np.ndarray,
-    r2_grid:         np.ndarray,
-    profile:         np.ndarray,
-    sigma_profile:   np.ndarray,
-    masked:          np.ndarray,
-    distance:        int   = 5,
-    prominence:      float = 100.0,
-    fit_half_window: int   = 6,
-    min_sep_px:      float = 3.0,
-) -> list[PeakFitR2]:
+    profile:        np.ndarray,
+    r_grid:         np.ndarray,
+    r2_grid:        np.ndarray,
+    sigma_profile:  np.ndarray,
+    masked:         np.ndarray,
+    distance:       int   = 5,
+    prominence:     float = 50.0,
+    fit_half_window: int  = 80,
+    min_sep_px:     float = 5.0,
+) -> list["PeakFitR2"]:
     """
-    Locate peaks in the radial profile and fit a Gaussian to each in r² space.
+    Fit every window defined in _R2_WINDOWS directly, using the 3-tuple
+    centre hint (or window midpoint) as the starting position.
 
-    Identical peak detection to _find_and_fit_peaks; differs only in the
-    fitting step, which uses r2_grid as the x-axis.  Fabry-Pérot fringes are
-    expected to be evenly spaced in r², so a Gaussian centroid in r² gives a
-    more physically motivated peak position for calibration.
-
-    Parameters mirror _find_and_fit_peaks.  min_sep_px is in pixels and is
-    converted to safe_distance bins via r_grid spacing.
+    The find_peaks auto-detection step has been removed entirely.  Every
+    entry in _R2_WINDOWS is attempted regardless of local prominence,
+    giving deterministic, user-controlled peak positions.
     """
-    good         = ~masked
-    good_indices = np.where(good)[0]
-    profile_good = profile[good]
-
-    if profile_good.size == 0:
+    if profile.size == 0:
         return []
 
-    # Safe distance from min_sep_px using r_grid (same as r-domain fitting)
-    if good_indices.size > 1:
-        median_dr_px = float(np.median(np.diff(r_grid[good])))
-        if median_dr_px > 0.0:
-            safe_distance = max(1, int(np.floor(min_sep_px / median_dr_px)))
-        else:
-            safe_distance = distance
-            median_dr_px  = 1.0
-    else:
-        safe_distance = distance
-        median_dr_px  = 1.0
-
-    # r² bin spacing for initial guess and bounds scaling
-    if good_indices.size > 1:
+    # r² bin spacing — used for Gaussian fit bounds
+    good = ~masked
+    if good.sum() > 1:
         median_dr2_px2 = float(np.median(np.diff(r2_grid[good])))
         if median_dr2_px2 <= 0.0:
             median_dr2_px2 = 1.0
     else:
         median_dr2_px2 = 1.0
 
-    effective_distance = min(distance, safe_distance)
-    peaks_sub, _ = find_peaks(profile_good, distance=effective_distance, prominence=prominence)
-    all_bin_indices = [int(good_indices[s]) for s in peaks_sub]
-
     results: list[PeakFitR2] = []
-    for peak_pos, (sub_idx, bin_idx) in enumerate(zip(peaks_sub, all_bin_indices)):
-        # HWHM-based asymmetric window
-        valley_L, valley_R = _find_valley_bounds(profile, bin_idx, search_hw=fit_half_window)
-        hwhm_L, hwhm_R    = _measure_hwhm(profile, bin_idx, valley_L, valley_R)
-        hw_L = min(max(6, int(np.round(0.8 * hwhm_L))), fit_half_window)
-        hw_R = min(max(6, int(np.round(0.8 * hwhm_R))), fit_half_window)
 
-        lo      = max(0, bin_idx - hw_L)
-        hi      = min(len(r2_grid) - 1, bin_idx + hw_R)
+    for win_key in sorted(_R2_WINDOWS.keys()):
+        _wk     = _R2_WINDOWS[win_key]
+        r2_lo   = _wk[0];  r2_hi = _wk[-1]
+        # Centre hint: middle of 3-tuple, or midpoint of 2-tuple
+        r2_ctr  = _wk[1] if len(_wk) == 3 else 0.5 * (r2_lo + r2_hi)
 
-        # ── User-specified window overrides (r² domain) ──────────────────────
-        if peak_pos in _R2_WINDOWS:
-            _wn = _R2_WINDOWS[peak_pos]; _r2_lo, _r2_hi = _wn[0], _wn[-1]
-            lo = int(np.searchsorted(r2_grid, _r2_lo, side="left"))
-            hi = int(np.searchsorted(r2_grid, _r2_hi, side="right")) - 1
-            lo = max(0, lo)
-            hi = min(len(r2_grid) - 1, hi)
-        # ── End user-specified overrides ──────────────────────────────────────
+        # Map r² bounds and centre to bin indices
+        lo      = int(np.searchsorted(r2_grid, r2_lo, side='left'))
+        hi      = int(np.searchsorted(r2_grid, r2_hi, side='right')) - 1
+        lo      = max(0, lo)
+        hi      = min(len(r2_grid) - 1, hi)
+        bin_idx = int(np.argmin(np.abs(r2_grid - r2_ctr)))
+        bin_idx = max(lo, min(hi, bin_idx))
 
         win     = np.arange(lo, hi + 1)
         usable  = ~masked[win] & np.isfinite(sigma_profile[win])
         win_use = win[usable]
 
-        # --- Parabolic primary fit ---
+        # ── Parabolic primary fit ─────────────────────────────────────────────
         para_ok    = False
-        para_mu    = float(r2_grid[bin_idx])   # fallback
+        para_mu    = float(r2_grid[bin_idx])
         para_rms   = np.nan
         para_resid = None
 
@@ -1222,7 +1196,7 @@ def _find_and_fit_peaks_r2(
                     coeffs     = np.polyfit(r2_w[mask_top], p_w[mask_top], 2)
                     para_resid = p_w[mask_top] - np.polyval(coeffs, r2_w[mask_top])
 
-        # --- Gaussian fallback ---
+        # ── Gaussian fallback ─────────────────────────────────────────────────
         gauss_ok         = False
         r2_fit_px2       = para_mu
         sigma_r2_fit_px2 = np.nan
@@ -1238,9 +1212,10 @@ def _find_and_fit_peaks_r2(
             B0   = float(np.percentile(p_w, 20))
             A0   = max(float(profile[bin_idx]) - B0, 1.0)
             mu0  = para_mu if para_ok else float(r2_grid[bin_idx])
-            sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0, median_dr2_px2 * 0.5)
-            p0      = [A0, mu0, sig0, B0]
-            bounds  = (
+            sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0,
+                       median_dr2_px2 * 0.5)
+            p0     = [A0, mu0, sig0, B0]
+            bounds = (
                 [0.0,    float(r2_w[0]),  0.3 * median_dr2_px2,    -np.inf],
                 [np.inf, float(r2_w[-1]), float(r2_w[-1]) - float(r2_w[0]), np.inf],
             )
@@ -1278,122 +1253,6 @@ def _find_and_fit_peaks_r2(
             width_r2_px2     = width_r2_px2,
             fit_ok           = fit_ok,
             reduced_chi2     = reduced_chi2,
-            para_ok          = para_ok,
-            para_rms         = para_rms,
-            gauss_ok         = gauss_ok,
-        ))
-
-    # ── Forced-fit pass: attempt a fit for every _R2_WINDOWS entry not
-    #    already covered by a find_peaks detection.  This ensures user-
-    #    specified windows (especially weak outer fringes below the global
-    #    prominence threshold) always get a fit attempt.
-    detected_positions = set(r.peak_idx for r in results)
-    already_fitted_windows = set(
-        wk for wk in range(len(results))
-        if wk in _R2_WINDOWS
-    )
-    for win_key in sorted(_R2_WINDOWS.keys()):
-        # Check if this window was covered by a detected peak
-        _wf    = _R2_WINDOWS[win_key]
-        _wf_lo = _wf[0];  _wf_hi = _wf[-1]
-        # Centre hint: 3-tuple middle value, else window midpoint
-        _wf_ctr = _wf[1] if len(_wf) == 3 else 0.5 * (_wf_lo + _wf_hi)
-
-        lo_f = int(np.searchsorted(r2_grid, _wf_lo, side="left"))
-        hi_f = int(np.searchsorted(r2_grid, _wf_hi, side="right")) - 1
-        lo_f = max(0, lo_f)
-        hi_f = min(len(r2_grid) - 1, hi_f)
-
-        # Skip if a detected peak already falls inside this window
-        window_covered = any(
-            lo_f <= r.peak_idx <= hi_f for r in results
-        )
-        if window_covered:
-            continue
-
-        # No detected peak in this window — force a fit using the centre hint
-        _ctr_idx = int(np.argmin(np.abs(r2_grid - _wf_ctr)))
-        bin_idx  = max(lo_f, min(hi_f, _ctr_idx))
-
-        win_f    = np.arange(lo_f, hi_f + 1)
-        usable_f = ~masked[win_f] & np.isfinite(sigma_profile[win_f])
-        win_use  = win_f[usable_f]
-
-        # --- Parabolic primary fit ---
-        para_ok    = False
-        para_mu    = float(r2_grid[bin_idx])
-        para_rms   = np.nan
-        para_resid = None
-
-        if win_use.size >= 4:
-            r2_w  = r2_grid[win_use]
-            p_w   = profile[win_use]
-            sem_w = sigma_profile[win_use]
-            para_mu_raw, para_rms = _parabolic_centroid(r2_w, p_w, top_fraction=0.5)
-            if r2_w[0] <= para_mu_raw <= r2_w[-1]:
-                para_mu = para_mu_raw
-                para_ok = True
-                threshold = np.min(p_w) + 0.5 * (np.max(p_w) - np.min(p_w))
-                mask_top  = p_w >= threshold
-                if mask_top.sum() >= 3:
-                    coeffs     = np.polyfit(r2_w[mask_top], p_w[mask_top], 2)
-                    para_resid = p_w[mask_top] - np.polyval(coeffs, r2_w[mask_top])
-
-        # --- Gaussian fallback ---
-        gauss_ok         = False
-        r2_fit_px2       = para_mu
-        sigma_r2_fit_px2 = np.nan
-        amplitude_adu    = float(profile[bin_idx])
-        width_r2_px2     = np.nan
-        reduced_chi2_f   = np.nan
-
-        if win_use.size >= 4:
-            r2_w  = r2_grid[win_use]
-            p_w   = profile[win_use]
-            sem_w = sigma_profile[win_use]
-            B0   = float(np.percentile(p_w, 20))
-            A0   = max(float(profile[bin_idx]) - B0, 1.0)
-            mu0  = para_mu if para_ok else float(r2_grid[bin_idx])
-            sig0 = max((float(r2_w[-1]) - float(r2_w[0])) / 6.0,
-                       median_dr2_px2 * 0.5)
-            p0     = [A0, mu0, sig0, B0]
-            bounds = (
-                [0.0,    float(r2_w[0]),  0.3 * median_dr2_px2,    -np.inf],
-                [np.inf, float(r2_w[-1]), float(r2_w[-1]) - float(r2_w[0]), np.inf],
-            )
-            try:
-                popt, pcov       = curve_fit(
-                    _gaussian, r2_w, p_w,
-                    p0=p0, sigma=sem_w, absolute_sigma=True,
-                    bounds=bounds, maxfev=5000,
-                )
-                perr             = np.sqrt(np.diag(pcov))
-                sigma_r2_fit_px2 = float(perr[1])
-                amplitude_adu    = float(popt[0])
-                width_r2_px2     = float(abs(popt[2]))
-                n_dof            = len(r2_w) - 4
-                if n_dof > 0:
-                    chi2_f         = float(np.sum(
-                        ((p_w - _gaussian(r2_w, *popt)) / sem_w) ** 2))
-                    reduced_chi2_f = chi2_f / n_dof
-                gauss_ok         = True
-                if not para_ok:
-                    r2_fit_px2   = float(popt[1])
-            except (RuntimeError, ValueError):
-                pass
-
-        fit_ok = para_ok or gauss_ok
-        results.append(PeakFitR2(
-            peak_idx         = bin_idx,
-            r2_raw_px2       = float(r2_grid[bin_idx]),
-            r_raw_px         = float(r_grid[bin_idx]),
-            profile_raw      = float(profile[bin_idx]),
-            r2_fit_px2       = r2_fit_px2,
-            sigma_r2_fit_px2 = sigma_r2_fit_px2,
-            amplitude_adu    = amplitude_adu,
-            width_r2_px2     = width_r2_px2,
-            fit_ok           = fit_ok,
-            reduced_chi2     = reduced_chi2_f,
             para_ok          = para_ok,
             para_rms         = para_rms,
             gauss_ok         = gauss_ok,
@@ -2051,30 +1910,16 @@ def _plot_all_fringe_diagnostics_r2(
                               alpha=0.75, edgecolor="gray"))
 
         # ── Title ────────────────────────────────────────────────────────────
-        # pk_num already set above from _R2_WINDOWS lookup
+        # pk_num set above — title shows peak number and wavelength only
         lam_str = "640.2" if pk_num % 2 == 0 else "638.3"
-        hw_str  = f"[{r2_lo_w:.0f},{r2_hi_w:.0f}]"
         if fit_ok:
-            r_derived = float(np.sqrt(r2_fit)) if r2_fit > 0 else float("nan")
-            chi2_str  = f"{reduced_chi2:.2f}" if np.isfinite(reduced_chi2) else "nan"
-            rms_str   = f"{para_rms:.2f}" if np.isfinite(para_rms) else "nan"
-            tag_para  = f"para ok rms={rms_str}" if para_ok else "para FAIL"
-            tag_gauss = "gauss ok" if gauss_ok else "gauss FAIL"
-            title = (
-                f"Peak {pk_num}  λ={lam_str} nm  hw={hw_str}\n"
-                f"r²={r2_fit:.1f}±{sigma_r2_fit:.1f}  r={r_derived:.3f}  χ²={chi2_str}\n"
-                f"{tag_para}  {tag_gauss}"
-            )
+            title       = f"Peak {pk_num}  λ={lam_str} nm"
             title_color = "#1a6e2e"
         else:
-            title = (
-                f"Peak {pk_num}  λ={lam_str} nm  hw={hw_str}  FAILED\n"
-                f"{'para ok' if para_ok else 'para FAIL'}  "
-                f"{'gauss ok' if gauss_ok else 'gauss FAIL'}"
-            )
+            title       = f"Peak {pk_num}  λ={lam_str} nm  FAILED"
             title_color = "#b22222"
 
-        ax.set_title(title, fontsize=7.5, color=title_color)
+        ax.set_title(title, fontsize=9.0, color=title_color)
         ax.tick_params(labelsize=6.5)
         ax.set_xlabel("r² [px²]", fontsize=7)
         ax.set_ylabel("ADU", fontsize=7)
@@ -2144,9 +1989,7 @@ def _plot_all_fringe_diagnostics_r2(
         fontsize=11, fontweight="bold", pad=12,
     )
     fig_tbl.tight_layout()
-    # Standalone peak table figure suppressed — all fit results are shown
-    # in figure2_peak_table() in run_windcube_calibration.py instead.
-    plt.close(fig_tbl)
+    plt.close(fig_tbl)  # standalone table suppressed; results in figure2_peak_table()
 
 
 def _print_peak_table(peak_fits: list[PeakFit]) -> None:

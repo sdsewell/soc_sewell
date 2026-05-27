@@ -170,7 +170,7 @@ _R2_WINDOWS.update({
      4: (    2600, 2797,   3000),   # P4  640.2 nm
      5: (    3243, 3395,   3543),   # P5  638.3 nm
      6: (    3827, 4019,   4227),   # P6  640.2 nm
-     7: (    4474, 4670,   4774),   # P7  638.3 nm
+     7: (    4474, 4670,   4784),   # P7  638.3 nm  [right +10]
      8: (    5107, 5250,   5407),   # P8  640.2 nm
      9: (    5649, 5850,   6049),   # P9  638.3 nm
     10: (    6284, 6485,   6684),   # P10 640.2 nm
@@ -1306,14 +1306,7 @@ def main() -> None:
                       save_path=_fig3a_path)
     print(f"  Saved : {_fig3a_path}  ({len(inner_peaks)} inner peaks P0-P{_INNER_MAX-1})")
 
-    if outer_peaks:
-        _fig3b_path = output_dir / "3b_cal_peak_fit_diagnostics_outer.png"
-        _outer_offset = min((_window_key(p) for p in outer_peaks), default=_INNER_MAX)
-        _plot_peak_subset(fp, outer_peaks, fit_half_window=200, n_cols=4,
-                          save_path=_fig3b_path, peak_offset=_outer_offset)
-        print(f"  Saved : {_fig3b_path}  ({len(outer_peaks)} outer peaks P{_INNER_MAX}+)")
-    else:
-        print("  No outer peaks (P20+) — check PEAK_PROMINENCE and _R2_WINDOWS.")
+    # Figure 3b (outer fringe diagnostics) suppressed — no longer needed.
 
 
     # -- Step 7: Tolansky two-line analysis ----------------------------------
