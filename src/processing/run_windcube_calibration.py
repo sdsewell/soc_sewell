@@ -1179,91 +1179,7 @@ def main() -> None:
     print(f"  Saved : {_fig2_path}")
     fig2.show()
 
-    # -- Figure 2b: zoomed radial profile r² > 12000 — for tuning outer peaks -
-    print("  Building Figure 2b (zoomed outer-fringe profile)...")
-    R2_ZOOM_LO = 12000.0   # px² — left edge of zoom window
-    fig2b, ax2b = plt.subplots(figsize=(20, 5))
-
-    # Plot the full r² profile clipped to the zoom region
-    r2g   = fp.r2_grid
-    prof  = fp.profile
-    sig   = fp.sigma_profile
-    mask  = r2g >= R2_ZOOM_LO
-    ax2b.plot(r2g[mask], prof[mask], color="steelblue", lw=0.9, zorder=2,
-              label="I(r²) profile")
-    ax2b.fill_between(r2g[mask],
-                      prof[mask] - sig[mask],
-                      prof[mask] + sig[mask],
-                      alpha=0.25, color="steelblue", zorder=1)
-
-    # Compute y-range from zoomed data before the loop (needed for text labels)
-    _zoom_prof = prof[mask]
-    _ylo  = float(np.nanmin(_zoom_prof))
-    _yhi  = float(np.nanmax(_zoom_prof))
-    _ypad = 0.05 * (_yhi - _ylo)
-
-    # Re-draw window shading, green centre lines and red centroid lines
-    _midpt_done = False
-    _ctr_done   = False
-    for k, pf in enumerate(peaks):
-        is_a = (k % 2 == 0)
-        fc   = "#5588CC" if is_a else "#CC8844"
-        lc   = "#2255AA" if is_a else "#AA5522"
-        C_VL = "#CC2222"
-
-        if k in _R2_WINDOWS:
-            _wk      = _R2_WINDOWS[k]
-            r2_lo    = _wk[0];  r2_hi = _wk[-1]
-            r2_mid   = _wk[1] if len(_wk) == 3 else 0.5 * (r2_lo + r2_hi)
-            if r2_hi < R2_ZOOM_LO:
-                continue   # entirely left of zoom window
-            ax2b.axvspan(r2_lo, r2_hi, alpha=0.18, color=fc, zorder=1)
-
-            # Green dashed centre line
-            lbl_mid = "window centre (initial guess)" if not _midpt_done else None
-            ax2b.axvline(r2_mid, color="limegreen", lw=1.0, ls="--",
-                         alpha=0.9, zorder=3, label=lbl_mid)
-            _midpt_done = True
-
-            # Peak index label at green line
-            ax2b.text(r2_mid, _yhi + _ypad * 0.3,
-                      str(k), ha="center", va="bottom",
-                      fontsize=7.5, color=lc, fontweight="bold", clip_on=True)
-
-        # Red fitted centroid
-        if pf.fit_ok and np.isfinite(pf.r2_fit_px2) and pf.r2_fit_px2 >= R2_ZOOM_LO:
-            lbl_ctr = "r²_fit centroid" if not _ctr_done else None
-            ax2b.axvline(pf.r2_fit_px2, color=C_VL, lw=1.0,
-                         alpha=0.8, zorder=4, label=lbl_ctr)
-            _ctr_done = True
-
-    ax2b.set_xlim(R2_ZOOM_LO, float(r2g[-1]))
-    ax2b.set_ylim(_ylo - _ypad, _yhi + _ypad)
-    ax2b.set_xlabel("r²  (px²)", fontsize=10)
-    ax2b.set_ylabel("Mean intensity  (ADU)", fontsize=10)
-
-    # Fine tick marks: major every 500 px², minor every 100 px²
-    import matplotlib.ticker as mticker
-    ax2b.xaxis.set_major_locator(mticker.MultipleLocator(500))
-    ax2b.xaxis.set_minor_locator(mticker.MultipleLocator(100))
-    ax2b.tick_params(axis="x", which="major", labelsize=8, length=6)
-    ax2b.tick_params(axis="x", which="minor", length=3)
-    ax2b.tick_params(axis="y", labelsize=8)
-    ax2b.grid(axis="x", which="major", lw=0.4, alpha=0.4)
-    ax2b.grid(axis="x", which="minor", lw=0.2, alpha=0.2)
-    ax2b.legend(fontsize=8, loc="upper right")
-    ax2b.set_title(
-        f"Figure 2b — Outer-fringe radial profile  |  r² > {R2_ZOOM_LO:.0f} px²  |  "
-        f"green dashed = window centre (initial guess)  |  red = r²_fit centroid\n"
-        f"Adjust 3-tuple centre values in _R2_WINDOWS to align green lines with "
-        f"visible fringe peaks",
-        fontsize=9,
-    )
-    fig2b.tight_layout()
-    _fig2b_path = output_dir / "2b_cal_outer_fringe_profile.png"
-    fig2b.savefig(_fig2b_path, dpi=150, bbox_inches="tight")
-    print(f"  Saved : {_fig2b_path}")
-    fig2b.show()
+    # Figure 2b (zoomed outer-fringe profile) suppressed.
 
     # -- Figures 3a/3b: per-peak fit diagnostics split inner / outer ---------
     # 3a: P0-P{INNER_MAX-1} (reliably fitted inner fringes)
@@ -1306,7 +1222,14 @@ def main() -> None:
                       save_path=_fig3a_path)
     print(f"  Saved : {_fig3a_path}  ({len(inner_peaks)} inner peaks P0-P{_INNER_MAX-1})")
 
-    # Figure 3b (outer fringe diagnostics) suppressed — no longer needed.
+    if outer_peaks:
+        _fig3b_path = output_dir / "3b_cal_peak_fit_diagnostics_outer.png"
+        _outer_offset = min((_window_key(p) for p in outer_peaks), default=_INNER_MAX)
+        _plot_peak_subset(fp, outer_peaks, fit_half_window=200, n_cols=4,
+                          save_path=_fig3b_path, peak_offset=_outer_offset)
+        print(f"  Saved : {_fig3b_path}  ({len(outer_peaks)} outer peaks P{_INNER_MAX}+)")
+    else:
+        print("  No outer peaks (P20+) — check PEAK_PROMINENCE and _R2_WINDOWS.")
 
 
     # -- Step 7: Tolansky two-line analysis ----------------------------------
